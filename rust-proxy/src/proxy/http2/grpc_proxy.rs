@@ -343,7 +343,6 @@ mod tests {
     use crate::proxy::proxy_trait::CheckResult;
     use crate::vojo::app_config::AppConfig;
     use crate::vojo::app_config::LivenessConfig;
-    use crate::vojo::app_config::LivenessStatus;
     use crate::vojo::app_config::Matcher;
     use crate::vojo::app_config::Route;
     use crate::vojo::health_check::BaseHealthCheckParam;
@@ -385,9 +384,7 @@ mod tests {
                     weight: 100,
                 }],
             }),
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
+
             anomaly_detection: None,
             health_check: Some(HealthCheckType::HttpGet(HttpHealthCheckParam {
                 base_health_check_param: BaseHealthCheckParam {

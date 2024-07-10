@@ -23,11 +23,7 @@ pub trait CheckTrait {
     ) -> Result<Option<CheckResult>, AppError>;
 }
 pub struct CommonCheckRequest;
-impl CommonCheckRequest {
-    pub fn new() -> Self {
-        CommonCheckRequest {}
-    }
-}
+
 #[derive(Debug, Clone)]
 pub struct CheckResult {
     pub request_path: String,

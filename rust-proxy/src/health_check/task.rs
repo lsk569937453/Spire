@@ -61,7 +61,6 @@ impl TaskKey {
 pub struct HealthCheck {
     pub task_id_map: HashSet<TaskKey>,
     pub health_check_client: HealthCheckClient,
-    pub current_id: Arc<AtomicU64>,
     pub shared_config: Arc<Mutex<AppConfig>>,
     pub task_pool: TaskPool,
 }
@@ -70,7 +69,6 @@ impl HealthCheck {
         HealthCheck {
             task_id_map: HashSet::new(),
             health_check_client: HealthCheckClient::new(),
-            current_id: Arc::new(AtomicU64::new(0)),
             shared_config,
             task_pool: TaskPool::new(),
         }
@@ -312,7 +310,6 @@ mod tests {
     use super::*;
     use crate::vojo::app_config::ApiService;
     use crate::vojo::app_config::LivenessConfig;
-    use crate::vojo::app_config::LivenessStatus;
     use crate::vojo::app_config::Matcher;
     use crate::vojo::app_config::ServiceConfig;
     use crate::vojo::app_config::StaticConfig;
@@ -346,9 +343,7 @@ mod tests {
                     weight: 100,
                 }],
             }),
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
+
             anomaly_detection: None,
             health_check: Some(HealthCheckType::HttpGet(HttpHealthCheckParam {
                 base_health_check_param: BaseHealthCheckParam {

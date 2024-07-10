@@ -37,8 +37,7 @@ pub struct Route {
     pub allow_deny_list: Option<Vec<AllowDenyObject>>,
     pub authentication: Option<Box<dyn AuthenticationStrategy>>,
     pub anomaly_detection: Option<AnomalyDetectionType>,
-    #[serde(skip)]
-    pub liveness_status: LivenessStatus,
+
     pub rewrite_headers: Option<HashMap<String, String>>,
     pub liveness_config: Option<LivenessConfig>,
     pub health_check: Option<HealthCheckType>,
@@ -229,9 +228,7 @@ mod tests {
                     weight: 100,
                 }],
             }),
-            liveness_status: LivenessStatus {
-                current_liveness_count: 1,
-            },
+
             anomaly_detection: None,
             health_check: None,
             allow_deny_list: None,
@@ -311,9 +308,7 @@ mod tests {
                     weight: 100,
                 }],
             }),
-            liveness_status: LivenessStatus {
-                current_liveness_count: 1,
-            },
+
             anomaly_detection: None,
             health_check: None,
             allow_deny_list: None,

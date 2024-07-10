@@ -449,9 +449,7 @@ mod tests {
                     weight: 100,
                 }],
             }),
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
+
             anomaly_detection: None,
             health_check: Some(HealthCheckType::HttpGet(HttpHealthCheckParam {
                 base_health_check_param: BaseHealthCheckParam {
@@ -495,9 +493,7 @@ mod tests {
                     weight: 100,
                 }],
             }),
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
+
             anomaly_detection: None,
             health_check: Some(HealthCheckType::HttpGet(HttpHealthCheckParam {
                 base_health_check_param: BaseHealthCheckParam {
