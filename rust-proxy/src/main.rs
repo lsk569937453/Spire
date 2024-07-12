@@ -8,6 +8,7 @@ mod configuration_service;
 mod constants;
 mod control_plane;
 mod health_check;
+mod middleware;
 mod monitor;
 mod proxy;
 mod utils;
