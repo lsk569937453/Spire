@@ -129,7 +129,7 @@ fn matched(
     headers: HeaderMap<HeaderValue>,
     remote_ip: String,
 ) -> Result<bool, AppError> {
-    return match limit_location {
+    match limit_location {
         LimitLocation::IP(ip_based_ratelimit) => Ok(ip_based_ratelimit.value == remote_ip),
         LimitLocation::Header(header_based_ratelimit) => {
             if !headers.contains_key(header_based_ratelimit.key.clone()) {
@@ -140,7 +140,7 @@ fn matched(
                 .to_str()
                 .map_err(|err| AppError(err.to_string()))?;
 
-            return Ok(header_value_str == header_based_ratelimit.value);
+            Ok(header_value_str == header_based_ratelimit.value)
         }
         LimitLocation::Iprange(ip_range_based_ratelimit) => {
             if !ip_range_based_ratelimit.value.contains('/') {
@@ -153,9 +153,9 @@ fn matched(
             let source_ip = remote_ip
                 .parse::<Ipv4Addr>()
                 .map_err(|err| AppError(err.to_string()))?;
-            return Ok(ip_range.contains(&source_ip));
+            Ok(ip_range.contains(&source_ip))
         }
-    };
+    }
 }
 #[typetag::serde]
 #[async_trait]

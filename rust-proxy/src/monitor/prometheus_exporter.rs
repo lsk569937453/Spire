@@ -1,5 +1,4 @@
-use prometheus::{labels, opts, register_counter_vec, register_gauge, register_histogram_vec};
-use prometheus::{CounterVec, Gauge, Histogram, HistogramVec};
+use prometheus::Histogram;
 
 pub fn inc(key: String, path: String, code: u16) {
     // HTTP_COUNTER

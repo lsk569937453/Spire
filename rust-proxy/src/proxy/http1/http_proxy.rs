@@ -182,10 +182,10 @@ async fn proxy_adapter(
             let json_value = json!({
                 "error": err.to_string(),
             });
-            return Ok(Response::builder()
+            Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes())).boxed())
-                .unwrap());
+                .unwrap())
         }
     }
 }
@@ -262,7 +262,7 @@ async fn proxy_adapter_with_error(
            response_str,
            parts.headers.clone()
         );
-        let res = Response::from_parts(parts, Full::new(Bytes::from(response_bytes)).boxed());
+        let res = Response::from_parts(parts, Full::new(response_bytes).boxed());
         Ok(res)
     } else {
         Ok(res)
@@ -402,7 +402,7 @@ mod tests {
 
     use crate::vojo::app_config::ApiService;
     use crate::vojo::app_config::LivenessConfig;
-    use crate::vojo::app_config::LivenessStatus;
+    
     use crate::vojo::app_config::Matcher;
     use crate::vojo::app_config::Route;
     use crate::vojo::app_config::ServiceConfig;
