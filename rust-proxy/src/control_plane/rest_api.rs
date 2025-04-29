@@ -15,7 +15,6 @@ use axum::response::IntoResponse;
 use axum::routing::delete;
 use axum::routing::{get, post, put};
 use axum::Router;
-use http::header;
 use prometheus::{Encoder, TextEncoder};
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -26,8 +25,7 @@ use tokio::io::AsyncWriteExt;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 static INTERNAL_SERVER_ERROR: &str = "Internal Server Error";
-#[derive(Debug)]
-struct MethodError;
+
 async fn get_app_config() -> Result<impl axum::response::IntoResponse, Infallible> {
     let app_config = GLOBAL_APP_CONFIG.read().await;
 
@@ -72,7 +70,7 @@ async fn post_app_config(
         )
             .into_response(),
     };
-    return Ok(t);
+    Ok(t)
 }
 async fn post_app_config_with_error(
     api_services_vistor: ApiServiceVistor,

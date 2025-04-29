@@ -91,12 +91,12 @@ impl LetsEntrypt {
                     send_result.unwrap_err()
                 );
             }
-            return request_result.map_err(|e| AppError(format!("{}", e.to_string())));
+            return request_result.map_err(|e| AppError(format!("{}", e)));
         } else {
             error!("{}", request_result.unwrap_err());
         }
 
-        Err(AppError(format!("Request the lets_encrypt fails")))
+        Err(AppError("Request the lets_encrypt fails".to_string()))
     }
     pub fn request_cert(&self, directory_url: DirectoryUrl) -> Result<Certificate, Error> {
         let result: bool = Path::new(DEFAULT_TEMPORARY_DIR).is_dir();

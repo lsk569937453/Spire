@@ -124,10 +124,7 @@ impl HealthCheck {
             if !route_list.contains_key(route_id) {
                 let res = self.delay_timer.remove_task(*task_id);
                 if let Err(err) = res {
-                    error!(
-                        "Health check task remove task error,the error is {}.",
-                        err.to_string()
-                    );
+                    error!("Health check task remove task error,the error is {}.", err);
                     return true;
                 } else {
                     return false;
@@ -170,10 +167,7 @@ async fn do_http_health_check(
         let http_client_shared = http_client.clone();
         let host_option = Url::parse(item.endpoint.as_str());
         if host_option.is_err() {
-            error!(
-                "Parse host error,the error is {}",
-                host_option.unwrap_err().to_string()
-            );
+            error!("Parse host error,the error is {}", host_option.unwrap_err());
             continue;
         }
 
@@ -181,10 +175,7 @@ async fn do_http_health_check(
             .unwrap()
             .join(http_health_check_param.path.clone().as_str());
         if join_option.is_err() {
-            error!(
-                "Parse host error,the error is {}",
-                join_option.unwrap_err().to_string()
-            );
+            error!("Parse host error,the error is {}", join_option.unwrap_err());
             continue;
         }
 

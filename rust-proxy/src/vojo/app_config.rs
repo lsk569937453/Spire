@@ -6,9 +6,9 @@ use crate::vojo::anomaly_detection::AnomalyDetectionType;
 use crate::vojo::app_config_vistor::from_loadbalancer_strategy_vistor;
 use crate::vojo::app_config_vistor::RouteVistor;
 use crate::vojo::app_error::AppError;
-use crate::vojo::authentication::AuthenticationStrategy;
+use crate::vojo::authentication::Authentication;
 use crate::vojo::health_check::HealthCheckType;
-use crate::vojo::rate_limit::RatelimitStrategy;
+use crate::vojo::rate_limit::Ratelimit;
 use crate::vojo::route::LoadbalancerStrategy;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -16,6 +16,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Matcher {
@@ -26,23 +27,23 @@ pub struct Matcher {
 pub struct LivenessConfig {
     pub min_liveness_count: i32,
 }
-#[derive(Debug, Serialize, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct LivenessStatus {
     pub current_liveness_count: i32,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Route {
     pub route_id: String,
     pub host_name: Option<String>,
     pub matcher: Option<Matcher>,
     pub allow_deny_list: Option<Vec<AllowDenyObject>>,
-    pub authentication: Option<Box<dyn AuthenticationStrategy>>,
+    pub authentication: Option<Authentication>,
     pub anomaly_detection: Option<AnomalyDetectionType>,
-    pub liveness_status: Arc<RwLock<LivenessStatus>>,
+    pub liveness_status: LivenessStatus,
     pub rewrite_headers: Option<HashMap<String, String>>,
     pub liveness_config: Option<LivenessConfig>,
     pub health_check: Option<HealthCheckType>,
-    pub ratelimit: Option<Box<dyn RatelimitStrategy>>,
+    pub ratelimit: Option<Ratelimit>,
     pub route_cluster: LoadbalancerStrategy,
 }
 impl Route {
@@ -58,10 +59,7 @@ impl Route {
                 item.prefix.insert(0, '/')
             }
             let path_rewrite = item.prefix_rewrite.clone();
-            // if !path_rewrite.ends_with('/') {
-            //     let src_prefix_rewrite_len = item.prefix_rewrite.len();
-            //     item.prefix_rewrite.insert(src_prefix_rewrite_len, '/');
-            // }
+
             if !path_rewrite.starts_with('/') {
                 item.prefix_rewrite.insert(0, '/')
             }
@@ -192,7 +190,7 @@ pub enum ServiceType {
     Http2,
     Http2Tls,
 }
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ServiceConfig {
     pub server_type: ServiceType,
     pub cert_str: Option<String>,
@@ -213,11 +211,13 @@ impl ServiceConfig {
         })
     }
 }
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ApiService {
     pub listen_port: i32,
     pub api_service_id: String,
     pub service_config: ServiceConfig,
+    #[serde(skip_deserializing, skip_serializing)]
+    pub sender: mpsc::Sender<()>,
 }
 impl ApiService {
     pub async fn from(api_service_vistor: ApiServiceVistor) -> Result<Self, AppError> {
@@ -233,687 +233,11 @@ impl ApiService {
 pub struct StaticConifg {
     pub access_log: Option<String>,
     pub database_url: Option<String>,
-    pub admin_port: String,
+    pub admin_port: i32,
     pub config_file_path: Option<String>,
 }
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     pub static_config: StaticConifg,
     pub api_service_config: Vec<ApiService>,
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::utils::uuid::get_uuid;
-    use crate::vojo::anomaly_detection::BaseAnomalyDetectionParam;
-    use crate::vojo::anomaly_detection::HttpAnomalyDetectionParam;
-    use crate::vojo::app_config_vistor::BaseRouteVistor;
-    use crate::vojo::app_config_vistor::LoadbalancerStrategyVistor;
-    use crate::vojo::app_config_vistor::PollBaseRouteVistor;
-    use crate::vojo::app_config_vistor::PollRouteVistor;
-    use crate::vojo::app_config_vistor::RandomBaseRouteVistor;
-    use crate::vojo::app_config_vistor::RandomRouteVistor;
-    use crate::vojo::app_config_vistor::WeightBasedRouteVistor;
-    use crate::vojo::app_config_vistor::WeightRouteVistor;
-    use crate::vojo::authentication::ApiKeyAuth;
-    use crate::vojo::authentication::AuthenticationStrategy;
-    use crate::vojo::authentication::BasicAuth;
-    use crate::vojo::health_check::{BaseHealthCheckParam, HttpHealthCheckParam};
-    use crate::vojo::rate_limit::*;
-    use crate::vojo::route::AnomalyDetectionStatus;
-    use crate::vojo::route::BaseRoute;
-
-    use crate::vojo::route::WeightBasedRoute;
-    use crate::vojo::route::WeightRoute;
-    use dashmap::DashMap;
-    use std::sync::atomic::AtomicIsize;
-    use std::sync::Arc;
-    use std::sync::Mutex;
-    use std::time::SystemTime;
-    use tokio::sync::RwLock;
-    fn create_new_route_with_host_name(host_name: Option<String>) -> Route {
-        Route {
-            host_name,
-            route_id: get_uuid(),
-            route_cluster: LoadbalancerStrategy::WeightBased(WeightBasedRoute {
-                routes: Arc::new(RwLock::new(vec![WeightRoute {
-                    base_route: BaseRoute {
-                        endpoint: String::from("/"),
-                        try_file: None,
-                        is_alive: Arc::new(RwLock::new(None)),
-                        anomaly_detection_status: Arc::new(RwLock::new(AnomalyDetectionStatus {
-                            consecutive_5xx: 100,
-                        })),
-                    },
-                    index: Arc::new(AtomicIsize::new(0)),
-                    weight: 100,
-                }])),
-            }),
-            liveness_status: Arc::new(RwLock::new(LivenessStatus {
-                current_liveness_count: 0,
-            })),
-            anomaly_detection: None,
-            health_check: None,
-            allow_deny_list: None,
-            authentication: None,
-            liveness_config: None,
-            rewrite_headers: None,
-            ratelimit: None,
-            matcher: Some(Matcher {
-                prefix: String::from("/"),
-                prefix_rewrite: String::from("ssss"),
-            }),
-        }
-    }
-    #[test]
-    fn test_host_name_is_none_ok1() {
-        let route = create_new_route_with_host_name(None);
-        let mut headermap = HeaderMap::new();
-        headermap.insert("x-client", "Basic bHNrOjEyMzQ=".parse().unwrap());
-        let allow_result = route.is_matched(String::from("/test"), Some(headermap));
-        assert!(allow_result.is_ok());
-        assert!(allow_result.unwrap().is_some());
-    }
-
-    #[test]
-    fn test_host_name_is_some_ok2() {
-        let route = create_new_route_with_host_name(Some(String::from("www.test.com")));
-        let mut headermap = HeaderMap::new();
-        headermap.insert("x-client", "Basic bHNrOjEyMzQ=".parse().unwrap());
-        let allow_result = route.is_matched(String::from("/test"), Some(headermap));
-        assert!(allow_result.is_ok());
-        assert!(allow_result.unwrap().is_none());
-    }
-    #[test]
-    fn test_host_name_is_some_ok3() {
-        let route = create_new_route_with_host_name(Some(String::from("www.test.com")));
-        let mut headermap = HeaderMap::new();
-        headermap.insert("Host", "Basic bHNrOjEyMzQ=".parse().unwrap());
-        let allow_result = route.is_matched(String::from("/test"), Some(headermap));
-        assert!(allow_result.is_ok());
-        assert!(allow_result.unwrap().is_none());
-    }
-    #[test]
-    fn test_host_name_is_some_ok4() {
-        let route = create_new_route_with_host_name(Some(String::from("www.test.com")));
-        let mut headermap = HeaderMap::new();
-        headermap.insert("Host", "www.test.com".parse().unwrap());
-        let allow_result = route.is_matched(String::from("/test"), Some(headermap));
-        assert!(allow_result.is_ok());
-        assert!(allow_result.unwrap().is_some());
-    }
-    #[test]
-    fn test_serde_output_health_check() {
-        let route = RouteVistor {
-            host_name: None,
-            route_id: get_uuid(),
-            route_cluster: LoadbalancerStrategyVistor::WeightBasedRoute(WeightBasedRouteVistor {
-                routes: vec![WeightRouteVistor {
-                    base_route: BaseRouteVistor {
-                        endpoint: String::from("/"),
-                        try_file: None,
-                        is_alive: None,
-                        anomaly_detection_status: AnomalyDetectionStatus {
-                            consecutive_5xx: 100,
-                        },
-                    },
-                    index: 0,
-                    weight: 100,
-                }],
-            }),
-            health_check: Some(HealthCheckType::HttpGet(HttpHealthCheckParam {
-                base_health_check_param: BaseHealthCheckParam {
-                    timeout: 10,
-                    interval: 10,
-                },
-                path: String::from("value"),
-            })),
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
-            anomaly_detection: Some(AnomalyDetectionType::Http(HttpAnomalyDetectionParam {
-                consecutive_5xx: 23,
-                base_anomaly_detection_param: BaseAnomalyDetectionParam {
-                    ejection_second: 23,
-                },
-            })),
-            allow_deny_list: None,
-            authentication: None,
-            rewrite_headers: None,
-
-            liveness_config: Some(LivenessConfig {
-                min_liveness_count: 32,
-            }),
-
-            ratelimit: None,
-            matcher: Some(Matcher {
-                prefix: String::from("ss"),
-                prefix_rewrite: String::from("ssss"),
-            }),
-        };
-        let api_service = ApiServiceVistor {
-            api_service_id: get_uuid(),
-            listen_port: 4486,
-            service_config: ServiceConfigVistor {
-                routes: vec![route],
-                server_type: Default::default(),
-                cert_str: Default::default(),
-                key_str: Default::default(),
-            },
-        };
-        let t = vec![api_service];
-        let yaml = serde_yaml::to_string(&t).unwrap();
-        println!("{}", yaml);
-    }
-
-    #[test]
-    fn test_serde_output_weight_based_route() {
-        let route = RouteVistor {
-            host_name: None,
-            route_id: get_uuid(),
-            route_cluster: LoadbalancerStrategyVistor::WeightBasedRoute(WeightBasedRouteVistor {
-                routes: vec![WeightRouteVistor {
-                    base_route: BaseRouteVistor {
-                        endpoint: String::from("/"),
-                        try_file: None,
-                        is_alive: None,
-                        anomaly_detection_status: AnomalyDetectionStatus {
-                            consecutive_5xx: 100,
-                        },
-                    },
-                    index: 0,
-                    weight: 100,
-                }],
-            }),
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
-            anomaly_detection: None,
-            health_check: None,
-            allow_deny_list: None,
-            authentication: None,
-            liveness_config: None,
-            rewrite_headers: None,
-
-            ratelimit: None,
-            matcher: Some(Matcher {
-                prefix: String::from("ss"),
-                prefix_rewrite: String::from("ssss"),
-            }),
-        };
-        let api_service = ApiServiceVistor {
-            api_service_id: get_uuid(),
-            listen_port: 4486,
-            service_config: ServiceConfigVistor {
-                routes: vec![route],
-                server_type: Default::default(),
-                cert_str: Default::default(),
-                key_str: Default::default(),
-            },
-        };
-        let t = vec![api_service];
-        let yaml = serde_yaml::to_string(&t).unwrap();
-        println!("{}", yaml);
-    }
-
-    #[test]
-    fn test_serde_output_header_based_route() {
-        let route = RouteVistor {
-            host_name: None,
-            route_id: get_uuid(),
-            route_cluster: LoadbalancerStrategyVistor::WeightBasedRoute(WeightBasedRouteVistor {
-                routes: vec![WeightRouteVistor {
-                    base_route: BaseRouteVistor {
-                        endpoint: String::from("/"),
-                        try_file: None,
-                        is_alive: None,
-                        anomaly_detection_status: AnomalyDetectionStatus {
-                            consecutive_5xx: 100,
-                        },
-                    },
-                    index: 0,
-                    weight: 100,
-                }],
-            }),
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
-            anomaly_detection: None,
-            health_check: None,
-            allow_deny_list: None,
-            authentication: None,
-            ratelimit: None,
-            liveness_config: None,
-            rewrite_headers: None,
-
-            matcher: Some(Matcher {
-                prefix: String::from("ss"),
-                prefix_rewrite: String::from("ssss"),
-            }),
-        };
-        let api_service = ApiServiceVistor {
-            api_service_id: get_uuid(),
-            listen_port: 4486,
-            service_config: ServiceConfigVistor {
-                routes: vec![route],
-                server_type: Default::default(),
-                cert_str: Default::default(),
-                key_str: Default::default(),
-            },
-        };
-        let t = vec![api_service];
-        let yaml = serde_yaml::to_string(&t).unwrap();
-        println!("{}", yaml);
-    }
-
-    #[test]
-    fn test_serde_output_random_route() {
-        let route = RouteVistor {
-            host_name: None,
-            route_id: get_uuid(),
-            route_cluster: LoadbalancerStrategyVistor::RandomRoute(RandomRouteVistor {
-                routes: vec![
-                    RandomBaseRouteVistor {
-                        base_route: BaseRouteVistor {
-                            endpoint: String::from("/"),
-                            try_file: None,
-                            is_alive: None,
-                            anomaly_detection_status: AnomalyDetectionStatus {
-                                consecutive_5xx: 100,
-                            },
-                        },
-                    },
-                    RandomBaseRouteVistor {
-                        base_route: BaseRouteVistor {
-                            endpoint: String::from("/"),
-                            try_file: None,
-                            is_alive: None,
-                            anomaly_detection_status: AnomalyDetectionStatus {
-                                consecutive_5xx: 100,
-                            },
-                        },
-                    },
-                ],
-            }),
-            liveness_config: None,
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
-            rewrite_headers: None,
-
-            anomaly_detection: None,
-            allow_deny_list: None,
-            authentication: None,
-            health_check: None,
-            ratelimit: None,
-            matcher: Some(Matcher {
-                prefix: String::from("ss"),
-                prefix_rewrite: String::from("ssss"),
-            }),
-        };
-        let api_service = ApiServiceVistor {
-            api_service_id: get_uuid(),
-            listen_port: 4486,
-            service_config: ServiceConfigVistor {
-                routes: vec![route],
-                server_type: Default::default(),
-                cert_str: Default::default(),
-
-                key_str: Default::default(),
-            },
-        };
-        let t = vec![api_service];
-        let yaml = serde_yaml::to_string(&t).unwrap();
-        println!("{}", yaml);
-    }
-    #[test]
-    fn test_serde_output_poll_route() {
-        let route = RouteVistor {
-            host_name: None,
-            route_id: get_uuid(),
-            route_cluster: LoadbalancerStrategyVistor::PollRoute(PollRouteVistor {
-                routes: vec![PollBaseRouteVistor {
-                    base_route: BaseRouteVistor {
-                        endpoint: String::from("/"),
-                        try_file: None,
-                        is_alive: None,
-                        anomaly_detection_status: AnomalyDetectionStatus {
-                            consecutive_5xx: 100,
-                        },
-                    },
-                }],
-                // lock: Default::default(),
-                current_index: Default::default(),
-            }),
-            liveness_config: None,
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
-            anomaly_detection: None,
-            health_check: None,
-            allow_deny_list: None,
-            authentication: None,
-            rewrite_headers: None,
-
-            ratelimit: None,
-            matcher: Some(Matcher {
-                prefix: String::from("ss"),
-                prefix_rewrite: String::from("ssss"),
-            }),
-        };
-        let api_service = ApiServiceVistor {
-            api_service_id: get_uuid(),
-
-            listen_port: 4486,
-            service_config: ServiceConfigVistor {
-                routes: vec![route],
-                server_type: Default::default(),
-                cert_str: Default::default(),
-                key_str: Default::default(),
-            },
-        };
-        let t = vec![api_service];
-        let yaml = serde_yaml::to_string(&t).unwrap();
-        println!("{}", yaml);
-    }
-
-    #[test]
-    fn test_serde_output_basic_auth() {
-        let basic_auth: Box<dyn AuthenticationStrategy> = Box::new(BasicAuth {
-            credentials: String::from("lsk:123456"),
-        });
-        let route = RouteVistor {
-            host_name: None,
-            route_id: get_uuid(),
-            route_cluster: LoadbalancerStrategyVistor::PollRoute(PollRouteVistor {
-                routes: vec![PollBaseRouteVistor {
-                    base_route: BaseRouteVistor {
-                        endpoint: String::from("/"),
-                        try_file: None,
-                        is_alive: None,
-                        anomaly_detection_status: AnomalyDetectionStatus {
-                            consecutive_5xx: 100,
-                        },
-                    },
-                }],
-                // lock: Default::default(),
-                current_index: Default::default(),
-            }),
-            anomaly_detection: None,
-            health_check: None,
-            allow_deny_list: None,
-            liveness_config: None,
-            rewrite_headers: None,
-
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
-            authentication: Some(basic_auth),
-            ratelimit: None,
-            matcher: Some(Matcher {
-                prefix: String::from("ss"),
-                prefix_rewrite: String::from("ssss"),
-            }),
-        };
-        let api_service = ApiServiceVistor {
-            listen_port: 4486,
-            api_service_id: get_uuid(),
-            service_config: ServiceConfigVistor {
-                routes: vec![route],
-                server_type: Default::default(),
-                cert_str: Default::default(),
-                key_str: Default::default(),
-            },
-        };
-        let t = vec![api_service];
-        let yaml = serde_yaml::to_string(&t).unwrap();
-        println!("{}", yaml);
-    }
-    #[test]
-    fn test_serde_output_api_key_auth() {
-        let api_key_auth: Box<dyn AuthenticationStrategy> = Box::new(ApiKeyAuth {
-            key: String::from("api_key"),
-            value: String::from("test"),
-        });
-        let route = RouteVistor {
-            host_name: None,
-            route_id: get_uuid(),
-            route_cluster: LoadbalancerStrategyVistor::PollRoute(PollRouteVistor {
-                routes: vec![PollBaseRouteVistor {
-                    base_route: BaseRouteVistor {
-                        endpoint: String::from("/"),
-                        try_file: None,
-                        is_alive: None,
-                        anomaly_detection_status: AnomalyDetectionStatus {
-                            consecutive_5xx: 100,
-                        },
-                    },
-                }],
-                // lock: Default::default(),
-                current_index: Default::default(),
-            }),
-            anomaly_detection: None,
-            health_check: None,
-            allow_deny_list: None,
-            liveness_config: None,
-            rewrite_headers: None,
-
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
-            ratelimit: None,
-            authentication: Some(api_key_auth),
-            matcher: Some(Matcher {
-                prefix: String::from("ss"),
-                prefix_rewrite: String::from("ssss"),
-            }),
-        };
-        let api_service = ApiServiceVistor {
-            api_service_id: get_uuid(),
-            listen_port: 4486,
-            service_config: ServiceConfigVistor {
-                routes: vec![route],
-                server_type: Default::default(),
-                cert_str: Default::default(),
-                key_str: Default::default(),
-            },
-        };
-        let t = vec![api_service];
-        let yaml = serde_yaml::to_string(&t).unwrap();
-        println!("{}", yaml);
-    }
-    #[test]
-    fn test_serde_output_token_bucket_ratelimit() {
-        let token_bucket_ratelimit = TokenBucketRateLimit {
-            rate_per_unit: 3,
-            capacity: 10000,
-            unit: TimeUnit::Second,
-            limit_location: LimitLocation::IP(IPBasedRatelimit {
-                value: String::from("192.168.0.0"),
-            }),
-            current_count: Arc::new(RwLock::new(AtomicIsize::new(3))),
-            lock: Arc::new(Mutex::new(0)),
-            last_update_time: Arc::new(RwLock::new(SystemTime::now())),
-        };
-        let ratelimit: Box<dyn RatelimitStrategy> = Box::new(token_bucket_ratelimit);
-        let route = RouteVistor {
-            host_name: None,
-            route_id: get_uuid(),
-            route_cluster: LoadbalancerStrategyVistor::PollRoute(PollRouteVistor {
-                routes: vec![PollBaseRouteVistor {
-                    base_route: BaseRouteVistor {
-                        endpoint: String::from("/"),
-                        try_file: None,
-                        is_alive: None,
-                        anomaly_detection_status: AnomalyDetectionStatus {
-                            consecutive_5xx: 100,
-                        },
-                    },
-                }],
-                // lock: Default::default(),
-                current_index: Default::default(),
-            }),
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
-            anomaly_detection: None,
-            health_check: None,
-            allow_deny_list: None,
-            liveness_config: None,
-            rewrite_headers: None,
-
-            authentication: None,
-            ratelimit: Some(ratelimit),
-            matcher: Some(Matcher {
-                prefix: String::from("ss"),
-                prefix_rewrite: String::from("ssss"),
-            }),
-        };
-        let api_service = ApiServiceVistor {
-            api_service_id: get_uuid(),
-            listen_port: 4486,
-            service_config: ServiceConfigVistor {
-                routes: vec![route],
-                server_type: Default::default(),
-                cert_str: Default::default(),
-                key_str: Default::default(),
-            },
-        };
-        let t = vec![api_service];
-        let yaml = serde_yaml::to_string(&t).unwrap();
-        println!("{}", yaml);
-    }
-    #[test]
-    fn test_serde_output_fixedwindow_ratelimit() {
-        let fixed_window_ratelimit = FixedWindowRateLimit {
-            rate_per_unit: 3,
-            unit: TimeUnit::Minute,
-            limit_location: LimitLocation::IP(IPBasedRatelimit {
-                value: String::from("192.168.0.0"),
-            }),
-            count_map: Arc::new(DashMap::new()),
-            lock: Arc::new(Mutex::new(0)),
-        };
-        let ratelimit: Box<dyn RatelimitStrategy> = Box::new(fixed_window_ratelimit);
-        let route = RouteVistor {
-            host_name: None,
-            route_id: get_uuid(),
-            route_cluster: LoadbalancerStrategyVistor::PollRoute(PollRouteVistor {
-                routes: vec![PollBaseRouteVistor {
-                    base_route: BaseRouteVistor {
-                        endpoint: String::from("/"),
-                        try_file: None,
-                        is_alive: None,
-                        anomaly_detection_status: AnomalyDetectionStatus {
-                            consecutive_5xx: 100,
-                        },
-                    },
-                }],
-                // lock: Default::default(),
-                current_index: Default::default(),
-            }),
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
-            rewrite_headers: None,
-
-            anomaly_detection: None,
-            health_check: None,
-            allow_deny_list: None,
-            authentication: None,
-            liveness_config: None,
-
-            ratelimit: Some(ratelimit),
-            matcher: Some(Matcher {
-                prefix: String::from("ss"),
-                prefix_rewrite: String::from("ssss"),
-            }),
-        };
-        let api_service = ApiServiceVistor {
-            api_service_id: get_uuid(),
-            listen_port: 4486,
-            service_config: ServiceConfigVistor {
-                routes: vec![route],
-                server_type: Default::default(),
-                cert_str: Default::default(),
-                key_str: Default::default(),
-            },
-        };
-        let t = vec![api_service];
-        let yaml = serde_yaml::to_string(&t).unwrap();
-        println!("{}", yaml);
-    }
-
-    #[test]
-    fn test_serde_output_allow_deny_list() {
-        let allow_object = AllowDenyObject {
-            limit_type: crate::vojo::allow_deny_ip::AllowType::Allow,
-            value: Some(String::from("sss")),
-        };
-        let route = RouteVistor {
-            host_name: None,
-            route_id: get_uuid(),
-            route_cluster: LoadbalancerStrategyVistor::PollRoute(PollRouteVistor {
-                routes: vec![PollBaseRouteVistor {
-                    base_route: BaseRouteVistor {
-                        endpoint: String::from("/"),
-                        try_file: None,
-                        is_alive: None,
-                        anomaly_detection_status: AnomalyDetectionStatus {
-                            consecutive_5xx: 100,
-                        },
-                    },
-                }],
-                // lock: Default::default(),
-                current_index: Default::default(),
-            }),
-            anomaly_detection: None,
-            health_check: None,
-            rewrite_headers: None,
-
-            allow_deny_list: Some(vec![allow_object]),
-            authentication: None,
-            liveness_config: None,
-            liveness_status: LivenessStatus {
-                current_liveness_count: 0,
-            },
-            ratelimit: None,
-            matcher: Some(Matcher {
-                prefix: String::from("ss"),
-                prefix_rewrite: String::from("ssss"),
-            }),
-        };
-        let api_service = ApiServiceVistor {
-            api_service_id: get_uuid(),
-            listen_port: 4486,
-            service_config: ServiceConfigVistor {
-                routes: vec![route],
-                server_type: Default::default(),
-                cert_str: Default::default(),
-                key_str: Default::default(),
-            },
-        };
-        let t = vec![api_service];
-        let yaml = serde_yaml::to_string(&t).unwrap();
-        println!("{}", yaml);
-    }
-    #[test]
-    fn test_regex() {
-        // let re = Regex::new("/api/test/book").unwrap();
-        // let match_res = re.captures("/api");
-        // assert_eq!(match_res.is_some(), true);
-        let src_path1 = "/api/test/book";
-        let dst1 = src_path1.strip_prefix("/api");
-        assert!(dst1.is_some());
-        assert_eq!(dst1.unwrap(), "/test/book");
-
-        let src_path2 = "/api/test/book";
-        let dst2 = src_path2.strip_prefix("api");
-        assert!(dst2.is_none());
-
-        let src_path3 = "/api/test/book";
-        let dst3 = src_path3.strip_prefix("/api/");
-        assert!(dst3.is_some());
-        assert_eq!(dst3.unwrap(), "test/book");
-    }
 }

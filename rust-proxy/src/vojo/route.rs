@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LoadbalancerStrategy {
     PollRoute(PollRoute),
     HeaderBased(HeaderBasedRoute),
@@ -57,24 +57,22 @@ impl LoadbalancerStrategy {
 pub struct AnomalyDetectionStatus {
     pub consecutive_5xx: i32,
 }
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BaseRoute {
     pub endpoint: String,
     pub try_file: Option<String>,
     #[serde(skip_deserializing)]
-    pub is_alive: Arc<RwLock<Option<bool>>>,
+    pub is_alive: Option<bool>,
     #[serde(skip_serializing, skip_deserializing)]
-    pub anomaly_detection_status: Arc<RwLock<AnomalyDetectionStatus>>,
+    pub anomaly_detection_status: AnomalyDetectionStatus,
 }
 impl BaseRoute {
     pub fn from(base_route_vistor: BaseRouteVistor) -> Self {
         BaseRoute {
             endpoint: base_route_vistor.endpoint,
             try_file: base_route_vistor.try_file,
-            is_alive: Arc::new(RwLock::new(base_route_vistor.is_alive)),
-            anomaly_detection_status: Arc::new(RwLock::new(
-                base_route_vistor.anomaly_detection_status,
-            )),
+            is_alive: base_route_vistor.is_alive,
+            anomaly_detection_status: base_route_vistor.anomaly_detection_status,
         }
     }
 }
@@ -225,11 +223,11 @@ impl BaseRoute {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WeightRoute {
     pub base_route: BaseRoute,
     pub weight: i32,
-    pub index: Arc<AtomicIsize>,
+    pub index: i32,
 }
 impl WeightRoute {
     pub fn new_list(weight_route_vistors: Vec<WeightRouteVistor>) -> Vec<WeightRoute> {
@@ -269,7 +267,7 @@ pub enum HeaderValueMappingType {
     Text(TextMatch),
     Split(SplitSegment),
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeaderRoute {
     pub base_route: BaseRoute,
     pub header_key: String,
@@ -288,7 +286,7 @@ impl HeaderRoute {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeaderBasedRoute {
     pub routes: Vec<HeaderRoute>,
 }
@@ -373,7 +371,7 @@ impl HeaderBasedRoute {
 pub struct RandomBaseRoute {
     pub base_route: BaseRoute,
 }
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RandomRoute {
     pub routes: Vec<RandomBaseRoute>,
 }
@@ -434,7 +432,7 @@ impl PollBaseRoute {
             .collect::<Vec<PollBaseRoute>>()
     }
 }
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct PollRoute {
     pub current_index: Arc<AtomicUsize>,
     pub routes: Vec<PollBaseRoute>,
@@ -481,16 +479,14 @@ impl PollRoute {
         Ok(dst.base_route)
     }
 }
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WeightBasedRoute {
-    pub routes: Arc<RwLock<Vec<WeightRoute>>>,
+    pub routes: Vec<WeightRoute>,
 }
 impl WeightBasedRoute {
     pub fn from(weight_based_route_vistor: WeightBasedRouteVistor) -> Self {
         WeightBasedRoute {
-            routes: Arc::new(RwLock::new(WeightRoute::new_list(
-                weight_based_route_vistor.routes,
-            ))),
+            routes: WeightRoute::new_list(weight_based_route_vistor.routes),
         }
     }
 }

@@ -1,84 +1,41 @@
-use env_logger::{Env, Logger as Logger2};
-use log4rs::append::console::ConsoleAppender;
-use log4rs::append::rolling_file::policy::compound::roll::fixed_window::FixedWindowRoller;
-use log4rs::append::rolling_file::policy::compound::trigger::size::SizeTrigger;
-use log4rs::append::rolling_file::policy::compound::CompoundPolicy;
-use log4rs::append::rolling_file::RollingFileAppender;
-use log4rs::config::{Appender, Config, Logger, Root};
-use log4rs::encode::pattern::PatternEncoder;
-pub fn start_logger() {
-    let env = Env::new().filter_or("RUST_LOG", "info");
-    let level_filter = Logger2::from_env(env).filter();
-    let stdout = ConsoleAppender::builder()
-        .encoder(Box::new(PatternEncoder::new(
-            "{d(%Y-%m-%d %H:%M:%S)(local)} - {h({l})}: {m}{n}",
-        )))
-        .build();
+use chrono::DateTime;
+use chrono::Local;
 
-    let window_size = 10;
-    let fixed_window_roller = FixedWindowRoller::builder()
-        .build("log/app-{}", window_size)
-        .unwrap();
+use tracing_appender::rolling;
+use tracing_subscriber::fmt::format::Writer;
+use tracing_subscriber::fmt::time::FormatTime;
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::Layer;
+struct LocalTime;
+use tracing_subscriber::util::SubscriberInitExt;
 
-    let size_limit = 10 * 1024 * 1024;
-    let size_trigger = SizeTrigger::new(size_limit);
-    let compound_policy1 = CompoundPolicy::new(
-        Box::new(size_trigger),
-        Box::new(fixed_window_roller.clone()),
-    );
-    let compound_policy2 =
-        CompoundPolicy::new(Box::new(size_trigger), Box::new(fixed_window_roller));
-
-    let requests = RollingFileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new(
-            "{d(%Y-%m-%d %H:%M:%S)(local)} - {h({l})}$${m}{n}",
-        )))
-        .build("log/app.log", Box::new(compound_policy1))
-        .unwrap();
-    let common = RollingFileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new(
-            "{d(%Y-%m-%d %H:%M:%S)(local)} - {h({l})}$${m}{n}",
-        )))
-        .build("log/common.log", Box::new(compound_policy2))
-        .unwrap();
-
-    let config = Config::builder()
-        .appender(Appender::builder().build("stdout", Box::new(stdout)))
-        .appender(Appender::builder().build("app", Box::new(requests)))
-        .appender(Appender::builder().build("common", Box::new(common)))
-        .logger(
-            Logger::builder()
-                .appender("app")
-                .additive(false)
-                .build("app", level_filter),
-        )
-        .build(
-            Root::builder()
-                .appender("stdout")
-                .appender("app")
-                .appender("common")
-                .build(level_filter),
-        )
-        .unwrap();
-
-    let _handle = log4rs::init_config(config);
-
-    // use handle to change logger configuration at runtime
+impl FormatTime for LocalTime {
+    fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
+        // Get the current time in local timezone
+        let now: DateTime<Local> = Local::now();
+        write!(w, "{}", now.format("%Y-%m-%d %H:%M:%S%.3f"))
+    }
 }
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_stdout_log() {
-        debug!("test debug");
-        info!("test info");
-        error!("test error");
-        trace!("test trace");
-    }
-    #[test]
-    fn test_app_log() {
-        debug!(target: "app","test debug");
-        info!(target: "app","test info");
-        error!(target: "app","test error");
-        trace!(target: "app","test trace");
-    }
+
+pub fn setup_logger() -> Result<(), anyhow::Error> {
+    let app_file = rolling::daily("./logs", "spire.log");
+
+    let file_layer = tracing_subscriber::fmt::Layer::new()
+        .with_target(true)
+        .with_ansi(false)
+        .with_timer(LocalTime)
+        .with_writer(app_file)
+        .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
+    // let console_layer = tracing_subscriber::fmt::Layer::new()
+    //     .with_target(true)
+    //     .with_ansi(true)
+    //     .with_timer(LocalTime)
+    //     .with_writer(std::io::stdout)
+    //     .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
+    let _ = tracing_subscriber::registry()
+        .with(file_layer)
+        // .with(console_layer)
+        .with(tracing_subscriber::filter::LevelFilter::TRACE)
+        .try_init();
+    Ok(())
 }

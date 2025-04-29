@@ -282,7 +282,7 @@ async fn request_outbound(
         send_request
     };
 
-    debug!("request path is {}", url.to_string());
+    debug!("request path is {}", url);
     let mut send_request = send_request_poll
         .ready()
         .await
@@ -348,7 +348,7 @@ mod tests {
     use std::time::Duration;
     use tokio::runtime::{Builder, Runtime};
     use tokio::time::sleep;
-    struct MockProvider();
+    struct MockProvider;
     #[async_trait]
     impl CheckTrait for MockProvider {
         async fn check_before_request(

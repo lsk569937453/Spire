@@ -1,30 +1,40 @@
+use configuration_service::logger::setup_logger;
 #[cfg(not(target_env = "msvc"))]
 use jemallocator::Jemalloc;
+use openssl::conf;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
 extern crate derive_builder;
+use crate::vojo::cli::Cli;
 mod configuration_service;
 mod constants;
+use clap::Parser;
 mod control_plane;
+use crate::vojo::cli::SharedConfig;
 mod health_check;
+use crate::vojo::app_config::AppConfig;
 mod monitor;
 mod proxy;
 mod utils;
+#[macro_use]
+extern crate tracing;
+#[macro_use]
+extern crate anyhow;
 mod vojo;
 use crate::constants::common_constants::DEFAULT_ADMIN_PORT;
 use crate::constants::common_constants::ENV_ADMIN_PORT;
+use crate::vojo::app_error::AppError;
 use std::env;
 #[macro_use]
 extern crate log;
 use crate::control_plane::rest_api::start_control_plane;
-use env_logger::Env;
 
 use tokio::runtime;
 
-fn main() {
+fn main() -> Result<(), anyhow::Error> {
     let num = num_cpus::get();
     let rt = runtime::Builder::new_multi_thread()
         .worker_threads(num * 2)
@@ -32,43 +42,25 @@ fn main() {
         .build()
         .unwrap();
 
-    rt.block_on(async {
-        let admin_port: i32 = env::var(ENV_ADMIN_PORT)
-            .unwrap_or(String::from(DEFAULT_ADMIN_PORT))
-            .parse()
-            .unwrap();
-        start(admin_port).await
-    });
+    rt.block_on(async { start().await });
+    Ok(())
 }
-async fn start(admin_port: i32) {
-    configuration_service::app_config_service::init().await;
-    start_control_plane(admin_port).await;
-}
+async fn start() -> Result<(), AppError> {
+    let _ = setup_logger();
+    let cli = Cli::parse();
+    info!("cli: {:?}", cli);
+    println!("cli: {:?}", cli);
+    let config_str = tokio::fs::read_to_string(cli.config_path)
+        .await
+        .map_err(|e| AppError(e.to_string()))?;
+    let config: AppConfig =
+        serde_yaml::from_str(&config_str).map_err(|e| AppError(e.to_string()))?;
+    info!("config is {:?}", config);
+    println!("config is {:?}", config);
+    let admin_port = config.static_config.admin_port;
+    let shared_config = SharedConfig::from_app_config(config);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use lazy_static::lazy_static;
-    use std::net::TcpListener;
-    use std::{thread, time};
-    use tokio::runtime::{Builder, Runtime};
-    lazy_static! {
-        pub static ref TOKIO_RUNTIME: Runtime = Builder::new_multi_thread()
-            .worker_threads(4)
-            .thread_name("silverwind-thread")
-            .thread_stack_size(3 * 1024 * 1024)
-            .enable_all()
-            .build()
-            .unwrap();
-    }
-    #[test]
-    fn test_start_api_ok() {
-        TOKIO_RUNTIME.spawn(async {
-            start(5402).await;
-        });
-        let sleep_time = time::Duration::from_millis(5000);
-        thread::sleep(sleep_time);
-        let listener = TcpListener::bind("0.0.0.0:5402");
-        assert!(listener.is_err());
-    }
+    configuration_service::app_config_service::init(shared_config).await;
+    let _ = start_control_plane(admin_port).await;
+    Ok(())
 }

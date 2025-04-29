@@ -9,9 +9,8 @@ use crate::vojo::app_config::Route;
 use crate::vojo::app_config::ServiceConfig;
 use crate::vojo::app_config::ServiceType;
 use crate::vojo::app_config::StaticConifg;
-use crate::vojo::authentication::AuthenticationStrategy;
 use crate::vojo::health_check::HealthCheckType;
-use crate::vojo::rate_limit::RatelimitStrategy;
+use crate::vojo::rate_limit::Ratelimit;
 use crate::vojo::route::AnomalyDetectionStatus;
 use crate::vojo::route::BaseRoute;
 use crate::vojo::route::HeaderValueMappingType;
@@ -28,6 +27,7 @@ use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 use super::app_error::AppError;
+use super::authentication::Authentication;
 use super::route::HeaderRoute;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ApiServiceVistor {
@@ -54,14 +54,14 @@ pub struct RouteVistor {
     pub host_name: Option<String>,
     pub matcher: Option<Matcher>,
     pub allow_deny_list: Option<Vec<AllowDenyObject>>,
-    pub authentication: Option<Box<dyn AuthenticationStrategy>>,
+    pub authentication: Option<Authentication>,
     pub anomaly_detection: Option<AnomalyDetectionType>,
     #[serde(skip_serializing, skip_deserializing)]
     pub liveness_status: LivenessStatus,
     pub rewrite_headers: Option<HashMap<String, String>>,
     pub liveness_config: Option<LivenessConfig>,
     pub health_check: Option<HealthCheckType>,
-    pub ratelimit: Option<Box<dyn RatelimitStrategy>>,
+    pub ratelimit: Option<Ratelimit>,
     pub route_cluster: LoadbalancerStrategyVistor,
 }
 

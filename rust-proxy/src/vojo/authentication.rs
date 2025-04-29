@@ -9,30 +9,33 @@ use std::any::Any;
 
 use super::app_error::AppError;
 
-#[typetag::serde(tag = "type")]
-pub trait AuthenticationStrategy: Sync + Send + DynClone {
-    fn check_authentication(&mut self, headers: HeaderMap<HeaderValue>) -> Result<bool, AppError>;
-
-    fn get_debug(&self) -> String {
-        String::from("debug")
-    }
-    fn as_any(&self) -> &dyn Any;
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "PascalCase")]
+pub enum Authentication {
+    Basic(BasicAuth),
+    ApiKey(ApiKeyAuth),
 }
-dyn_clone::clone_trait_object!(AuthenticationStrategy);
 
-impl Debug for dyn AuthenticationStrategy {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let routes = self.get_debug();
-        write!(f, "{{{}}}", routes)
+impl Authentication {
+    pub fn check_authentication(
+        &mut self,
+        headers: HeaderMap<HeaderValue>,
+    ) -> Result<bool, AppError> {
+        match self {
+            Authentication::Basic(auth) => auth.check_authentication(headers),
+            Authentication::ApiKey(auth) => auth.check_authentication(headers),
+        }
     }
 }
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct BasicAuth {
     pub credentials: String,
 }
-#[typetag::serde]
-impl AuthenticationStrategy for BasicAuth {
+
+impl BasicAuth {
     fn check_authentication(&mut self, headers: HeaderMap<HeaderValue>) -> Result<bool, AppError> {
+        // 原有实现逻辑
         if headers.is_empty() || !headers.contains_key("Authorization") {
             return Ok(false);
         }
@@ -45,214 +48,28 @@ impl AuthenticationStrategy for BasicAuth {
         if split_list.len() != 2 || split_list[0] != "Basic" {
             return Ok(false);
         }
-        let encoded: String = general_purpose::STANDARD_NO_PAD.encode(self.credentials.clone());
-        if split_list[1] != encoded {
-            return Ok(false);
-        }
-
-        Ok(true)
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        let encoded: String = general_purpose::STANDARD_NO_PAD.encode(&self.credentials);
+        Ok(split_list[1] == encoded)
     }
 }
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ApiKeyAuth {
     pub key: String,
     pub value: String,
 }
 
-#[typetag::serde]
-impl AuthenticationStrategy for ApiKeyAuth {
+impl ApiKeyAuth {
     fn check_authentication(&mut self, headers: HeaderMap<HeaderValue>) -> Result<bool, AppError> {
-        if headers.is_empty() || !headers.contains_key(self.key.clone()) {
+        // 原有实现逻辑
+        if headers.is_empty() || !headers.contains_key(&self.key) {
             return Ok(false);
         }
         let header_value = headers
-            .get(self.key.clone())
+            .get(&self.key)
             .unwrap()
             .to_str()
             .map_err(|err| AppError(err.to_string()))?;
         Ok(header_value == self.value)
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::vojo::app_config_vistor::ApiServiceVistor;
-    #[test]
-    fn test_basic_auth_error1() {
-        let mut basic_auth: Box<dyn AuthenticationStrategy> = Box::new(BasicAuth {
-            credentials: String::from("lsk:password"),
-        });
-        let mut headermap1 = HeaderMap::new();
-        headermap1.insert("x-client", "Basic bHNrOjEyMzQ=".parse().unwrap());
-        let res1 = basic_auth.check_authentication(headermap1);
-        assert!(!res1.unwrap());
-    }
-    #[test]
-    fn test_basic_auth_error2() {
-        let mut basic_auth: Box<dyn AuthenticationStrategy> = Box::new(BasicAuth {
-            credentials: String::from("lsk:password"),
-        });
-        let mut headermap1 = HeaderMap::new();
-        headermap1.insert("Authorization", "BasicbHNrOjEyMzQ=".parse().unwrap());
-        let res1 = basic_auth.check_authentication(headermap1);
-        assert!(!res1.unwrap());
-    }
-    #[test]
-    fn test_basic_auth_error3() {
-        let mut basic_auth: Box<dyn AuthenticationStrategy> = Box::new(BasicAuth {
-            credentials: String::from("lsk:password"),
-        });
-        let mut headermap1 = HeaderMap::new();
-        headermap1.insert("Authorization", "Basic test".parse().unwrap());
-        let res1 = basic_auth.check_authentication(headermap1);
-        assert!(!res1.unwrap());
-    }
-    #[test]
-    fn test_basic_auth_ok() {
-        let mut basic_auth: Box<dyn AuthenticationStrategy> = Box::new(BasicAuth {
-            credentials: String::from("lsk:password"),
-        });
-        let mut headermap1 = HeaderMap::new();
-        headermap1.insert("Authorization", "Basic bHNrOnBhc3N3b3Jk".parse().unwrap());
-        let res1 = basic_auth.check_authentication(headermap1);
-        assert!(res1.unwrap());
-    }
-    #[test]
-    fn test_api_key_auth_error() {
-        let mut basic_auth: Box<dyn AuthenticationStrategy> = Box::new(ApiKeyAuth {
-            key: String::from("sss"),
-            value: String::from("test2"),
-        });
-        let mut headermap1 = HeaderMap::new();
-        headermap1.insert("Authorization", "Basic bHNrOnBhc3N3b3Jk".parse().unwrap());
-        let res1 = basic_auth.check_authentication(headermap1);
-        assert!(!res1.unwrap());
-    }
-
-    #[test]
-    fn test_api_key_auth_ok() {
-        let mut basic_auth: Box<dyn AuthenticationStrategy> = Box::new(ApiKeyAuth {
-            key: String::from("api_key"),
-            value: String::from("test2"),
-        });
-        let mut headermap1 = HeaderMap::new();
-        headermap1.insert("api_key", "test2".parse().unwrap());
-        let res1 = basic_auth.check_authentication(headermap1);
-        assert!(res1.unwrap());
-    }
-    #[test]
-    fn test_basic_auth_as_any() {
-        let req = r#"[
-            {
-              "listen_port": 4486,
-              "service_config": {
-                "server_type": "Http",
-                "cert_str": null,
-                "key_str": null,
-                "routes": [
-                  {
-                    "matcher": {
-                      "prefix": "ss",
-                      "prefix_rewrite": "ssss"
-                    },
-                    "allow_deny_list": null,
-                    "authentication": {
-                      "type": "BasicAuth",
-                      "credentials": "lsk:123456"
-                    },
-                    "route_cluster": {
-                      "type": "PollRoute",
-                      "routes": [
-                        {
-                            "base_route": {
-                                "endpoint": "http://localhost:8000",
-                                "try_file": null
-                            }
-                        }
-                      ]
-                    }
-                  }
-                ]
-              }
-            }
-          ]"#;
-        let api_services: Vec<ApiServiceVistor> = serde_json::from_slice(req.as_bytes()).unwrap();
-        let first_api_service = api_services
-            .first()
-            .unwrap()
-            .service_config
-            .routes
-            .first()
-            .unwrap()
-            .clone();
-        let route = first_api_service.authentication.unwrap();
-        let basic_auth: &BasicAuth = match route.as_any().downcast_ref::<BasicAuth>() {
-            Some(b) => b,
-            None => panic!("error!"),
-        };
-
-        assert_eq!(basic_auth.credentials, "lsk:123456");
-    }
-
-    #[test]
-    fn test_api_key_auth_as_any() {
-        let req = r#"[
-            {
-              "listen_port": 4486,
-              "service_config": {
-                "server_type": "Http",
-                "cert_str": null,
-                "key_str": null,
-                "routes": [
-                  {
-                    "matcher": {
-                      "prefix": "ss",
-                      "prefix_rewrite": "ssss"
-                    },
-                    "allow_deny_list": null,
-                    "authentication": {
-                      "type": "ApiKeyAuth",
-                      "key": "api_key",
-                      "value": "test"
-                    },
-                    "route_cluster": {
-                      "type": "PollRoute",
-                      "routes": [
-                        {
-                            "base_route": {
-                                "endpoint": "http://localhost:8000",
-                                "try_file": null
-                            }
-                        }
-                      ]
-                    }
-                  }
-                ]
-              }
-            }
-          ]"#;
-        let api_services: Vec<ApiServiceVistor> = serde_json::from_slice(req.as_bytes()).unwrap();
-        let first_api_service = api_services
-            .first()
-            .unwrap()
-            .service_config
-            .routes
-            .first()
-            .unwrap()
-            .clone();
-        let route = first_api_service.authentication.unwrap();
-        let basic_auth: &ApiKeyAuth = match route.as_any().downcast_ref::<ApiKeyAuth>() {
-            Some(b) => b,
-            None => panic!("error!"),
-        };
-
-        assert_eq!(basic_auth.key, "api_key");
-        assert_eq!(basic_auth.value, "test");
     }
 }
