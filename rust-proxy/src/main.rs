@@ -56,10 +56,7 @@ fn run_async_task() -> Result<(), AppError> {
 
 #[cfg(test)]
 mod tests {
-    
-    
-    
-    
+
     // #[tokio::test]
     // async fn pool_key_value_get_set() {
     //     tokio::spawn(async move { block_start_with_error().await });
