@@ -12,7 +12,7 @@ use crate::vojo::route::BaseRoute;
 use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::delete;
-use axum::routing::{get, post, put};
+use axum::routing::{get, post};
 use axum::Router;
 use prometheus::{Encoder, TextEncoder};
 use std::collections::HashMap;
@@ -79,6 +79,7 @@ async fn post_app_config_with_error(
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let cloned_config = shared_config.clone();
     let current_type = api_service.service_config.server_type.clone();
+    let port = api_service.listen_port;
     if current_type == ServiceType::Https || current_type == ServiceType::Http2Tls {
         validate_tls_config(
             api_service.service_config.cert_str.clone(),
@@ -89,9 +90,9 @@ async fn post_app_config_with_error(
     match rw_global_lock
         .api_service_config
         .iter_mut()
-        .find(|item| item.listen_port == api_service.listen_port)
+        .find(|(_, item)| item.listen_port == api_service.listen_port)
     {
-        Some(data) => data.service_config.routes.push(
+        Some((_, data)) => data.service_config.routes.push(
             api_service
                 .service_config
                 .routes
@@ -99,7 +100,9 @@ async fn post_app_config_with_error(
                 .ok_or(AppError(String::from("The route is empty!")))?
                 .clone(),
         ),
-        None => rw_global_lock.api_service_config.push(api_service),
+        None => {
+            rw_global_lock.api_service_config.insert(port, api_service);
+        }
     };
     let app_config = rw_global_lock.clone();
     tokio::spawn(async {
@@ -119,14 +122,14 @@ async fn delete_route(
     axum::extract::Path(route_id): axum::extract::Path<String>,
 ) -> Result<impl axum::response::IntoResponse, Infallible> {
     let mut rw_global_lock = shared_config.shared_data.lock().unwrap();
-    let mut api_services = vec![];
-    for mut api_service in rw_global_lock.clone().api_service_config {
+    let mut api_services = HashMap::new();
+    for (port, mut api_service) in rw_global_lock.clone().api_service_config {
         api_service
             .service_config
             .routes
             .retain(|route| route.route_id != route_id);
         if !api_service.service_config.routes.is_empty() {
-            api_services.push(api_service);
+            api_services.insert(port, api_service);
         }
     }
     rw_global_lock.api_service_config = api_services;
@@ -181,7 +184,7 @@ async fn put_route_with_error(
     let old_route = rw_global_lock
         .api_service_config
         .iter_mut()
-        .flat_map(|item| item.service_config.routes.clone())
+        .flat_map(|(_, item)| item.service_config.routes.clone())
         .find(|item| item.route_id == route.route_id)
         .ok_or(AppError(String::from(
             "Can not find the route by route id!",
@@ -201,12 +204,12 @@ async fn put_route_with_error(
         if hashmap.clone().contains_key(&new_base_route.endpoint) {
             let old_base_route = hashmap.get(&new_base_route.endpoint).unwrap();
             let mut alive = new_base_route.is_alive;
-            alive = old_base_route.is_alive.clone();
+            alive = old_base_route.is_alive;
             let mut anomaly_detection_status = &new_base_route.anomaly_detection_status;
             anomaly_detection_status = &old_base_route.anomaly_detection_status.clone();
         }
     }
-    for api_service in rw_global_lock.api_service_config.iter_mut() {
+    for (_, api_service) in rw_global_lock.api_service_config.iter_mut() {
         for route in api_service.service_config.routes.iter_mut() {
             if route.route_id == route.route_id {
                 *route = new_route.clone();

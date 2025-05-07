@@ -1,11 +1,9 @@
 use base64::{engine::general_purpose, Engine as _};
 use core::fmt::Debug;
-use dyn_clone::DynClone;
 use http::HeaderMap;
 use http::HeaderValue;
 
 use serde::{Deserialize, Serialize};
-use std::any::Any;
 
 use super::app_error::AppError;
 

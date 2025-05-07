@@ -1,31 +1,17 @@
-use crate::configuration_service::logger;
-use crate::constants;
-use crate::constants::common_constants::ENV_ACCESS_LOG;
-use crate::constants::common_constants::ENV_ADMIN_PORT;
-use crate::constants::common_constants::ENV_CONFIG_FILE_PATH;
-use crate::constants::common_constants::ENV_DATABASE_URL;
-use crate::constants::common_constants::TIMER_WAIT_SECONDS;
 use crate::health_check::health_check_task::HealthCheck;
 use crate::proxy::http1::http_proxy::HttpProxy;
 use crate::proxy::http2::grpc_proxy::GrpcProxy;
 use crate::proxy::tcp::tcp_proxy::TcpProxy;
-use crate::vojo::app_config::ServiceConfig;
-use crate::vojo::app_config::{ApiService, AppConfig, ServiceType};
+use crate::vojo::app_config::{ApiService, ServiceType};
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
-use dashmap::DashMap;
-use futures::FutureExt;
-use lazy_static::lazy_static;
-use log::Level;
-use std::collections::HashMap;
-use std::env;
+
 use tokio::sync::mpsc;
-use tokio::sync::RwLock;
-use tokio::time::sleep;
 
 pub async fn init(shared_config: SharedConfig) -> Result<(), AppError> {
+    let cloned_config = shared_config.clone();
     tokio::task::spawn(async {
-        let mut health_check = HealthCheck::new();
+        let mut health_check = HealthCheck::from_shared_config(cloned_config);
         health_check.start_health_check_loop().await;
     });
     let mut app_config = shared_config

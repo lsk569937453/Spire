@@ -13,9 +13,7 @@ use regex::Regex;
 use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::sync::RwLock;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Matcher {
     pub prefix: String,

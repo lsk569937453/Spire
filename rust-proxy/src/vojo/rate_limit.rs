@@ -1,11 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::constants::common_constants::DEFAULT_FIXEDWINDOW_MAP_SIZE;
-use async_trait::async_trait;
 use core::fmt::Debug;
-use dashmap::DashMap;
-use dyn_clone::DynClone;
 use http::HeaderMap;
 use http::HeaderValue;
 use ipnet::Ipv4Net;
@@ -13,9 +9,7 @@ use iprange::IpRange;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex;
 use tokio::sync::RwLock;
 
 use super::app_error::AppError;

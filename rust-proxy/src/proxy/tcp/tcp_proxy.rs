@@ -2,7 +2,6 @@ use crate::vojo::app_error::AppError;
 use crate::SharedConfig;
 use futures::FutureExt;
 use http::HeaderMap;
-use openssl::sha;
 use std::net::SocketAddr;
 use tokio::io;
 use tokio::io::AsyncWriteExt;
@@ -26,12 +25,12 @@ impl TcpProxy {
         loop {
             let accept_future = listener.accept();
             let cloned_config = self.shared_config.clone();
-            let port = self.port.clone();
+            let port = self.port;
             tokio::select! {
                accept_result=accept_future=>{
                 if let Ok((inbound, socket_addr))=accept_result{
-                   check(port.clone(),cloned_config.clone(),mapping_key_clone.clone(),socket_addr).await?;
-                   let transfer = transfer(inbound, mapping_key_clone.clone(),cloned_config.clone(),port.clone()).map(|r| {
+                   check(port,cloned_config.clone(),mapping_key_clone.clone(),socket_addr).await?;
+                   let transfer = transfer(inbound, mapping_key_clone.clone(),cloned_config.clone(),port).map(|r| {
                         if let Err(e) = r {
                             println!("Failed to transfer,error is {}", e);
                         }

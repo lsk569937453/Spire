@@ -1,7 +1,6 @@
 use configuration_service::logger::setup_logger;
 #[cfg(not(target_env = "msvc"))]
 use jemallocator::Jemalloc;
-use openssl::conf;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -26,10 +25,7 @@ extern crate anyhow;
 #[macro_use]
 extern crate axum;
 mod vojo;
-use crate::constants::common_constants::DEFAULT_ADMIN_PORT;
-use crate::constants::common_constants::ENV_ADMIN_PORT;
 use crate::vojo::app_error::AppError;
-use std::env;
 #[macro_use]
 extern crate log;
 use crate::control_plane::rest_api::start_control_plane;

@@ -2,6 +2,7 @@ use crate::constants::common_constants::TIMER_WAIT_SECONDS;
 use crate::proxy::http1::http_client::HttpClients;
 use crate::vojo::app_config::Route;
 use crate::vojo::app_error::AppError;
+use crate::vojo::cli::SharedConfig;
 use crate::vojo::health_check::HealthCheckType;
 use crate::vojo::health_check::HttpHealthCheckParam;
 use bytes::Bytes;
@@ -66,14 +67,16 @@ pub struct HealthCheck {
     pub delay_timer: DelayTimer,
     pub health_check_client: HealthCheckClient,
     pub current_id: Arc<AtomicU64>,
+    pub shared_config: SharedConfig,
 }
 impl HealthCheck {
-    pub fn new() -> Self {
+    pub fn from_shared_config(shared_config: SharedConfig) -> Self {
         HealthCheck {
             task_id_map: HashMap::new(),
             delay_timer: DelayTimerBuilder::default().build(),
             health_check_client: HealthCheckClient::new(),
             current_id: Arc::new(AtomicU64::new(0)),
+            shared_config,
         }
     }
     pub async fn start_health_check_loop(&mut self) {
@@ -89,9 +92,11 @@ impl HealthCheck {
     }
 
     async fn do_health_check(&mut self) -> Result<(), AppError> {
-        let handles = GLOBAL_CONFIG_MAPPING
+        let app_config = self.shared_config.shared_data.lock().unwrap().clone();
+        let handles = app_config
+            .api_service_config
             .iter()
-            .flat_map(|item| item.service_config.routes.clone())
+            .flat_map(|(_, item)| item.service_config.routes.clone())
             .filter(|item| item.health_check.is_some() && item.liveness_config.is_some())
             .map(|item| {
                 tokio::spawn(async move {

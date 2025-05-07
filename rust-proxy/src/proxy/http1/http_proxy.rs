@@ -63,7 +63,7 @@ impl HttpProxy {
                Ok((stream,addr))= listener.accept()=>{
                 let client_cloned = client.clone();
                 let cloned_shared_config=self.shared_config.clone();
-                let cloned_port=self.port.clone();
+                let cloned_port=self.port;
                 let mapping_key2 = mapping_key_clone1.clone();
                 tokio::spawn(async move {
                     let io = TokioIo::new(stream);
@@ -134,7 +134,7 @@ impl HttpProxy {
                     Ok((tcp_stream,addr))= listener.accept()=>{
                 let tls_acceptor = tls_acceptor.clone();
                 let cloned_shared_config=self.shared_config.clone();
-                let cloned_port=self.port.clone();
+                let cloned_port=self.port;
                 let client = client.clone();
                 let mapping_key2 = mapping_key_clone1.clone();
                 tokio::spawn(async move {

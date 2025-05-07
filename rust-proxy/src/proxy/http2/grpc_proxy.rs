@@ -12,7 +12,6 @@ use http::version::Version;
 use http::Response;
 use http::{Method, Request};
 use hyper::body::Bytes;
-use openssl::sha;
 
 use crate::SharedConfig;
 use rustls_pki_types::CertificateDer;
@@ -137,7 +136,7 @@ impl GrpcProxy {
             let accept_future = listener.accept();
             tokio::select! {
                accept_result=accept_future=>{
-                let cloned_port=self.port.clone();
+                let cloned_port=self.port;
                 let cloned_config=self.shared_config.clone();
                 if let Ok((socket, peer_addr))=accept_result{
                     tokio::spawn(start_task(cloned_port,cloned_config,socket, mapping_key.clone(), peer_addr));
@@ -190,7 +189,7 @@ impl GrpcProxy {
             let accept_future = listener.accept();
             tokio::select! {
                accept_result=accept_future=>{
-                let cloned_port=self.port.clone();
+                let cloned_port=self.port;
                 let cloned_config=self.shared_config.clone();
                 if let Ok((tcp_stream, peer_addr))=accept_result{
                     if let Ok(tls_streams) = tls_acceptor.accept(tcp_stream).await {
