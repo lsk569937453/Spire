@@ -6,6 +6,7 @@ use crate::proxy::http1::http_client::HttpClients;
 use crate::vojo::anomaly_detection::AnomalyDetectionType;
 use crate::vojo::app_config::{LivenessConfig, LivenessStatus};
 use crate::vojo::app_error::AppError;
+use crate::vojo::cli::SharedConfig;
 use crate::vojo::route::BaseRoute;
 use bytes::Bytes;
 use http::uri::InvalidUri;
@@ -38,11 +39,11 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio_rustls::TlsAcceptor;
-#[derive(Debug)]
 pub struct HttpProxy {
     pub port: i32,
     pub channel: mpsc::Receiver<()>,
     pub mapping_key: String,
+    pub shared_config: SharedConfig,
 }
 
 impl HttpProxy {
@@ -61,6 +62,8 @@ impl HttpProxy {
             tokio::select! {
                Ok((stream,addr))= listener.accept()=>{
                 let client_cloned = client.clone();
+                let cloned_shared_config=self.shared_config.clone();
+                let cloned_port=self.port.clone();
                 let mapping_key2 = mapping_key_clone1.clone();
                 tokio::spawn(async move {
                     let io = TokioIo::new(stream);
@@ -74,7 +77,7 @@ impl HttpProxy {
                                 let req = req.map(|item| {
                                     item.map_err(|_| -> Infallible { unreachable!() }).boxed()
                                 });
-                                proxy_adapter(client_cloned.clone(), req, mapping_key2.clone(), addr)
+                                proxy_adapter(cloned_port,cloned_shared_config.clone(),client_cloned.clone(), req, mapping_key2.clone(), addr)
                             }),
                         )
                         .await
@@ -130,7 +133,8 @@ impl HttpProxy {
             tokio::select! {
                     Ok((tcp_stream,addr))= listener.accept()=>{
                 let tls_acceptor = tls_acceptor.clone();
-
+                let cloned_shared_config=self.shared_config.clone();
+                let cloned_port=self.port.clone();
                 let client = client.clone();
                 let mapping_key2 = mapping_key_clone1.clone();
                 tokio::spawn(async move {
@@ -146,7 +150,7 @@ impl HttpProxy {
                         let req = req
                             .map(|item| item.map_err(|_| -> Infallible { unreachable!() }).boxed());
 
-                        proxy_adapter(client.clone(), req, mapping_key2.clone(), addr)
+                        proxy_adapter(cloned_port,cloned_shared_config.clone(),client.clone(), req, mapping_key2.clone(), addr)
                     });
                     if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
                         error!("Error serving connection: {:?}", err);
@@ -164,12 +168,15 @@ impl HttpProxy {
     }
 }
 async fn proxy_adapter(
+    port: i32,
+    shared_config: SharedConfig,
     client: HttpClients,
     req: Request<BoxBody<Bytes, Infallible>>,
     mapping_key: String,
     remote_addr: SocketAddr,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, Infallible> {
-    let result = proxy_adapter_with_error(client, req, mapping_key, remote_addr).await;
+    let result =
+        proxy_adapter_with_error(port, shared_config, client, req, mapping_key, remote_addr).await;
     match result {
         Ok(res) => Ok(res),
         Err(err) => {
@@ -185,6 +192,8 @@ async fn proxy_adapter(
     }
 }
 async fn proxy_adapter_with_error(
+    port: i32,
+    shared_config: SharedConfig,
     client: HttpClients,
     req: Request<BoxBody<Bytes, Infallible>>,
     mapping_key: String,
@@ -203,6 +212,8 @@ async fn proxy_adapter_with_error(
         .map(|item| item.start_timer())
         .collect::<Vec<HistogramTimer>>();
     let res = proxy(
+        port,
+        shared_config,
         client,
         req,
         mapping_key.clone(),
@@ -262,6 +273,8 @@ async fn proxy_adapter_with_error(
 }
 
 async fn proxy(
+    port: i32,
+    shared_config: SharedConfig,
     client: HttpClients,
     mut req: Request<BoxBody<Bytes, Infallible>>,
     mapping_key: String,
@@ -273,6 +286,8 @@ async fn proxy(
     let uri = req.uri().clone();
     let check_result = check_trait
         .check_before_request(
+            shared_config.clone(),
+            port,
             mapping_key.clone(),
             inbound_headers.clone(),
             uri,
@@ -333,23 +348,6 @@ async fn proxy(
                 }
                 Err(_) => true,
             };
-            let temporary_base_route = base_route.clone();
-            let anomaly_detection_status_lock =
-                temporary_base_route.anomaly_detection_status.read().await;
-            let consecutive_5xx = anomaly_detection_status_lock.consecutive_5xx;
-            if is_5xx || consecutive_5xx > 0 {
-                if let Err(err) = trigger_anomaly_detection(
-                    anomaly_detection,
-                    route.liveness_status.clone(),
-                    base_route,
-                    is_5xx,
-                    liveness_config,
-                )
-                .await
-                {
-                    error!("{}", err);
-                }
-            }
         }
         let res = response_result?
             .map(|b| b.boxed())

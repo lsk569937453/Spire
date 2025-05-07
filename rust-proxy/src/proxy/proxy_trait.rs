@@ -1,17 +1,17 @@
-use crate::configuration_service::app_config_service::GLOBAL_CONFIG_MAPPING;
 use crate::vojo::app_config::Route;
 use crate::vojo::app_error::AppError;
 use crate::vojo::route::BaseRoute;
-use async_trait::async_trait;
+use crate::SharedConfig;
 use http::HeaderMap;
 use hyper::Uri;
 use std::net::SocketAddr;
 use std::path::Path;
 use url::Url;
-#[async_trait]
 pub trait CheckTrait {
     async fn check_before_request(
         &self,
+        shared_config: SharedConfig,
+        port: i32,
         mapping_key: String,
         headers: HeaderMap,
         uri: Uri,
@@ -31,10 +31,11 @@ pub struct CheckResult {
     pub base_route: BaseRoute,
 }
 
-#[async_trait]
 impl CheckTrait for CommonCheckRequest {
     async fn check_before_request(
         &self,
+        shared_config: SharedConfig,
+        port: i32,
         mapping_key: String,
         headers: HeaderMap,
         uri: Uri,
@@ -44,15 +45,18 @@ impl CheckTrait for CommonCheckRequest {
             .path_and_query()
             .ok_or(AppError(String::from("")))?
             .to_string();
-        let api_service_manager = GLOBAL_CONFIG_MAPPING
-            .get(&mapping_key)
-            .ok_or(AppError(format!(
-                "Can not find the config mapping on the key {}!",
-                mapping_key.clone()
-            )))?
+        let app_config = shared_config
+            .shared_data
+            .lock()
+            .map_err(|e| AppError(e.to_string()))?
             .clone();
+        let api_service = app_config
+            .api_service_config
+            .get(&port)
+            .ok_or(AppError(String::from("")))?;
+
         let addr_string = peer_addr.ip().to_string();
-        for item in api_service_manager.service_config.routes {
+        for item in api_service.service_config.routes.iter() {
             let back_path_clone = backend_path.clone();
             let match_result = item.is_matched(back_path_clone, Some(headers.clone()))?;
             if match_result.clone().is_none() {
@@ -81,7 +85,7 @@ impl CheckTrait for CommonCheckRequest {
                     .to_string();
                 return Ok(Some(CheckResult {
                     request_path,
-                    route: item,
+                    route: item.clone(),
                     base_route,
                 }));
             } else {
@@ -90,7 +94,7 @@ impl CheckTrait for CommonCheckRequest {
                 let request_path = path.join(rest_path);
                 return Ok(Some(CheckResult {
                     request_path: String::from(request_path.to_str().unwrap_or_default()),
-                    route: item,
+                    route: item.clone(),
                     base_route,
                 }));
             }

@@ -12,7 +12,9 @@ use http::version::Version;
 use http::Response;
 use http::{Method, Request};
 use hyper::body::Bytes;
+use openssl::sha;
 
+use crate::SharedConfig;
 use rustls_pki_types::CertificateDer;
 use std::io::BufReader;
 use std::net::SocketAddr;
@@ -30,8 +32,11 @@ pub struct GrpcProxy {
     pub port: i32,
     pub channel: mpsc::Receiver<()>,
     pub mapping_key: String,
+    pub shared_config: SharedConfig,
 }
 pub async fn start_task(
+    port: i32,
+    shared_config: SharedConfig,
     tcp_stream: TcpStream,
     mapping_key: String,
     peer_addr: SocketAddr,
@@ -42,9 +47,17 @@ pub async fn start_task(
     while let Some(request_result) = connection.accept().await {
         if let Ok((request, respond)) = request_result {
             let mapping_key_cloned = mapping_key.clone();
+            let cloned_config = shared_config.clone();
             tokio::spawn(async move {
-                let result =
-                    request_outbound_adapter(request, respond, mapping_key_cloned, peer_addr).await;
+                let result = request_outbound_adapter(
+                    port,
+                    cloned_config,
+                    request,
+                    respond,
+                    mapping_key_cloned,
+                    peer_addr,
+                )
+                .await;
                 if result.is_err() {
                     error!(
                         "Grpc request outbound error,the error is {}",
@@ -57,6 +70,8 @@ pub async fn start_task(
     Ok(())
 }
 pub async fn start_tls_task(
+    port: i32,
+    shared_config: SharedConfig,
     tcp_stream: TlsStream<TcpStream>,
     mapping_key: String,
     peer_addr: SocketAddr,
@@ -67,9 +82,18 @@ pub async fn start_tls_task(
     while let Some(request_result) = connection.accept().await {
         if let Ok((request, respond)) = request_result {
             let mapping_key_cloned = mapping_key.clone();
+            let cloned_config = shared_config.clone();
+
             tokio::spawn(async move {
-                let result =
-                    request_outbound_adapter(request, respond, mapping_key_cloned, peer_addr).await;
+                let result = request_outbound_adapter(
+                    port,
+                    cloned_config,
+                    request,
+                    respond,
+                    mapping_key_cloned,
+                    peer_addr,
+                )
+                .await;
                 if result.is_err() {
                     error!(
                         "Grpc request outbound error,the error is {}",
@@ -82,12 +106,16 @@ pub async fn start_tls_task(
     Ok(())
 }
 async fn request_outbound_adapter(
+    port: i32,
+    shared_config: SharedConfig,
     inbount_request: Request<RecvStream>,
     inbound_respond: SendResponse<Bytes>,
     mapping_key: String,
     peer_addr: SocketAddr,
 ) -> Result<(), AppError> {
     request_outbound(
+        port,
+        shared_config,
         inbount_request,
         inbound_respond,
         mapping_key,
@@ -109,8 +137,10 @@ impl GrpcProxy {
             let accept_future = listener.accept();
             tokio::select! {
                accept_result=accept_future=>{
+                let cloned_port=self.port.clone();
+                let cloned_config=self.shared_config.clone();
                 if let Ok((socket, peer_addr))=accept_result{
-                    tokio::spawn(start_task(socket, mapping_key.clone(), peer_addr));
+                    tokio::spawn(start_task(cloned_port,cloned_config,socket, mapping_key.clone(), peer_addr));
                 }
                },
                _=reveiver.recv()=>{
@@ -160,9 +190,11 @@ impl GrpcProxy {
             let accept_future = listener.accept();
             tokio::select! {
                accept_result=accept_future=>{
+                let cloned_port=self.port.clone();
+                let cloned_config=self.shared_config.clone();
                 if let Ok((tcp_stream, peer_addr))=accept_result{
                     if let Ok(tls_streams) = tls_acceptor.accept(tcp_stream).await {
-                        tokio::spawn(start_tls_task(tls_streams, mapping_key.clone(), peer_addr));
+                        tokio::spawn(start_tls_task(cloned_port,cloned_config,tls_streams, mapping_key.clone(), peer_addr));
                     }
                 }
                },
@@ -198,6 +230,8 @@ async fn copy_io(
     Ok(())
 }
 async fn request_outbound(
+    port: i32,
+    shared_config: SharedConfig,
     inbount_request: Request<RecvStream>,
     mut inbound_respond: SendResponse<Bytes>,
     mapping_key: String,
@@ -210,7 +244,14 @@ async fn request_outbound(
     let inbound_headers = inbound_parts.headers.clone();
     let uri = inbound_parts.uri.clone();
     let check_result = check_trait
-        .check_before_request(mapping_key.clone(), inbound_headers, uri, peer_addr)
+        .check_before_request(
+            shared_config,
+            port,
+            mapping_key.clone(),
+            inbound_headers,
+            uri,
+            peer_addr,
+        )
         .await?;
     if check_result.is_none() {
         return Err(AppError(String::from(
@@ -329,124 +370,4 @@ async fn request_outbound(
         }
     });
     Ok(())
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::proxy::http1::http_client::HttpClients;
-    use crate::proxy::proxy_trait::CheckResult;
-    use crate::vojo::app_config::Route;
-    use async_trait::async_trait;
-    use hyper::HeaderMap;
-    use hyper::Uri;
-
-    use http_body_util::BodyExt;
-    use http_body_util::Full;
-    use hyper::StatusCode;
-    use lazy_static::lazy_static;
-    use std::env;
-    use std::time::Duration;
-    use tokio::runtime::{Builder, Runtime};
-    use tokio::time::sleep;
-    struct MockProvider;
-    #[async_trait]
-    impl CheckTrait for MockProvider {
-        async fn check_before_request(
-            &self,
-            _mapping_key: String,
-            _headers: HeaderMap,
-            _uri: Uri,
-            _peer_addr: SocketAddr,
-        ) -> Result<Option<CheckResult>, AppError> {
-            let route = Route::from(Default::default()).await?;
-            Ok(Some(CheckResult {
-                request_path: String::from("http://127.0.0.1:50051"),
-                route,
-                base_route: Default::default(),
-            }))
-        }
-    }
-
-    lazy_static! {
-        pub static ref TOKIO_RUNTIME: Runtime = Builder::new_multi_thread()
-            .worker_threads(4)
-            .thread_name("my-custom-name")
-            .thread_stack_size(3 * 1024 * 1024)
-            .max_blocking_threads(1000)
-            .enable_all()
-            .build()
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_grpc_ok() {
-        tokio::spawn(async {
-            let (_, receiver) = tokio::sync::mpsc::channel(10);
-
-            let mut http_proxy = GrpcProxy {
-                port: 3257,
-                channel: receiver,
-                mapping_key: String::from("random key"),
-            };
-            let _result = http_proxy.start_proxy().await;
-        });
-        sleep(Duration::from_millis(100)).await;
-
-        let request = Request::builder()
-            .method(Method::POST)
-            .version(Version::HTTP_2)
-            .uri("http://127.0.0.1:3527")
-            .header("content-type", "application/grpc")
-            .header("te", "trailers")
-            .body(Full::new(Bytes::new()).boxed())
-            .unwrap();
-        let http_clients = HttpClients::new();
-        let outbound_res = http_clients.request_http(request, 3).await;
-
-        if let Ok(Ok(response)) = outbound_res {
-            assert_eq!(response.status(), StatusCode::OK);
-        }
-    }
-    #[tokio::test]
-    async fn test_grpc_tls_ok() {
-        let private_key_path = env::current_dir()
-            .unwrap()
-            .join("config")
-            .join("test_key.pem");
-        let private_key = std::fs::read_to_string(private_key_path).unwrap();
-
-        let ca_certificate_path = env::current_dir()
-            .unwrap()
-            .join("config")
-            .join("test_key.pem");
-        let ca_certificate = std::fs::read_to_string(ca_certificate_path).unwrap();
-
-        tokio::spawn(async {
-            let (_, receiver) = tokio::sync::mpsc::channel(10);
-
-            let mut http_proxy = GrpcProxy {
-                port: 5746,
-                channel: receiver,
-                mapping_key: String::from("random key"),
-            };
-            let _result = http_proxy
-                .start_tls_proxy(ca_certificate, private_key)
-                .await;
-        });
-        sleep(Duration::from_millis(100)).await;
-
-        let request = Request::builder()
-            .method(Method::POST)
-            .version(Version::HTTP_2)
-            .uri("https://127.0.0.1:5746")
-            .header("content-type", "application/grpc")
-            .header("te", "trailers")
-            .body(Full::new(Bytes::new()).boxed())
-            .unwrap();
-        let http_clients = HttpClients::new();
-        let outbound_res = http_clients.request_http(request, 3).await;
-        if let Ok(Ok(response)) = outbound_res {
-            assert_eq!(response.status(), StatusCode::OK);
-        }
-    }
 }

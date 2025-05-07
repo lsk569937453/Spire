@@ -23,6 +23,8 @@ mod utils;
 extern crate tracing;
 #[macro_use]
 extern crate anyhow;
+#[macro_use]
+extern crate axum;
 mod vojo;
 use crate::constants::common_constants::DEFAULT_ADMIN_PORT;
 use crate::constants::common_constants::ENV_ADMIN_PORT;
@@ -60,7 +62,7 @@ async fn start() -> Result<(), AppError> {
     let admin_port = config.static_config.admin_port;
     let shared_config = SharedConfig::from_app_config(config);
 
-    configuration_service::app_config_service::init(shared_config).await;
-    let _ = start_control_plane(admin_port).await;
+    configuration_service::app_config_service::init(shared_config.clone()).await;
+    let _ = start_control_plane(admin_port, shared_config).await;
     Ok(())
 }

@@ -1,10 +1,7 @@
 use super::allow_deny_ip::AllowResult;
-use super::app_config_vistor::ApiServiceVistor;
-use super::app_config_vistor::ServiceConfigVistor;
+
 use crate::vojo::allow_deny_ip::AllowDenyObject;
 use crate::vojo::anomaly_detection::AnomalyDetectionType;
-use crate::vojo::app_config_vistor::from_loadbalancer_strategy_vistor;
-use crate::vojo::app_config_vistor::RouteVistor;
 use crate::vojo::app_error::AppError;
 use crate::vojo::authentication::Authentication;
 use crate::vojo::health_check::HealthCheckType;
@@ -13,6 +10,7 @@ use crate::vojo::route::LoadbalancerStrategy;
 use http::HeaderMap;
 use http::HeaderValue;
 use regex::Regex;
+use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,46 +43,6 @@ pub struct Route {
     pub health_check: Option<HealthCheckType>,
     pub ratelimit: Option<Ratelimit>,
     pub route_cluster: LoadbalancerStrategy,
-}
-impl Route {
-    pub async fn from(route_vistor: RouteVistor) -> Result<Route, AppError> {
-        let cloned_cluster = route_vistor.route_cluster.clone();
-        let new_matcher = route_vistor.matcher.clone().map(|mut item| {
-            let src_prefix = item.prefix.clone();
-            if !src_prefix.ends_with('/') {
-                let src_prefix_len = item.prefix.len();
-                item.prefix.insert(src_prefix_len, '/');
-            }
-            if !src_prefix.starts_with('/') {
-                item.prefix.insert(0, '/')
-            }
-            let path_rewrite = item.prefix_rewrite.clone();
-
-            if !path_rewrite.starts_with('/') {
-                item.prefix_rewrite.insert(0, '/')
-            }
-            item
-        });
-
-        let count = cloned_cluster.get_routes_len() as i32;
-
-        Ok(Route {
-            route_id: route_vistor.route_id,
-            host_name: route_vistor.host_name,
-            matcher: new_matcher,
-            allow_deny_list: route_vistor.allow_deny_list,
-            authentication: route_vistor.authentication,
-            anomaly_detection: route_vistor.anomaly_detection,
-            liveness_status: Arc::new(RwLock::new(LivenessStatus {
-                current_liveness_count: count,
-            })),
-            rewrite_headers: route_vistor.rewrite_headers,
-            liveness_config: route_vistor.liveness_config,
-            health_check: route_vistor.health_check,
-            ratelimit: route_vistor.ratelimit,
-            route_cluster: from_loadbalancer_strategy_vistor(route_vistor.route_cluster),
-        })
-    }
 }
 
 impl Route {
@@ -197,21 +155,8 @@ pub struct ServiceConfig {
     pub key_str: Option<String>,
     pub routes: Vec<Route>,
 }
-impl ServiceConfig {
-    pub async fn from(service_config_vistor: ServiceConfigVistor) -> Result<Self, AppError> {
-        let mut routes = vec![];
-        for item in service_config_vistor.routes {
-            routes.push(Route::from(item).await?)
-        }
-        Ok(ServiceConfig {
-            server_type: service_config_vistor.server_type,
-            cert_str: service_config_vistor.cert_str,
-            key_str: service_config_vistor.key_str,
-            routes,
-        })
-    }
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ApiService {
     pub listen_port: i32,
     pub api_service_id: String,
@@ -219,16 +164,50 @@ pub struct ApiService {
     #[serde(skip_deserializing, skip_serializing)]
     pub sender: mpsc::Sender<()>,
 }
-impl ApiService {
-    pub async fn from(api_service_vistor: ApiServiceVistor) -> Result<Self, AppError> {
-        let api_service_config = ServiceConfig::from(api_service_vistor.service_config).await?;
+impl<'de> Deserialize<'de> for ApiService {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ApiServiceWithoutSender {
+            listen_port: i32,
+            api_service_id: String,
+            service_config: ServiceConfig,
+        }
+
+        let api_service_without_sender = ApiServiceWithoutSender::deserialize(deserializer)?;
+        let (sender, _) = mpsc::channel(1); // Create a new channel for the deserialized instance
+
         Ok(ApiService {
-            listen_port: api_service_vistor.listen_port,
-            api_service_id: api_service_vistor.api_service_id,
-            service_config: api_service_config,
+            listen_port: api_service_without_sender.listen_port,
+            api_service_id: api_service_without_sender.api_service_id,
+            service_config: api_service_without_sender.service_config,
+            sender,
         })
     }
 }
+impl PartialEq for ApiService {
+    fn eq(&self, other: &Self) -> bool {
+        self.listen_port == other.listen_port
+            && self.api_service_id == other.api_service_id
+            && self.service_config == other.service_config
+        // sender 被显式跳过
+    }
+}
+impl Default for ApiService {
+    fn default() -> Self {
+        let (sender, _) = mpsc::channel(1); // Buffer size 1
+
+        Self {
+            listen_port: Default::default(),
+            api_service_id: Default::default(),
+            service_config: Default::default(),
+            sender,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct StaticConifg {
     pub access_log: Option<String>,
@@ -239,5 +218,5 @@ pub struct StaticConifg {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     pub static_config: StaticConifg,
-    pub api_service_config: Vec<ApiService>,
+    pub api_service_config: HashMap<i32, ApiService>,
 }

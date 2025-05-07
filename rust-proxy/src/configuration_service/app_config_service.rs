@@ -9,10 +9,8 @@ use crate::health_check::health_check_task::HealthCheck;
 use crate::proxy::http1::http_proxy::HttpProxy;
 use crate::proxy::http2::grpc_proxy::GrpcProxy;
 use crate::proxy::tcp::tcp_proxy::TcpProxy;
-use crate::vojo::api_service_manager::ApiServiceManager;
 use crate::vojo::app_config::ServiceConfig;
 use crate::vojo::app_config::{ApiService, AppConfig, ServiceType};
-use crate::vojo::app_config_vistor::ApiServiceVistor;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
 use dashmap::DashMap;
@@ -25,24 +23,48 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 
-pub async fn init(shared_config: SharedConfig) ->Result<(),AppError>{
+pub async fn init(shared_config: SharedConfig) -> Result<(), AppError> {
     tokio::task::spawn(async {
         let mut health_check = HealthCheck::new();
         health_check.start_health_check_loop().await;
     });
-    let app_config=shared_config.shared_data.lock()?;
-    for item in app_config.
+    let mut app_config = shared_config
+        .shared_data
+        .lock()
+        .map_err(|e| AppError(e.to_string()))?
+        .clone();
+    for (_, item) in app_config.api_service_config.iter_mut() {
+        let mut api_service = item.clone();
+        let port = api_service.listen_port;
+        let server_type = api_service.service_config.server_type;
+        let mapping_key = format!("{}-{}", port, server_type);
+        let (sender, receiver) = mpsc::channel::<()>(1000);
+        api_service.sender = sender;
+
+        start_proxy(
+            shared_config.clone(),
+            port,
+            receiver,
+            server_type,
+            mapping_key,
+            item.clone(),
+        )
+        .await?;
+    }
     Ok(())
 }
 
 pub async fn start_proxy(
+    shared_config: SharedConfig,
     port: i32,
     channel: mpsc::Receiver<()>,
     server_type: ServiceType,
     mapping_key: String,
+    apiservice: ApiService,
 ) -> Result<(), AppError> {
     if server_type == ServiceType::Http {
         let mut http_proxy = HttpProxy {
+            shared_config,
             port,
             channel,
             mapping_key: mapping_key.clone(),
@@ -50,14 +72,15 @@ pub async fn start_proxy(
         http_proxy.start_http_server().await
     } else if server_type == ServiceType::Https {
         let key_clone = mapping_key.clone();
-        let service_config = GLOBAL_CONFIG_MAPPING
-            .get(&key_clone)
-            .unwrap()
-            .service_config
-            .clone();
-        let pem_str = service_config.cert_str.unwrap();
-        let key_str = service_config.key_str.unwrap();
+        let service_config = apiservice.service_config;
+        let pem_str = service_config
+            .cert_str
+            .ok_or(AppError("Pem is null.".to_string()))?;
+        let key_str = service_config
+            .key_str
+            .ok_or(AppError("Pem is null.".to_string()))?;
         let mut http_proxy = HttpProxy {
+            shared_config,
             port,
             channel,
             mapping_key: mapping_key.clone(),
@@ -65,6 +88,7 @@ pub async fn start_proxy(
         http_proxy.start_https_server(pem_str, key_str).await
     } else if server_type == ServiceType::Tcp {
         let mut tcp_proxy = TcpProxy {
+            shared_config,
             port,
             mapping_key,
             channel,
@@ -72,6 +96,7 @@ pub async fn start_proxy(
         tcp_proxy.start_proxy().await
     } else if server_type == ServiceType::Http2 {
         let mut grpc_proxy = GrpcProxy {
+            shared_config,
             port,
             mapping_key,
             channel,
@@ -79,14 +104,11 @@ pub async fn start_proxy(
         grpc_proxy.start_proxy().await
     } else {
         let key_clone = mapping_key.clone();
-        let service_config = GLOBAL_CONFIG_MAPPING
-            .get(&key_clone)
-            .unwrap()
-            .service_config
-            .clone();
+        let service_config = apiservice.service_config;
         let pem_str = service_config.cert_str.unwrap();
         let key_str = service_config.key_str.unwrap();
         let mut grpc_proxy = GrpcProxy {
+            shared_config,
             port,
             mapping_key,
             channel,

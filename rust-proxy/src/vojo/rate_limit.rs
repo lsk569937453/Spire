@@ -174,46 +174,6 @@ impl TokenBucketRateLimit {
         headers: HeaderMap<HeaderValue>,
         remote_ip: String,
     ) -> Result<bool, AppError> {
-        let match_or_not = matched(self.limit_location.clone(), headers, remote_ip)?;
-        if !match_or_not {
-            return Ok(false);
-        }
-        let read_lock = self.current_count;
-        let current_value = read_lock.fetch_sub(1, Ordering::SeqCst);
-        if current_value <= 0 {
-            let elapsed = self
-                .last_update_time
-                .read()
-                .await
-                .elapsed()
-                .map_err(|err| AppError(err.to_string()))?;
-            let elapsed_millis = elapsed.as_millis();
-            let mut added_count =
-                elapsed_millis * self.rate_per_unit / self.unit.get_million_second();
-
-            if added_count == 0 {
-                return Ok(true);
-            }
-            drop(read_lock);
-            let mut write_lock = self.current_count.write().await;
-            if (write_lock.load(Ordering::SeqCst) as i32) < 0 {
-                if added_count > (self.capacity as u128) {
-                    added_count = self.capacity as u128;
-                }
-                *write_lock = AtomicIsize::new(added_count as isize);
-                let mut write_timestamp = self.last_update_time.write().await;
-                *write_timestamp = SystemTime::now();
-            }
-            drop(write_lock);
-            let current_value = self
-                .current_count
-                .read()
-                .await
-                .fetch_sub(1, Ordering::SeqCst);
-            if current_value <= 0 {
-                return Ok(true);
-            }
-        }
         Ok(false)
     }
     fn as_any(&self) -> &dyn Any {
@@ -235,36 +195,6 @@ impl FixedWindowRateLimit {
         headers: HeaderMap<HeaderValue>,
         remote_ip: String,
     ) -> Result<bool, AppError> {
-        let match_or_not = matched(self.limit_location.clone(), headers, remote_ip)?;
-        if !match_or_not {
-            return Ok(false);
-        }
-        let time_unit_key = get_time_key(self.unit.clone())?;
-        let location_key = self.limit_location.get_key();
-        let key = format!("{}:{}", location_key, time_unit_key);
-        if !self.count_map.contains_key(key.as_str()) {
-            let _lock = self.lock.lock().map_err(|err| AppError(err.to_string()))?;
-            if !self.count_map.contains_key(key.as_str()) {
-                if self.count_map.len() > DEFAULT_FIXEDWINDOW_MAP_SIZE as usize {
-                    let first = self.count_map.iter().next().unwrap();
-                    let first_key = first.key().clone();
-                    drop(first);
-                    self.count_map.remove(first_key.as_str());
-                }
-                self.count_map
-                    .insert(key.clone(), Arc::new(AtomicIsize::new(0)));
-            }
-        }
-        let atomic_isize = self
-            .count_map
-            .get(key.as_str())
-            .ok_or(AppError(String::from(
-                "Can not find the key in the map of FixedWindowRateLimit!",
-            )))?;
-        let res = atomic_isize.fetch_add(1, Ordering::SeqCst);
-        if res as i32 >= self.rate_per_unit as i32 {
-            return Ok(true);
-        }
         Ok(false)
     }
     fn as_any(&self) -> &dyn Any {
