@@ -40,7 +40,11 @@ fn main() -> Result<(), anyhow::Error> {
         .build()
         .unwrap();
 
-    rt.block_on(async { start().await });
+    rt.block_on(async {
+        if let Err(e) = start().await {
+            error!("start error: {:?}", e);
+        }
+    });
     Ok(())
 }
 async fn start() -> Result<(), AppError> {
@@ -58,7 +62,7 @@ async fn start() -> Result<(), AppError> {
     let admin_port = config.static_config.admin_port;
     let shared_config = SharedConfig::from_app_config(config);
 
-    configuration_service::app_config_service::init(shared_config.clone()).await;
-    let _ = start_control_plane(admin_port, shared_config).await;
+    configuration_service::app_config_service::init(shared_config.clone()).await?;
+    start_control_plane(admin_port, shared_config).await?;
     Ok(())
 }

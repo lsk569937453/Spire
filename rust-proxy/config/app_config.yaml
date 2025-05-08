@@ -1,32 +1,33 @@
-- listen_port: 4486
-  service_config:
-    server_type: Http
-    routes:
-      - matcher:
-          prefix: /
-          prefix_rewrite: /
-        route_cluster:
-          type: RandomRoute
-          routes:
-            - base_route:
-                endpoint: http://localhost:7777/
-                try_file: null
-- listen_port: 9969
-  service_config:
-    server_type: Http
-    routes:
-      - matcher:
-          prefix: /
-          prefix_rewrite: /
-        route_cluster:
-          type: RandomRoute
-          routes:
-            - base_route:
-                endpoint: http://localhost:8888/
-                try_file: null
-            - base_route:
-                endpoint: http://localhost:9999/
-                try_file: null
-            - base_route:
-                endpoint: http://localhost:7777/
-                try_file: null
+services:
+  - listen_port: 4486
+    service_config:
+      server_type: Http
+      routes:
+        - matcher:
+            prefix: /
+            prefix_rewrite: /
+          route_cluster:
+            type: randomRoute
+            routes:
+              - base_route:
+                  endpoint: http://localhost:7777/
+                  try_file: null
+  - listen_port: 9969
+    service_config:
+      server_type: Http
+      routes:
+        - matcher:
+            prefix: /
+            prefix_rewrite: /
+          route_cluster:
+            type: randomRoute
+            routes:
+              - base_route:
+                  endpoint: http://localhost:8888/
+                  try_file: null
+              - base_route:
+                  endpoint: http://localhost:9999/
+                  try_file: null
+              - base_route:
+                  endpoint: http://localhost:7777/
+                  try_file: null

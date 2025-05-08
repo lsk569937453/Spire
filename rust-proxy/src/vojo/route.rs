@@ -12,9 +12,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum LoadbalancerStrategy {
     PollRoute(PollRoute),
     HeaderBased(HeaderBasedRoute),
+    #[serde(rename = "randomRoute")]
     Random(RandomRoute),
     WeightBased(WeightBasedRoute),
 }

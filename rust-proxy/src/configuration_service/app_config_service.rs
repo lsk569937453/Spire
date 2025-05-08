@@ -2,10 +2,10 @@ use crate::health_check::health_check_task::HealthCheck;
 use crate::proxy::http1::http_proxy::HttpProxy;
 use crate::proxy::http2::grpc_proxy::GrpcProxy;
 use crate::proxy::tcp::tcp_proxy::TcpProxy;
-use crate::vojo::app_config::{ApiService, ServiceType};
+use crate::vojo::app_config::ServiceConfig;
+use crate::vojo::app_config::ServiceType;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
-
 use tokio::sync::mpsc;
 
 pub async fn init(shared_config: SharedConfig) -> Result<(), AppError> {
@@ -17,25 +17,29 @@ pub async fn init(shared_config: SharedConfig) -> Result<(), AppError> {
     let mut app_config = shared_config
         .shared_data
         .lock()
-        .map_err(|e| AppError(e.to_string()))?
-        .clone();
+        .map_err(|e| AppError(e.to_string()))?;
     for (_, item) in app_config.api_service_config.iter_mut() {
-        let mut api_service = item.clone();
-        let port = api_service.listen_port;
-        let server_type = api_service.service_config.server_type;
+        let port = item.listen_port;
+        let server_type = item.service_config.server_type.clone();
         let mapping_key = format!("{}-{}", port, server_type);
         let (sender, receiver) = mpsc::channel::<()>(1000);
-        api_service.sender = sender;
-
-        start_proxy(
-            shared_config.clone(),
-            port,
-            receiver,
-            server_type,
-            mapping_key,
-            item.clone(),
-        )
-        .await?;
+        item.sender = sender;
+        let cloned_config = shared_config.clone();
+        let service_config = item.service_config.clone();
+        tokio::task::spawn(async move {
+            if let Err(err) = start_proxy(
+                cloned_config,
+                port,
+                receiver,
+                server_type,
+                mapping_key,
+                service_config,
+            )
+            .await
+            {
+                error!("{}", err);
+            }
+        });
     }
     Ok(())
 }
@@ -46,7 +50,7 @@ pub async fn start_proxy(
     channel: mpsc::Receiver<()>,
     server_type: ServiceType,
     mapping_key: String,
-    apiservice: ApiService,
+    service_config: ServiceConfig,
 ) -> Result<(), AppError> {
     if server_type == ServiceType::Http {
         let mut http_proxy = HttpProxy {
@@ -58,7 +62,6 @@ pub async fn start_proxy(
         http_proxy.start_http_server().await
     } else if server_type == ServiceType::Https {
         let key_clone = mapping_key.clone();
-        let service_config = apiservice.service_config;
         let pem_str = service_config
             .cert_str
             .ok_or(AppError("Pem is null.".to_string()))?;
@@ -90,7 +93,6 @@ pub async fn start_proxy(
         grpc_proxy.start_proxy().await
     } else {
         let key_clone = mapping_key.clone();
-        let service_config = apiservice.service_config;
         let pem_str = service_config.cert_str.unwrap();
         let key_str = service_config.key_str.unwrap();
         let mut grpc_proxy = GrpcProxy {

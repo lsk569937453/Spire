@@ -274,7 +274,7 @@ pub fn get_router(shared_config: SharedConfig) -> Router {
     axum::Router::new()
         .route("/appConfig", get(get_app_config).post(post_app_config))
         .route("/metrics", get(get_prometheus_metrics))
-        .route("/route/:id", delete(delete_route))
+        .route("/route/id", delete(delete_route))
         .route("/letsEncryptCertificate", post(lets_encrypt_certificate))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())

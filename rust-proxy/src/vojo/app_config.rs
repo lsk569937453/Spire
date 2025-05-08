@@ -29,12 +29,14 @@ pub struct LivenessStatus {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Route {
+    #[serde(skip_deserializing, skip_serializing)]
     pub route_id: String,
     pub host_name: Option<String>,
     pub matcher: Option<Matcher>,
     pub allow_deny_list: Option<Vec<AllowDenyObject>>,
     pub authentication: Option<Authentication>,
     pub anomaly_detection: Option<AnomalyDetectionType>,
+    #[serde(skip_deserializing, skip_serializing)]
     pub liveness_status: LivenessStatus,
     pub rewrite_headers: Option<HashMap<String, String>>,
     pub liveness_config: Option<LivenessConfig>,
@@ -157,6 +159,7 @@ pub struct ServiceConfig {
 #[derive(Debug, Clone, Serialize)]
 pub struct ApiService {
     pub listen_port: i32,
+    #[serde(skip_deserializing, skip_serializing)]
     pub api_service_id: String,
     pub service_config: ServiceConfig,
     #[serde(skip_deserializing, skip_serializing)]
@@ -170,7 +173,6 @@ impl<'de> Deserialize<'de> for ApiService {
         #[derive(Deserialize)]
         struct ApiServiceWithoutSender {
             listen_port: i32,
-            api_service_id: String,
             service_config: ServiceConfig,
         }
 
@@ -179,7 +181,7 @@ impl<'de> Deserialize<'de> for ApiService {
 
         Ok(ApiService {
             listen_port: api_service_without_sender.listen_port,
-            api_service_id: api_service_without_sender.api_service_id,
+            api_service_id: Default::default(),
             service_config: api_service_without_sender.service_config,
             sender,
         })
@@ -206,15 +208,101 @@ impl Default for ApiService {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StaticConifg {
     pub access_log: Option<String>,
     pub database_url: Option<String>,
     pub admin_port: i32,
     pub config_file_path: Option<String>,
 }
+impl Default for StaticConifg {
+    fn default() -> Self {
+        Self {
+            access_log: Some("vojo.log".to_string()),
+            database_url: Some("sqlite://vojo.db".to_string()),
+            admin_port: 8080,
+            config_file_path: Some("vojo_config.yaml".to_string()),
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AppConfig {
+    #[serde(default)]
     pub static_config: StaticConifg,
+    #[serde(rename = "services", deserialize_with = "deserialize_service_config")]
     pub api_service_config: HashMap<i32, ApiService>,
+}
+fn deserialize_service_config<'de, D>(deserializer: D) -> Result<HashMap<i32, ApiService>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let services: Vec<ApiService> = Deserialize::deserialize(deserializer)?;
+
+    let mut hashmap = HashMap::new();
+    for item in services {
+        hashmap.insert(item.listen_port, item);
+    }
+    Ok(hashmap)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_config_serialize() {
+        // 创建测试用的AppConfig实例
+        let mut app_config = AppConfig::default();
+        let mut api_service = ApiService::default();
+        api_service.listen_port = 8080;
+        api_service.api_service_id = "test_service".to_string();
+        app_config.api_service_config.insert(8080, api_service);
+
+        // 序列化为YAML
+        let yaml_str = serde_yaml::to_string(&app_config).unwrap();
+        println!("{}", yaml_str);
+
+        // 反序列化YAML
+        let deserialized_config: AppConfig = serde_yaml::from_str(&yaml_str).unwrap();
+
+        // 验证序列化和反序列化结果是否一致
+        assert_eq!(app_config, deserialized_config);
+        assert_eq!(
+            deserialized_config
+                .api_service_config
+                .get(&8080)
+                .unwrap()
+                .listen_port,
+            8080
+        );
+        assert_eq!(
+            deserialized_config
+                .api_service_config
+                .get(&8080)
+                .unwrap()
+                .api_service_id,
+            "test_service"
+        );
+    }
+
+    #[test]
+    fn test_app_config_serialize_with_static_config() {
+        // 创建包含静态配置的AppConfig实例
+        let mut app_config = AppConfig::default();
+        app_config.static_config.admin_port = 9090;
+        app_config.static_config.access_log = Some("/var/log/proxy.log".to_string());
+
+        // 序列化为JSON
+        let json_str = serde_json::to_string(&app_config).unwrap();
+
+        // 反序列化JSON
+        let deserialized_config: AppConfig = serde_json::from_str(&json_str).unwrap();
+
+        // 验证静态配置是否正确序列化和反序列化
+        assert_eq!(app_config, deserialized_config);
+        assert_eq!(deserialized_config.static_config.admin_port, 9090);
+        assert_eq!(
+            deserialized_config.static_config.access_log,
+            Some("/var/log/proxy.log".to_string())
+        );
+    }
 }
