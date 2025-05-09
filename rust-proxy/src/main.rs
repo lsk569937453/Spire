@@ -18,10 +18,9 @@ use crate::constants::common_constants::DEFAULT_ADMIN_PORT;
 use crate::vojo::app_config::AppConfig;
 mod monitor;
 mod proxy;
-use tracing::Level;
 use tracing_subscriber::filter;
-use tracing_subscriber::filter::FilterFn;
 mod utils;
+use tracing_subscriber::filter::LevelFilter;
 #[macro_use]
 extern crate tracing;
 #[macro_use]
@@ -65,18 +64,10 @@ async fn start() -> Result<(), AppError> {
         serde_yaml::from_str(&config_str).map_err(|e| AppError(e.to_string()))?;
     info!("config is {:?}", config);
     println!("config is {:?}", config);
-    let _ = reload_handle.modify(|filter: &mut FilterFn<impl Fn(&Metadata<'_>) -> bool>| {
-        let a: FilterFn<impl Fn(&Metadata<'_>) -> bool> = filter::filter_fn(|metadata| {
-            if metadata.target().starts_with("delay_timer::entity") {
-                return false;
-            }
-
-            if metadata.level() > &Level::INFO {
-                return false;
-            }
-            true
-        });
-        *filter = a;
+    let _ = reload_handle.modify(|filter| {
+        *filter = filter::Targets::new()
+            .with_target("delay_timer", LevelFilter::OFF)
+            .with_default(LevelFilter::INFO)
     });
 
     let admin_port = config
