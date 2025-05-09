@@ -2,10 +2,8 @@ use chrono::DateTime;
 use chrono::Local;
 
 use tracing::level_filters::LevelFilter;
-use tracing::Level;
-use tracing::Metadata;
 use tracing_appender::rolling;
-use tracing_subscriber::filter::FilterFn;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
@@ -28,19 +26,11 @@ impl FormatTime for LocalTime {
 pub fn setup_logger() -> Result<Handle<Targets, Registry>, AppError> {
     let (file_layer, reload_handle) = setup_logger_with_path(Path::new("./logs"))?;
 
-pub fn setup_logger(
-) -> Result<Handle<FilterFn<impl Fn(&Metadata<'_>) -> bool>, Registry>, anyhow::Error> {
+pub fn setup_logger() -> Result<Handle<Targets, Registry>, anyhow::Error> {
     let app_file = rolling::daily("./logs", "spire.log");
-    let filter = filter::filter_fn(|metadata| {
-        if metadata.target().starts_with("delay_timer::entity") {
-            return false;
-        }
-
-        if metadata.level() > &Level::INFO {
-            return false;
-        }
-        true
-    });
+    let filter = filter::Targets::new()
+        .with_target("delay_timer", LevelFilter::OFF)
+        .with_default(LevelFilter::INFO);
     let (filter, reload_handle) = reload::Layer::new(filter);
 
     let file_layer = tracing_subscriber::fmt::Layer::new()
