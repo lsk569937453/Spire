@@ -1,5 +1,7 @@
 use super::allow_deny_ip::AllowResult;
 
+use crate::constants::common_constants::DEFAULT_ADMIN_PORT;
+use crate::constants::common_constants::DEFAULT_LOG_LEVEL;
 use crate::vojo::allow_deny_ip::AllowDenyObject;
 use crate::vojo::anomaly_detection::AnomalyDetectionType;
 use crate::vojo::app_error::AppError;
@@ -14,6 +16,53 @@ use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
+use tracing_subscriber::filter::LevelFilter;
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AppConfig {
+    #[serde(
+        deserialize_with = "deserialize_static_config",
+        skip_serializing,
+        default
+    )]
+    pub static_config: StaticConifg,
+    #[serde(rename = "services", deserialize_with = "deserialize_service_config")]
+    pub api_service_config: HashMap<i32, ApiService>,
+}
+fn deserialize_static_config<'de, D>(deserializer: D) -> Result<StaticConifg, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    info!("deserialize_static_config");
+    let mut static_config = StaticConifg::deserialize(deserializer)?;
+    if static_config.access_log.is_none() {
+        static_config.access_log = Some("".to_string());
+    }
+    if static_config.database_url.is_none() {
+        static_config.database_url = Some("".to_string());
+    }
+    if static_config.admin_port.is_none() {
+        static_config.admin_port = Some(DEFAULT_ADMIN_PORT);
+    }
+    if static_config.config_file_path.is_none() {
+        static_config.config_file_path = Some("".to_string());
+    }
+    if static_config.log_level.is_none() {
+        static_config.log_level = Some(DEFAULT_LOG_LEVEL);
+    }
+    Ok(static_config)
+}
+fn deserialize_service_config<'de, D>(deserializer: D) -> Result<HashMap<i32, ApiService>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let services: Vec<ApiService> = Deserialize::deserialize(deserializer)?;
+
+    let mut hashmap = HashMap::new();
+    for item in services {
+        hashmap.insert(item.listen_port, item);
+    }
+    Ok(hashmap)
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Matcher {
     pub prefix: String,
@@ -212,38 +261,44 @@ impl Default for ApiService {
 pub struct StaticConifg {
     pub access_log: Option<String>,
     pub database_url: Option<String>,
-    pub admin_port: i32,
+    pub admin_port: Option<i32>,
     pub config_file_path: Option<String>,
+    pub log_level: Option<LogLevel>,
 }
 impl Default for StaticConifg {
     fn default() -> Self {
         Self {
-            access_log: Some("vojo.log".to_string()),
-            database_url: Some("sqlite://vojo.db".to_string()),
-            admin_port: 8080,
-            config_file_path: Some("vojo_config.yaml".to_string()),
+            access_log: Some("".to_string()),
+            database_url: Some("".to_string()),
+            admin_port: Some(DEFAULT_ADMIN_PORT),
+            config_file_path: Some("".to_string()),
+            log_level: Some(DEFAULT_LOG_LEVEL),
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct AppConfig {
-    #[serde(default)]
-    pub static_config: StaticConifg,
-    #[serde(rename = "services", deserialize_with = "deserialize_service_config")]
-    pub api_service_config: HashMap<i32, ApiService>,
-}
-fn deserialize_service_config<'de, D>(deserializer: D) -> Result<HashMap<i32, ApiService>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let services: Vec<ApiService> = Deserialize::deserialize(deserializer)?;
-
-    let mut hashmap = HashMap::new();
-    for item in services {
-        hashmap.insert(item.listen_port, item);
+impl StaticConifg {
+    pub fn get_log_level(&self) -> LevelFilter {
+        match self.log_level {
+            Some(LogLevel::Debug) => LevelFilter::DEBUG,
+            Some(LogLevel::Info) => LevelFilter::INFO,
+            Some(LogLevel::Error) => LevelFilter::ERROR,
+            Some(LogLevel::Warn) => LevelFilter::WARN,
+            None => LevelFilter::INFO,
+        }
     }
-    Ok(hashmap)
 }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum LogLevel {
+    #[serde(rename = "debug")]
+    Debug,
+    #[serde(rename = "info")]
+    Info,
+    #[serde(rename = "error")]
+    Error,
+    #[serde(rename = "warn")]
+    Warn,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,8 +343,14 @@ mod tests {
     fn test_app_config_serialize_with_static_config() {
         // 创建包含静态配置的AppConfig实例
         let mut app_config = AppConfig::default();
-        app_config.static_config.admin_port = 9090;
-        app_config.static_config.access_log = Some("/var/log/proxy.log".to_string());
+        let static_config = StaticConifg {
+            access_log: Some("/var/log/proxy.log".to_string()),
+            admin_port: Some(9090),
+            ..Default::default()
+        };
+        app_config.static_config = static_config;
+        let mut api_service = ApiService::default();
+        api_service.listen_port = 8080;
 
         // 序列化为JSON
         let json_str = serde_json::to_string(&app_config).unwrap();
@@ -299,7 +360,7 @@ mod tests {
 
         // 验证静态配置是否正确序列化和反序列化
         assert_eq!(app_config, deserialized_config);
-        assert_eq!(deserialized_config.static_config.admin_port, 9090);
+        assert_eq!(deserialized_config.static_config.admin_port, Some(9090));
         assert_eq!(
             deserialized_config.static_config.access_log,
             Some("/var/log/proxy.log".to_string())

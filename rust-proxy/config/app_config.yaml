@@ -1,3 +1,5 @@
+static_config:
+  log_level: debug
 services:
   - listen_port: 4486
     service_config:
