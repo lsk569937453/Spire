@@ -26,8 +26,8 @@ impl FormatTime for LocalTime {
 pub fn setup_logger() -> Result<Handle<Targets, Registry>, anyhow::Error> {
     let app_file = rolling::daily("./logs", "spire.log");
     let filter = filter::Targets::new()
-        .with_target("delay_timer", LevelFilter::OFF)
-        .with_default(LevelFilter::INFO);
+    .with_targets(vec![("delay_timer", LevelFilter::OFF), ("hyper_util", LevelFilter::OFF)])
+    .with_default(LevelFilter::INFO);
     let (filter, reload_handle) = reload::Layer::new(filter);
 
     let file_layer = tracing_subscriber::fmt::Layer::new()

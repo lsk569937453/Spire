@@ -26,18 +26,18 @@ impl Default for LoadbalancerStrategy {
     }
 }
 impl LoadbalancerStrategy {
-    pub async fn get_route(
+    pub  fn get_route(
         &mut self,
         headers: HeaderMap<HeaderValue>,
     ) -> Result<BaseRoute, AppError> {
         match self {
-            LoadbalancerStrategy::PollRoute(poll_route) => poll_route.get_route(headers).await,
+            LoadbalancerStrategy::PollRoute(poll_route) => poll_route.get_route(headers),
 
-            LoadbalancerStrategy::HeaderBased(poll_route) => poll_route.get_route(headers).await,
+            LoadbalancerStrategy::HeaderBased(poll_route) => poll_route.get_route(headers),
 
-            LoadbalancerStrategy::Random(poll_route) => poll_route.get_route(headers).await,
+            LoadbalancerStrategy::Random(poll_route) => poll_route.get_route(headers),
 
-            LoadbalancerStrategy::WeightBased(poll_route) => poll_route.get_route(headers).await,
+            LoadbalancerStrategy::WeightBased(poll_route) => poll_route.get_route(headers),
         }
     }
     pub async fn get_all_route(&mut self) -> Result<Vec<BaseRoute>, AppError> {
@@ -165,7 +165,7 @@ impl HeaderBasedRoute {
             .collect::<Vec<BaseRoute>>())
     }
 
-    async fn get_route(&mut self, headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
+     fn get_route(&mut self, headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         Ok(BaseRoute::default())
     }
 }
@@ -187,8 +187,11 @@ impl RandomRoute {
             .collect::<Vec<BaseRoute>>())
     }
 
-    async fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-        Ok(BaseRoute::default())
+     fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
+
+        let mut rng = rand::thread_rng();
+        let random_index = rng.gen_range(0..self.routes.len());
+        Ok(self.routes[random_index].base_route.clone())
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -198,6 +201,7 @@ pub struct PollBaseRoute {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct PollRoute {
+    #[serde(skip_deserializing,skip_serializing)]
     pub current_index: i128,
     pub routes: Vec<PollBaseRoute>,
 }
@@ -212,8 +216,14 @@ impl PollRoute {
             .collect::<Vec<BaseRoute>>())
     }
 
-    async fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-        Ok(BaseRoute::default())
+     fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
+        self.current_index += 1;
+        if self.current_index >= self.routes.len() as i128 {
+            self.current_index = 0;
+        }
+        info!("current_index:{}", self.current_index);
+        let route = self.routes[self.current_index as usize].base_route.clone();
+        Ok(route)
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -226,7 +236,7 @@ impl WeightBasedRoute {
         Ok(vec![])
     }
 
-    async fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
+     fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         Err(AppError(String::from("WeightRoute get route error")))
     }
 }

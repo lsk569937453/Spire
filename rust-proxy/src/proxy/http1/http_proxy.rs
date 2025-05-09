@@ -254,8 +254,7 @@ async fn proxy_adapter_with_error(
             .to_bytes();
         let response_str =
             String::from_utf8(response_bytes.to_vec()).map_err(|e| AppError(e.to_string()))?;
-        debug!(target: "app",
-           "{}$${}$${}$${}$${}$${}$${}$${:?}",
+        debug!("{}$${}$${}$${}$${}$${}$${}$${:?}",
            remote_addr,
            elapsed_time,
            status,

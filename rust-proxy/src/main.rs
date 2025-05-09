@@ -66,8 +66,8 @@ async fn start() -> Result<(), AppError> {
     println!("config is {:?}", config);
     let _ = reload_handle.modify(|filter| {
         *filter = filter::Targets::new()
-            .with_target("delay_timer", LevelFilter::OFF)
-            .with_default(LevelFilter::INFO)
+            .with_targets(vec![("delay_timer", LevelFilter::OFF), ("hyper_util", LevelFilter::OFF)])
+            .with_default(config.static_config.get_log_level())
     });
 
     let admin_port = config

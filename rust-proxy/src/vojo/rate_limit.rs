@@ -21,14 +21,14 @@ pub enum Ratelimit {
     FixedWindow(FixedWindowRateLimit),
 }
 impl Ratelimit {
-    pub async fn should_limit(
+    pub  fn should_limit(
         &mut self,
         headers: HeaderMap<HeaderValue>,
         remote_ip: String,
     ) -> Result<bool, AppError> {
         match self {
-            Ratelimit::TokenBucket(tb) => tb.should_limit(headers, remote_ip).await,
-            Ratelimit::FixedWindow(fw) => fw.should_limit(headers, remote_ip).await,
+            Ratelimit::TokenBucket(tb) => tb.should_limit(headers, remote_ip),
+            Ratelimit::FixedWindow(fw) => fw.should_limit(headers, remote_ip),
         }
     }
 }
@@ -163,7 +163,7 @@ fn matched(
 }
 
 impl TokenBucketRateLimit {
-    async fn should_limit(
+     fn should_limit(
         &mut self,
         headers: HeaderMap<HeaderValue>,
         remote_ip: String,
@@ -184,7 +184,7 @@ pub struct FixedWindowRateLimit {
     pub count_map: HashMap<String, i32>,
 }
 impl FixedWindowRateLimit {
-    async fn should_limit(
+     fn should_limit(
         &mut self,
         headers: HeaderMap<HeaderValue>,
         remote_ip: String,

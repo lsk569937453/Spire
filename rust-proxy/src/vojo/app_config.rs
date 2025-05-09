@@ -133,7 +133,7 @@ impl Route {
         }
         Ok(Some(final_path))
     }
-    pub async fn is_allowed(
+    pub  fn is_allowed(
         &self,
         ip: String,
         headers_option: Option<HeaderMap<HeaderValue>>,
@@ -153,7 +153,7 @@ impl Route {
         if let (Some(header_map), Some(mut ratelimit_strategy)) =
             (headers_option, self.ratelimit.clone())
         {
-            is_allowed = !ratelimit_strategy.should_limit(header_map, ip).await?;
+            is_allowed = !ratelimit_strategy.should_limit(header_map, ip)?;
         }
         Ok(is_allowed)
     }

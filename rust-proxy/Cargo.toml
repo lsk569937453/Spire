@@ -71,7 +71,6 @@ lazy_static = "1.4.0"
 log = "0.4.20"
 log4rs = "1.2.0"
 num_cpus = "1.0"
-openssl = { version = "0.10.57", features = ["vendored"] }
 pkcs8 = { version = "0.7", features = ["encryption", "pem", "std"] }
 prometheus = "0.13.3"
 rand = "0.8.5"

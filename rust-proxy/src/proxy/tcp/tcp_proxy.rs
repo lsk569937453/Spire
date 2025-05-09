@@ -99,7 +99,7 @@ async fn check(
     let is_allowed = route
         .clone()
         .is_allowed(remote_addr.ip().to_string(), None)
-        .await?;
+        ?;
     Ok(is_allowed)
 }
 async fn get_route_cluster(
@@ -121,5 +121,5 @@ async fn get_route_cluster(
         return Err(AppError(String::from("The len of routes is 0")));
     }
     let mut route = service_config_clone.first().unwrap().route_cluster.clone();
-    route.get_route(HeaderMap::new()).await.map(|s| s.endpoint)
+    route.get_route(HeaderMap::new()).map(|s| s.endpoint)
 }

@@ -45,34 +45,35 @@ impl CheckTrait for CommonCheckRequest {
             .path_and_query()
             .ok_or(AppError(String::from("")))?
             .to_string();
-        let app_config = shared_config
+        let mut app_config = shared_config
             .shared_data
             .lock()
             .map_err(|e| AppError(e.to_string()))?
-            .clone();
-        let api_service = app_config
+          ;
+        let  api_service = app_config
             .api_service_config
-            .get(&port)
+            .get_mut(&port)
             .ok_or(AppError(String::from("")))?;
 
         let addr_string = peer_addr.ip().to_string();
-        for item in api_service.service_config.routes.iter() {
+        for item in api_service.service_config.routes.iter_mut() {
             let back_path_clone = backend_path.clone();
             let match_result = item.is_matched(back_path_clone, Some(headers.clone()))?;
             if match_result.clone().is_none() {
                 continue;
             }
+            let headers1 = headers.clone();
+            let addr_string1 = addr_string.clone();
             let is_allowed = item
-                .is_allowed(addr_string.clone(), Some(headers.clone()))
-                .await?;
+                .is_allowed(addr_string1, Some(headers1))
+                ?;
             if !is_allowed {
                 return Ok(None);
             }
             let base_route = item
                 .route_cluster
-                .clone()
                 .get_route(headers.clone())
-                .await?;
+                ?;
             let endpoint = base_route.endpoint.clone();
             debug!("The endpoint is {}", endpoint);
             if endpoint.contains("http") {
