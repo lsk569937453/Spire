@@ -1,40 +1,35 @@
-log_level: info
-servers:
-  - listen: 4486
-    protocol: http
-    routes:
-      - matcher:
-          prefix: /
-          prefix_rewrite: /
-        forward_to:
-          type: random
-          targets:
-            - endpoint: http://localhost:6666/
-        health_check:
-          type: http_get
-          base_health_check_param:
-            timeout: 10
-            interval: 10
-          path: /health
-        liveness_config:
-          min_liveness_count: 1
-  - listen: 9969
-    protocol: http
-    routes:
-      - matcher:
-          prefix: /
-          prefix_rewrite: /
-        forward_to:
-          type: random
-          targets:
-            - endpoint: http://127.0.0.1:9394
-            - endpoint: http://127.0.0.1:8090
-            - endpoint: http://127.0.0.1:9396
-        health_check:
-          type: http_get
-          base_health_check_param:
-            timeout: 5
-            interval: 5
-          path: /health
-        liveness_config:
-          min_liveness_count: 1
+static_config:
+  log_level: debug
+services:
+  - listen_port: 4486
+    service_config:
+      server_type: Http
+      routes:
+        - matcher:
+            prefix: /
+            prefix_rewrite: /
+          route_cluster:
+            type: randomRoute
+            routes:
+              - base_route:
+                  endpoint: http://localhost:7777/
+                  try_file: null
+  - listen_port: 9969
+    service_config:
+      server_type: Http
+      routes:
+        - matcher:
+            prefix: /
+            prefix_rewrite: /
+          route_cluster:
+            type: randomRoute
+            routes:
+              - base_route:
+                  endpoint: http://localhost:8888/
+                  try_file: null
+              - base_route:
+                  endpoint: http://localhost:9999/
+                  try_file: null
+              - base_route:
+                  endpoint: http://localhost:7777/
+                  try_file: null
