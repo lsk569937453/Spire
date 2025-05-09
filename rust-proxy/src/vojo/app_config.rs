@@ -151,10 +151,10 @@ impl RouteConfig {
         }
         Ok(Some(final_path))
     }
-    pub fn is_allowed(
-        &mut self,
-        peer_addr: &SocketAddr,
-        headers_option: Option<&HeaderMap<HeaderValue>>,
+    pub  fn is_allowed(
+        &self,
+        ip: String,
+        headers_option: Option<HeaderMap<HeaderValue>>,
     ) -> Result<bool, AppError> {
         if let Some(middlewares) = &mut self.middlewares {
             for middleware in middlewares.iter_mut() {
@@ -164,7 +164,12 @@ impl RouteConfig {
                 }
             }
         }
-        Ok(true)
+        if let (Some(header_map), Some(mut ratelimit_strategy)) =
+            (headers_option, self.ratelimit.clone())
+        {
+            is_allowed = !ratelimit_strategy.should_limit(header_map, ip)?;
+        }
+        Ok(is_allowed)
     }
 }
 

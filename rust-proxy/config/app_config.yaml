@@ -22,14 +22,11 @@ services:
             prefix: /
             prefix_rewrite: /
           route_cluster:
-            type: randomRoute
+            type: PollRoute
             routes:
               - base_route:
                   endpoint: http://localhost:8888/
-                  try_file: null
               - base_route:
                   endpoint: http://localhost:9999/
-                  try_file: null
               - base_route:
                   endpoint: http://localhost:7777/
-                  try_file: null

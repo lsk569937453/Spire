@@ -91,11 +91,11 @@ async fn check(
 
     let service_config_clone = api_service;
 
-    let route = service_config_clone
-        .route_configs
-        .first()
-        .ok_or("service_config_clone is empty")?;
-    let is_allowed = route.clone().is_allowed(&remote_addr, None)?;
+    let route = service_config_clone.routes.first().unwrap();
+    let is_allowed = route
+        .clone()
+        .is_allowed(remote_addr.ip().to_string(), None)
+        ?;
     Ok(is_allowed)
 }
 async fn get_route_cluster(
@@ -228,4 +228,6 @@ mod tests {
         let result = proxy.start_proxy().await;
         assert!(result.is_ok());
     }
+    let mut route = service_config_clone.first().unwrap().route_cluster.clone();
+    route.get_route(HeaderMap::new()).map(|s| s.endpoint)
 }

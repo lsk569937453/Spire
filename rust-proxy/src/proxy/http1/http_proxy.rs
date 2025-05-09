@@ -232,11 +232,30 @@ async fn proxy_adapter_with_error(
         .for_each(|item| item.observe_duration());
     inc(mapping_key.clone(), path.clone(), status);
 
-    info!(
-        "{} - -  \"{} {} HTTP/1.1\" {}  \"-\" \"-\"  {:?}",
-        remote_addr, method, path, status, elapsed_time_res
-    );
-    Ok(res)
+    if log_enabled!(Level::Debug) {
+        let (parts, body) = res.into_parts();
+        let response_bytes = body
+            .collect()
+            .await
+            .map_err(|_| AppError(String::from("Can not get bytes from body")))?
+            .to_bytes();
+        let response_str =
+            String::from_utf8(response_bytes.to_vec()).map_err(|e| AppError(e.to_string()))?;
+        debug!("{}$${}$${}$${}$${}$${}$${}$${:?}",
+           remote_addr,
+           elapsed_time,
+           status,
+           method,
+           path,
+           json_value,
+           response_str,
+           parts.headers.clone()
+        );
+        let res = Response::from_parts(parts, Full::new(response_bytes).boxed());
+        Ok(res)
+    } else {
+        Ok(res)
+    }
 }
 
 async fn proxy(
