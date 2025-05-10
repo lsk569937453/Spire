@@ -114,6 +114,7 @@ impl BaseRoute {
 pub struct WeightRoute {
     pub base_route: BaseRoute,
     pub weight: i32,
+    #[serde(skip_deserializing, skip_serializing, default)]
     pub index: i32,
 }
 
@@ -281,6 +282,21 @@ impl WeightBasedRoute {
     }
 
     fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-        Err(AppError(String::from("WeightRoute get route error")))
+        if self.routes.is_empty() {
+            return Err(AppError(String::from("No routes available")));
+        }
+        let all_reached = self.routes.iter().all(|r| r.index >= r.weight);
+        if all_reached {
+            for route in &mut self.routes {
+                route.index = 0;
+            }
+        }
+        debug!("{:?}", self.routes);
+        if let Some(route) = self.routes.iter_mut().find(|r| r.index < r.weight) {
+            route.index += 1;
+            Ok(route.base_route.clone())
+        } else {
+            Err(AppError(String::from("WeightRoute get route error")))
+        }
     }
 }

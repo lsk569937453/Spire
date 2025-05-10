@@ -22,23 +22,14 @@ services:
             prefix: /
             prefix_rewrite: /
           route_cluster:
-            type: HeaderBased
+            type: WeightBased
             routes:
               - base_route:
                   endpoint: http://localhost:8888/
-                header_key: lsk
-                header_value_mapping_type:
-                  type: Text
-                  value: user-agent
+                weight: 1
               - base_route:
                   endpoint: http://localhost:9999/
-                header_key: lska
-                header_value_mapping_type:
-                  type: Text
-                  value: user-agent
+                weight: 2
               - base_route:
                   endpoint: http://localhost:7777/
-                header_key: lskb
-                header_value_mapping_type:
-                  type: Text
-                  value: user-agent
+                weight: 3
