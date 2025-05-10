@@ -309,7 +309,10 @@ mod tests {
     use super::*;
     use crate::vojo::route::BaseRoute;
     use crate::vojo::route::HeaderValueMappingType;
+    use crate::vojo::route::LoadbalancerStrategy::WeightBased;
     use crate::vojo::route::TextMatch;
+    use crate::vojo::route::WeightBasedRoute;
+    use crate::vojo::route::WeightRoute;
     use crate::vojo::route::{self, HeaderRoute};
 
     #[test]
@@ -396,12 +399,10 @@ mod tests {
         let mut api_service = ApiService::default();
         api_service.listen_port = 8080;
 
-        let header_based = HeaderBasedRoute {
-            routes: vec![HeaderRoute {
-                header_key: "lsk".to_string(),
-                header_value_mapping_type: HeaderValueMappingType::Text(TextMatch {
-                    value: "user-agent".to_string(),
-                }),
+        let header_based = WeightBasedRoute {
+            routes: vec![WeightRoute {
+                weight: 1,
+                index: 0,
                 base_route: BaseRoute {
                     endpoint: "http://www.baidu.com".to_string(),
                     ..Default::default()
@@ -410,7 +411,7 @@ mod tests {
         };
         let route = Route {
             route_id: "test_route".to_string(),
-            route_cluster: LoadbalancerStrategy::HeaderBased(header_based),
+            route_cluster: LoadbalancerStrategy::WeightBased(header_based),
             ..Default::default()
         };
         let service_config = ServiceConfig {
