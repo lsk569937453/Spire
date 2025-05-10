@@ -241,15 +241,16 @@ async fn proxy_adapter_with_error(
             .to_bytes();
         let response_str =
             String::from_utf8(response_bytes.to_vec()).map_err(|e| AppError(e.to_string()))?;
-        debug!("{}$${}$${}$${}$${}$${}$${}$${:?}",
-           remote_addr,
-           elapsed_time,
-           status,
-           method,
-           path,
-           json_value,
-           response_str,
-           parts.headers.clone()
+        debug!(
+            "{}$${}$${}$${}$${}$${}$${}$${:?}",
+            remote_addr,
+            elapsed_time,
+            status,
+            method,
+            path,
+            json_value,
+            response_str,
+            parts.headers.clone()
         );
         let res = Response::from_parts(parts, Full::new(response_bytes).boxed());
         Ok(res)
