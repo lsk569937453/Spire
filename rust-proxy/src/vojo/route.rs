@@ -7,7 +7,9 @@ use core::fmt::Debug;
 use http::HeaderMap;
 use http::HeaderValue;
 use rand::prelude::*;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
@@ -26,10 +28,7 @@ impl Default for LoadbalancerStrategy {
     }
 }
 impl LoadbalancerStrategy {
-    pub  fn get_route(
-        &mut self,
-        headers: HeaderMap<HeaderValue>,
-    ) -> Result<BaseRoute, AppError> {
+    pub fn get_route(&mut self, headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         match self {
             LoadbalancerStrategy::PollRoute(poll_route) => poll_route.get_route(headers),
 
@@ -165,8 +164,54 @@ impl HeaderBasedRoute {
             .collect::<Vec<BaseRoute>>())
     }
 
-     fn get_route(&mut self, headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-        Ok(BaseRoute::default())
+    fn get_route(&mut self, headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
+        for item in self.routes.iter() {
+            let headers_contais_key = headers.contains_key(item.header_key.clone());
+            if !headers_contais_key {
+                continue;
+            }
+            let header_value = headers.get(item.header_key.clone()).unwrap();
+            let header_value_str = header_value.to_str().unwrap();
+            match item.clone().header_value_mapping_type {
+                HeaderValueMappingType::Regex(regex_str) => {
+                    let re = Regex::new(&regex_str.value).unwrap();
+                    let capture_option = re.captures(header_value_str);
+                    if capture_option.is_none() {
+                        continue;
+                    } else {
+                        return Ok(item.clone().base_route);
+                    }
+                }
+                HeaderValueMappingType::Text(text_str) => {
+                    if text_str.value == header_value_str {
+                        return Ok(item.clone().base_route);
+                    } else {
+                        continue;
+                    }
+                }
+                HeaderValueMappingType::Split(split_segment) => {
+                    let split_set: HashSet<_> =
+                        header_value_str.split(&split_segment.split_by).collect();
+                    if split_set.is_empty() {
+                        continue;
+                    }
+                    let mut flag = true;
+                    for split_item in split_segment.split_list.iter() {
+                        if !split_set.contains(split_item.clone().as_str()) {
+                            flag = false;
+                            break;
+                        }
+                    }
+                    if flag {
+                        return Ok(item.clone().base_route);
+                    }
+                }
+            }
+        }
+        error!("Can not find the route!And siverWind has selected the first route!");
+
+        let first = self.routes.first().unwrap().base_route.clone();
+        Ok(first)
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -187,8 +232,7 @@ impl RandomRoute {
             .collect::<Vec<BaseRoute>>())
     }
 
-     fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-
+    fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         let mut rng = rand::thread_rng();
         let random_index = rng.gen_range(0..self.routes.len());
         Ok(self.routes[random_index].base_route.clone())
@@ -201,7 +245,7 @@ pub struct PollBaseRoute {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct PollRoute {
-    #[serde(skip_deserializing,skip_serializing)]
+    #[serde(skip_deserializing, skip_serializing)]
     pub current_index: i128,
     pub routes: Vec<PollBaseRoute>,
 }
@@ -216,7 +260,7 @@ impl PollRoute {
             .collect::<Vec<BaseRoute>>())
     }
 
-     fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
+    fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         self.current_index += 1;
         if self.current_index >= self.routes.len() as i128 {
             self.current_index = 0;
@@ -236,7 +280,7 @@ impl WeightBasedRoute {
         Ok(vec![])
     }
 
-     fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
+    fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         Err(AppError(String::from("WeightRoute get route error")))
     }
 }
