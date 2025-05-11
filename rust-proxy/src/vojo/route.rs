@@ -57,8 +57,9 @@ pub struct AnomalyDetectionStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct BaseRoute {
     pub endpoint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub try_file: Option<String>,
-    #[serde(skip_deserializing)]
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub is_alive: Option<bool>,
     #[serde(skip_serializing, skip_deserializing)]
     pub anomaly_detection_status: AnomalyDetectionStatus,
@@ -266,7 +267,7 @@ impl PollRoute {
         if self.current_index >= self.routes.len() as i128 {
             self.current_index = 0;
         }
-        info!("current_index:{}", self.current_index);
+        debug!("current_index:{}", self.current_index);
         let route = self.routes[self.current_index as usize].base_route.clone();
         Ok(route)
     }

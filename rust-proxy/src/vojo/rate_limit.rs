@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::constants::common_constants::DEFAULT_FIXEDWINDOW_MAP_SIZE;
 use core::fmt::Debug;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -21,7 +22,7 @@ pub enum Ratelimit {
     FixedWindow(FixedWindowRateLimit),
 }
 impl Ratelimit {
-    pub  fn should_limit(
+    pub fn should_limit(
         &mut self,
         headers: HeaderMap<HeaderValue>,
         remote_ip: String,
@@ -104,12 +105,12 @@ pub struct TokenBucketRateLimit {
     pub current_count: i32,
     #[serde(skip_serializing, skip_deserializing)]
     pub lock: i32,
-    #[serde(skip_serializing, skip_deserializing)]
-    pub last_update_time: String,
+    #[serde(skip_serializing, skip_deserializing, default = "default_time")]
+    pub last_update_time: SystemTime,
 }
 
-fn default_time() -> Arc<RwLock<SystemTime>> {
-    Arc::new(RwLock::new(SystemTime::now()))
+fn default_time() -> SystemTime {
+    SystemTime::now()
 }
 fn get_time_key(time_unit: TimeUnit) -> Result<String, AppError> {
     let current_time = SystemTime::now();
@@ -163,12 +164,34 @@ fn matched(
 }
 
 impl TokenBucketRateLimit {
-     fn should_limit(
+    fn should_limit(
         &mut self,
         headers: HeaderMap<HeaderValue>,
         remote_ip: String,
     ) -> Result<bool, AppError> {
-        Ok(false)
+        if !matched(self.limit_location.clone(), headers, remote_ip)? {
+            return Ok(false);
+        }
+
+        let now = SystemTime::now();
+        let elapsed = now
+            .duration_since(self.last_update_time)
+            .map_err(|err| AppError(err.to_string()))?;
+
+        let elapsed_millis = elapsed.as_millis();
+        let tokens_to_add = (elapsed_millis * self.rate_per_unit) / self.unit.get_million_second();
+
+        if tokens_to_add > 0 {
+            self.current_count = (self.current_count + tokens_to_add as i32).min(self.capacity);
+            self.last_update_time = now;
+        }
+
+        if self.current_count > 0 {
+            self.current_count -= 1;
+            Ok(false) // Not limited
+        } else {
+            Ok(true) // Limited
+        }
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -184,12 +207,28 @@ pub struct FixedWindowRateLimit {
     pub count_map: HashMap<String, i32>,
 }
 impl FixedWindowRateLimit {
-     fn should_limit(
+    fn should_limit(
         &mut self,
         headers: HeaderMap<HeaderValue>,
         remote_ip: String,
     ) -> Result<bool, AppError> {
-        Ok(false)
+        // Check if request matches our limiting criteria
+        if !matched(self.limit_location.clone(), headers, remote_ip)? {
+            return Ok(false);
+        }
+
+        let time_unit_key = get_time_key(self.unit.clone())?;
+        let location_key = self.limit_location.get_key();
+        let key = format!("{}:{}", location_key, time_unit_key);
+
+        if self.count_map.len() >= DEFAULT_FIXEDWINDOW_MAP_SIZE as usize {
+            if let Some(oldest_key) = self.count_map.keys().next().cloned() {
+                self.count_map.remove(&oldest_key);
+            }
+        }
+        let counter = self.count_map.entry(key).or_insert(0);
+        *counter += 1;
+        Ok(*counter > self.rate_per_unit as i32)
     }
     fn as_any(&self) -> &dyn Any {
         self

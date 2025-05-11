@@ -14,6 +14,7 @@ use http::HeaderMap;
 use http::HeaderValue;
 use regex::Regex;
 use serde::Deserializer;
+use serde::Serializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
@@ -26,9 +27,24 @@ pub struct AppConfig {
         default
     )]
     pub static_config: StaticConifg,
-    #[serde(rename = "services", deserialize_with = "deserialize_service_config")]
+    #[serde(
+        rename = "services",
+        deserialize_with = "deserialize_service_config",
+        serialize_with = "serialize_api_service_config"
+    )]
     pub api_service_config: HashMap<i32, ApiService>,
 }
+fn serialize_api_service_config<S>(
+    config: &HashMap<i32, ApiService>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let vec: Vec<ApiService> = config.values().cloned().collect();
+    vec.serialize(serializer)
+}
+
 fn deserialize_static_config<'de, D>(deserializer: D) -> Result<StaticConifg, D::Error>
 where
     D: Deserializer<'de>,
@@ -81,16 +97,25 @@ pub struct LivenessStatus {
 pub struct Route {
     #[serde(skip_deserializing, skip_serializing)]
     pub route_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub host_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub matcher: Option<Matcher>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_deny_list: Option<Vec<AllowDenyObject>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub authentication: Option<Authentication>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub anomaly_detection: Option<AnomalyDetectionType>,
     #[serde(skip_deserializing, skip_serializing)]
     pub liveness_status: LivenessStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rewrite_headers: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub liveness_config: Option<LivenessConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub health_check: Option<HealthCheckType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ratelimit: Option<Ratelimit>,
     pub route_cluster: LoadbalancerStrategy,
 }
@@ -201,7 +226,9 @@ pub enum ServiceType {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ServiceConfig {
     pub server_type: ServiceType,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cert_str: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key_str: Option<String>,
     pub routes: Vec<Route>,
 }
