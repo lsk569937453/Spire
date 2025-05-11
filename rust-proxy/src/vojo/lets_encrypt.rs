@@ -5,35 +5,37 @@ use acme_lib::{create_p384_key, Certificate};
 use acme_lib::{Directory, DirectoryUrl, Error};
 use axum::extract::State;
 use axum::{routing::get, Router};
-use dashmap::DashMap;
+use rustls::crypto::hash::Hash;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::env;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::{self, Receiver};
+use tokio::sync::Mutex;
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 
 pub struct LetsEntrypt {
     pub mail_name: String,
     pub domain_name: String,
     #[serde(skip_serializing, skip_deserializing)]
-    pub token_map: Arc<DashMap<String, String>>,
+    pub token_map: Arc<Mutex<HashMap<String, String>>>,
 }
 
 pub async fn dyn_reply(
     axum::extract::Path(token): axum::extract::Path<String>,
-    State(token_map_shared): State<Arc<DashMap<String, String>>>,
+    State(token_map_shared): State<Arc<Mutex<HashMap<String, String>>>>,
 ) -> Result<impl axum::response::IntoResponse, Infallible> {
     info!("The server has received the token,the token is {}", token);
-
-    if !token_map_shared.contains_key(&token) {
+    let token_map = token_map_shared.lock().await;
+    if !token_map.contains_key(&token) {
         error!("Can not find the token:{} from memory.", token);
         return Ok((axum::http::StatusCode::BAD_REQUEST, String::from("")));
     } else {
         // let cloned_map = token_map.clone();
-        let proof_option = token_map_shared.get(&token);
+        let proof_option = token_map.get(&token);
         if let Some(proof) = proof_option {
             info!(
                 "The server response the proof successfully,token:{},proof:{}",
@@ -51,11 +53,11 @@ impl LetsEntrypt {
         LetsEntrypt {
             mail_name,
             domain_name,
-            token_map: Arc::new(DashMap::new()),
+            token_map: Arc::new(Mutex::new(HashMap::new())),
         }
     }
     async fn create_temp_server(
-        token_map: Arc<DashMap<String, String>>,
+        token_map: Arc<Mutex<HashMap<String, String>>>,
         mut rx: Receiver<()>,
     ) -> Result<(), AppError> {
         let app = Router::new()
@@ -82,7 +84,7 @@ impl LetsEntrypt {
             let _ = LetsEntrypt::create_temp_server(cloned_map, rx).await;
         });
 
-        let request_result = self.request_cert(DirectoryUrl::LetsEncrypt);
+        let request_result = self.request_cert(DirectoryUrl::LetsEncrypt).await;
         if request_result.is_ok() {
             let send_result = tx.send(()).await.map_err(|e| AppError(format!("{}", e)));
             if send_result.is_err() {
@@ -98,7 +100,10 @@ impl LetsEntrypt {
 
         Err(AppError("Request the lets_encrypt fails".to_string()))
     }
-    pub fn request_cert(&self, directory_url: DirectoryUrl) -> Result<Certificate, Error> {
+    pub async fn request_cert(
+        &self,
+        directory_url: DirectoryUrl<'_>,
+    ) -> Result<Certificate, Error> {
         let result: bool = Path::new(DEFAULT_TEMPORARY_DIR).is_dir();
         if !result {
             let path = env::current_dir()?;
@@ -118,8 +123,8 @@ impl LetsEntrypt {
             let token = chall.http_token();
             let proof = chall.http_proof();
             info!("Has receive the token:{} and proof:{}", token, proof);
-
-            self.token_map.insert(String::from(token), proof);
+            let mut token_map = self.token_map.lock().await;
+            token_map.insert(String::from(token), proof);
             info!("Has deleted the lock!");
 
             chall.validate(1000)?;
@@ -136,14 +141,16 @@ impl LetsEntrypt {
 mod tests {
     use super::*;
 
-    #[test]
+    #[tokio::test]
     #[ignore]
-    fn test_request_cert_ok1() {
+    async fn test_request_cert_ok1() {
         let lets_entrypt = LetsEntrypt::_new(
             String::from("lsk@gmail.com"),
             String::from("www.silverwind.top"),
         );
-        let request_result = lets_entrypt.request_cert(DirectoryUrl::LetsEncryptStaging);
+        let request_result = lets_entrypt
+            .request_cert(DirectoryUrl::LetsEncryptStaging)
+            .await;
         assert!(request_result.is_err());
     }
     #[tokio::test]

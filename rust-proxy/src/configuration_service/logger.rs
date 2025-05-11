@@ -15,6 +15,8 @@ use tracing_subscriber::{filter, prelude::*, reload};
 struct LocalTime;
 use tracing_subscriber::util::SubscriberInitExt;
 
+use crate::vojo::app_error::AppError;
+
 impl FormatTime for LocalTime {
     fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
         // Get the current time in local timezone
@@ -23,7 +25,7 @@ impl FormatTime for LocalTime {
     }
 }
 
-pub fn setup_logger() -> Result<Handle<Targets, Registry>, anyhow::Error> {
+pub fn setup_logger() -> Result<Handle<Targets, Registry>, AppError> {
     let app_file = rolling::daily("./logs", "spire.log");
     let filter = filter::Targets::new()
         .with_targets(vec![

@@ -23,8 +23,7 @@ mod utils;
 use tracing_subscriber::filter::LevelFilter;
 #[macro_use]
 extern crate tracing;
-#[macro_use]
-extern crate anyhow;
+
 #[macro_use]
 extern crate axum;
 mod vojo;
@@ -35,7 +34,7 @@ use crate::control_plane::rest_api::start_control_plane;
 
 use tokio::runtime;
 
-fn main() -> Result<(), anyhow::Error> {
+fn main() -> Result<(), AppError> {
     let num = num_cpus::get();
     let rt = runtime::Builder::new_multi_thread()
         .worker_threads(num * 2)
@@ -66,7 +65,10 @@ async fn start() -> Result<(), AppError> {
     println!("config is {:?}", config);
     let _ = reload_handle.modify(|filter| {
         *filter = filter::Targets::new()
-            .with_targets(vec![("delay_timer", LevelFilter::OFF), ("hyper_util", LevelFilter::OFF)])
+            .with_targets(vec![
+                ("delay_timer", LevelFilter::OFF),
+                ("hyper_util", LevelFilter::OFF),
+            ])
             .with_default(config.static_config.get_log_level())
     });
 

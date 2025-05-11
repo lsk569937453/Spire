@@ -264,7 +264,8 @@ fn validate_tls_config(
         return Err(AppError(String::from("Can not parse the certs pem.")));
     }
     let key_pem = key_pem_option.unwrap();
-    let key_pem_result = pkcs8::PrivateKeyDocument::from_pem(key_pem.as_str());
+    // pkcs8::PrivateKeyInfo::from_pem(key_pem.as_str());
+    let key_pem_result = pkcs8::Document::from_pem(key_pem.as_str());
     if key_pem_result.is_err() {
         return Err(AppError(String::from("Can not parse the key pem.")));
     }
