@@ -82,3 +82,54 @@ async fn start() -> Result<(), AppError> {
     start_control_plane(admin_port, shared_config).await?;
     Ok(())
 }
+#[cfg(test)]
+mod tests {
+    use crate::vojo::app_config::StaticConifg;
+
+    use super::*;
+    use mockall::{mock, predicate::*};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use tokio::fs;
+
+    // Test configuration
+    fn test_config() -> AppConfig {
+        AppConfig {
+            static_config: StaticConifg {
+                log_level: None,
+                admin_port: Some(8080),
+                access_log: None,
+                database_url: None,
+                config_file_path: None, // other fields...
+            },
+            api_service_config: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_start_with_config_file() {
+        let cli = Cli {
+            config_path: "conf/app_config.yaml".to_string(),
+        };
+        let result = start().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_log_level_configuration() {
+        let config = test_config();
+
+        let cli = Cli {
+            config_path: "conf/app_config.yaml".to_string(),
+            // other fields...
+        };
+
+        let reload_handle = setup_logger().unwrap();
+        let _ = reload_handle.modify(|filter| {
+            *filter = filter::Targets::new().with_default(LevelFilter::DEBUG) // Set initial level
+        });
+
+        let result = start().await;
+        assert!(result.is_ok());
+    }
+}

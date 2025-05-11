@@ -332,6 +332,7 @@ mod tests {
     use hyper::service;
 
     use super::*;
+    use crate::vojo::authentication::BasicAuth;
     use crate::vojo::route::BaseRoute;
     use crate::vojo::route::HeaderValueMappingType;
     use crate::vojo::route::LoadbalancerStrategy::WeightBased;
@@ -389,5 +390,206 @@ mod tests {
         //     deserialized_config.static_config.access_log,
         //     Some("/var/log/proxy.log".to_string())
         // );
+    }
+
+    use super::*;
+    use crate::vojo::allow_deny_ip::AllowDenyObject;
+    use crate::vojo::authentication::Authentication;
+    use http::HeaderValue;
+    use std::net::IpAddr;
+
+    #[test]
+    fn test_static_config_default() {
+        let config = StaticConifg::default();
+        assert_eq!(config.access_log, Some("".to_string()));
+        assert_eq!(config.database_url, Some("".to_string()));
+        assert_eq!(config.admin_port, Some(DEFAULT_ADMIN_PORT));
+        assert_eq!(config.config_file_path, Some("".to_string()));
+        assert_eq!(config.log_level, Some(DEFAULT_LOG_LEVEL));
+    }
+
+    #[test]
+    fn test_route_matching() {
+        let route = Route {
+            matcher: Some(Matcher {
+                prefix: "/api".to_string(),
+                prefix_rewrite: "/v1".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let result = route.is_matched("/api/test".to_string(), None).unwrap();
+        assert_eq!(result, Some("/v1/test".to_string()));
+
+        let result = route.is_matched("/other/test".to_string(), None).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_route_host_matching() {
+        let route = Route {
+            host_name: Some("example.com".to_string()),
+            matcher: Some(Matcher {
+                prefix: "/api".to_string(),
+                prefix_rewrite: "/v1".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert("Host", HeaderValue::from_static("example.com"));
+
+        let result = route
+            .is_matched("/api/test".to_string(), Some(headers.clone()))
+            .unwrap();
+        assert_eq!(result, Some("/v1/test".to_string()));
+
+        headers.insert("Host", HeaderValue::from_static("wrong.com"));
+        let result = route
+            .is_matched("/api/test".to_string(), Some(headers))
+            .unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_ip_allowing() {
+        let allow_obj = AllowDenyObject {
+            limit_type: AllowDenyType::Allow,
+            value: Some("IP_ADDRESS".to_string()),
+        };
+
+        let route = Route {
+            allow_deny_list: Some(vec![allow_obj]),
+            ..Default::default()
+        };
+
+        let allowed = route.is_allowed("192.168.1.1".to_string(), None).unwrap();
+        assert!(allowed);
+
+        let allowed = route.is_allowed("192.168.1.2".to_string(), None).unwrap();
+        assert!(!allowed);
+    }
+
+    #[test]
+    fn test_authentication() {
+        let auth = Authentication::Basic(BasicAuth{
+            credentials: "test:test".to_string(),
+        };
+        let route = Route {
+            authentication: Some(auth),
+            ..Default::default()
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_static("Basic dGVzdDp0ZXN0"),
+        );
+
+        let allowed = route
+            .is_allowed("192.168.1.1".to_string(), Some(headers))
+            .unwrap();
+        assert!(allowed);
+
+        let mut wrong_headers = HeaderMap::new();
+        wrong_headers.insert("Authorization", HeaderValue::from_static("Basic wrong"));
+
+        let allowed = route
+            .is_allowed("192.168.1.1".to_string(), Some(wrong_headers))
+            .unwrap();
+        assert!(!allowed);
+    }
+
+    #[test]
+    fn test_api_service_equality() {
+        let service1 = ApiService {
+            listen_port: 8080,
+            api_service_id: "id1".to_string(),
+            ..Default::default()
+        };
+
+        let service2 = ApiService {
+            listen_port: 8080,
+            api_service_id: "id1".to_string(),
+            ..Default::default()
+        };
+
+        let service3 = ApiService {
+            listen_port: 8081,
+            api_service_id: "id1".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(service1, service2);
+        assert_ne!(service1, service3);
+    }
+
+    #[test]
+    fn test_service_config_serialization() {
+        let route = Route {
+            route_cluster: WeightBased(WeightBasedRoute {
+                routes: vec![WeightRoute {
+                    weight: 1,
+                    index: 0,
+                    base_route: BaseRoute {
+                        endpoint: "http://example.com".to_string(),
+                        ..Default::default()
+                    },
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let service_config = ServiceConfig {
+            server_type: ServiceType::Http,
+            routes: vec![route],
+            ..Default::default()
+        };
+
+        let api_service = ApiService {
+            listen_port: 8080,
+            service_config,
+            ..Default::default()
+        };
+
+        let mut app_config = AppConfig::default();
+        app_config.api_service_config.insert(8080, api_service);
+
+        let yaml = serde_yaml::to_string(&app_config).unwrap();
+        assert!(yaml.contains("listen_port: 8080"));
+        assert!(yaml.contains("server_type: Http"));
+    }
+
+    #[test]
+    fn test_log_level_conversion() {
+        let config = StaticConifg {
+            log_level: Some(LogLevel::Debug),
+            ..Default::default()
+        };
+        assert_eq!(config.get_log_level(), LevelFilter::DEBUG);
+
+        let config = StaticConifg {
+            log_level: Some(LogLevel::Info),
+            ..Default::default()
+        };
+        assert_eq!(config.get_log_level(), LevelFilter::INFO);
+
+        let config = StaticConifg {
+            log_level: Some(LogLevel::Error),
+            ..Default::default()
+        };
+        assert_eq!(config.get_log_level(), LevelFilter::ERROR);
+
+        let config = StaticConifg {
+            log_level: Some(LogLevel::Warn),
+            ..Default::default()
+        };
+        assert_eq!(config.get_log_level(), LevelFilter::WARN);
+
+        let config = StaticConifg {
+            log_level: None,
+            ..Default::default()
+        };
+        assert_eq!(config.get_log_level(), LevelFilter::INFO);
     }
 }

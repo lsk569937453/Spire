@@ -73,6 +73,7 @@ pkcs8 = { version = "0.10.2", features = ["encryption", "pem", "std"] }
 prometheus = "0.14.0"
 rand = "0.9.1"
 regex = "1"
+mockall = "0.13.1"
 rustls = { version = "0.23.27", default-features = false, features = ["ring","tls12","logging"] }
 rustls-pemfile = "2.1.0"
 rustls-pki-types = "1.3.0"
