@@ -27,9 +27,24 @@ pub struct AppConfig {
         default
     )]
     pub static_config: StaticConifg,
-    #[serde(rename = "services", deserialize_with = "deserialize_service_config")]
+    #[serde(
+        rename = "services",
+        deserialize_with = "deserialize_service_config",
+        serialize_with = "serialize_api_service_config"
+    )]
     pub api_service_config: HashMap<i32, ApiService>,
 }
+fn serialize_api_service_config<S>(
+    config: &HashMap<i32, ApiService>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let vec: Vec<ApiService> = config.values().cloned().collect();
+    vec.serialize(serializer)
+}
+
 fn deserialize_static_config<'de, D>(deserializer: D) -> Result<StaticConifg, D::Error>
 where
     D: Deserializer<'de>,
@@ -89,7 +104,10 @@ pub struct RouteConfig {
     pub host_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matcher: Option<Matcher>,
-
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_deny_list: Option<Vec<AllowDenyObject>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authentication: Option<Authentication>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anomaly_detection: Option<AnomalyDetectionType>,
     #[serde(skip_deserializing, skip_serializing)]
@@ -100,10 +118,9 @@ pub struct RouteConfig {
     pub liveness_config: Option<LivenessConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_check: Option<HealthCheckType>,
-    #[serde(deserialize_with = "deserialize_router", rename = "forward_to")]
-    pub router: Router,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub middlewares: Option<Vec<MiddleWares>>,
+    pub ratelimit: Option<Ratelimit>,
+    pub route_cluster: LoadbalancerStrategy,
 }
 
 fn default_route_id() -> String {
@@ -185,6 +202,15 @@ pub enum ServiceType {
     #[serde(rename = "tls")]
     Http2,
     Http2Tls,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ServiceConfig {
+    pub server_type: ServiceType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cert_str: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_str: Option<String>,
+    pub routes: Vec<Route>,
 }
 
 #[derive(Debug, Clone, Serialize)]
