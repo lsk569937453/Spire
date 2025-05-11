@@ -26,7 +26,7 @@ impl FormatTime for LocalTime {
 pub fn setup_logger() -> Result<Handle<Targets, Registry>, AppError> {
     let (file_layer, reload_handle) = setup_logger_with_path(Path::new("./logs"))?;
 
-pub fn setup_logger() -> Result<Handle<Targets, Registry>, anyhow::Error> {
+pub fn setup_logger() -> Result<Handle<Targets, Registry>, AppError> {
     let app_file = rolling::daily("./logs", "spire.log");
     let filter = filter::Targets::new()
         .with_targets(vec![

@@ -1,23 +1,24 @@
 use super::app_error::AppError;
 use crate::control_plane::lets_encrypt::LetsEncryptActions;
 use axum::extract::State;
-use axum::{extract::Path, http::StatusCode, routing::any, Router};
-use hyper_util::client::legacy::Client as HyperClient;
-use hyper_util::rt::TokioExecutor;
-use instant_acme::LetsEncrypt;
-use instant_acme::NewAccount;
-use instant_acme::{
-    Account, AuthorizationStatus, ChallengeType, Identifier, NewOrder, OrderStatus,
-};
-use rcgen::{CertificateParams, DistinguishedName, KeyPair};
+use axum::{routing::get, Router};
+use rustls::crypto::hash::Hash;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
+use std::convert::Infallible;
+use std::env;
+use std::path::Path;
+use std::sync::Arc;
+use tokio::net::TcpListener;
+use tokio::sync::mpsc::{self, Receiver};
+use tokio::sync::Mutex;
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 
 pub struct LetsEntrypt {
     pub mail_name: String,
     pub domain_name: String,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub token_map: Arc<Mutex<HashMap<String, String>>>,
 }
 impl LetsEncryptActions for LetsEntrypt {
     async fn start_request2(&self) -> Result<String, AppError> {
@@ -32,12 +33,25 @@ impl LetsEncryptActions for LetsEntrypt {
             .await?;
         let authorizations = order.authorizations().await?;
 
-        let authorization = authorizations
-            .first()
-            .ok_or(AppError("there should be one authorization".to_string()))?;
-
-        if !matches!(authorization.status, AuthorizationStatus::Pending) {
-            Err(AppError("order should be pending".to_string()))?;
+pub async fn dyn_reply(
+    axum::extract::Path(token): axum::extract::Path<String>,
+    State(token_map_shared): State<Arc<Mutex<HashMap<String, String>>>>,
+) -> Result<impl axum::response::IntoResponse, Infallible> {
+    info!("The server has received the token,the token is {}", token);
+    let token_map = token_map_shared.lock().await;
+    if !token_map.contains_key(&token) {
+        error!("Can not find the token:{} from memory.", token);
+        return Ok((axum::http::StatusCode::BAD_REQUEST, String::from("")));
+    } else {
+        // let cloned_map = token_map.clone();
+        let proof_option = token_map.get(&token);
+        if let Some(proof) = proof_option {
+            info!(
+                "The server response the proof successfully,token:{},proof:{}",
+                token,
+                proof.clone()
+            );
+            return Ok((axum::http::StatusCode::OK, proof.clone().to_string()));
         }
         let challenge = authorization
             .challenges
@@ -128,14 +142,18 @@ impl LetsEntrypt {
         LetsEntrypt {
             mail_name,
             domain_name,
+            token_map: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-}
-pub async fn http01_challenge(
-    State(challenges): State<HashMap<String, String>>,
-    Path(token): Path<String>,
-) -> Result<String, StatusCode> {
-    info!("received HTTP-01 ACME challenge,{}", token);
+    async fn create_temp_server(
+        token_map: Arc<Mutex<HashMap<String, String>>>,
+        mut rx: Receiver<()>,
+    ) -> Result<(), AppError> {
+        let app = Router::new()
+            .route("/.well-known/acme-challenge/:token", get(dyn_reply))
+            .with_state(token_map);
+        // Create a `TcpListener` using tokio.
+        let listener = TcpListener::bind("0.0.0.0:80").await.unwrap();
 
     if let Some(key_auth) = challenges.get(&token) {
         Ok({
@@ -148,46 +166,58 @@ pub async fn http01_challenge(
     }
 }
 
-/// Set up a simple acme server to respond to http01 challenges.
-pub fn acme_router(challenges: HashMap<String, String>) -> Router {
-    Router::new()
-        .route("/.well-known/acme-challenge/{*rest}", any(http01_challenge))
-        .with_state(challenges)
-}
-use rustls::crypto::ring;
-use rustls::RootCertStore;
-async fn local_account(_mail_name: String) -> Result<Account, AppError> {
-    info!("installing ring");
-    let _ = ring::default_provider().install_default();
-    info!("installing ring done");
-    let root_store = RootCertStore {
-        roots: webpki_roots::TLS_SERVER_ROOTS.into(),
-    };
-    let roots = rustls::ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
-    info!("creating test account1");
-    let https = HyperClient::builder(TokioExecutor::new()).build(
-        hyper_rustls::HttpsConnectorBuilder::new()
-            .with_tls_config(roots)
-            .https_or_http()
-            .enable_http1()
-            .enable_http2()
-            .build(),
-    );
-    info!("creating test account2");
-    let (account, _) = Account::create_with_http(
-        &NewAccount {
-            contact: &[],
-            terms_of_service_agreed: true,
-            only_return_existing: false,
-        },
-        LetsEncrypt::Staging.url().to_owned().as_str(),
-        None,
-        Box::new(https.clone()),
-    )
-    .await?;
-    Ok(account)
+        let request_result = self.request_cert(DirectoryUrl::LetsEncrypt).await;
+        if request_result.is_ok() {
+            let send_result = tx.send(()).await.map_err(|e| AppError(format!("{}", e)));
+            if send_result.is_err() {
+                error!(
+                    "Close the 80 port error,the error is:{}",
+                    send_result.unwrap_err()
+                );
+            }
+            return request_result.map_err(|e| AppError(format!("{}", e)));
+        } else {
+            error!("{}", request_result.unwrap_err());
+        }
+
+        Err(AppError("Request the lets_encrypt fails".to_string()))
+    }
+    pub async fn request_cert(
+        &self,
+        directory_url: DirectoryUrl<'_>,
+    ) -> Result<Certificate, Error> {
+        let result: bool = Path::new(DEFAULT_TEMPORARY_DIR).is_dir();
+        if !result {
+            let path = env::current_dir()?;
+            let absolute_path = path.join(DEFAULT_TEMPORARY_DIR);
+            std::fs::create_dir_all(absolute_path)?;
+        }
+        let persist = FilePersist::new(DEFAULT_TEMPORARY_DIR);
+        let dir = Directory::from_url(persist, directory_url)?;
+        let acc = dir.account(&self.mail_name)?;
+        let mut ord_new = acc.new_order(&self.domain_name, &[])?;
+        let ord_csr = loop {
+            if let Some(ord_csr) = ord_new.confirm_validations() {
+                break ord_csr;
+            }
+            let auths = ord_new.authorizations()?;
+            let chall = auths[0].http_challenge();
+            let token = chall.http_token();
+            let proof = chall.http_proof();
+            info!("Has receive the token:{} and proof:{}", token, proof);
+            let mut token_map = self.token_map.lock().await;
+            token_map.insert(String::from(token), proof);
+            info!("Has deleted the lock!");
+
+            chall.validate(1000)?;
+            ord_new.refresh()?;
+        };
+        let pkey_pri = create_p384_key();
+        let ord_cert = ord_csr.finalize_pkey(pkey_pri, 5000)?;
+        let cert = ord_cert.download_and_save_cert()?;
+
+        Ok(cert)
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -195,65 +225,17 @@ mod tests {
     use http::Request;
     use tower::ServiceExt; // for `oneshot`
 
-    #[cfg(test)]
-    mod unit_tests {
-
-        use super::*;
-
-        #[tokio::test]
-        async fn http01_challenge_handler_logic() {
-            let token = "test-token-123".to_string();
-            let key_auth = "key-auth-abc".to_string();
-            let mut challenges = HashMap::new();
-            challenges.insert(token.clone(), key_auth.clone());
-
-            let state = State(challenges);
-
-            let path_found = Path(token);
-            let response = http01_challenge(state.clone(), path_found).await;
-            assert_eq!(response, Ok(key_auth));
-
-            let path_not_found = Path("unknown-token".to_string());
-            let response_not_found = http01_challenge(state, path_not_found).await;
-            assert_eq!(response_not_found, Err(StatusCode::NOT_FOUND));
-        }
-        use axum::body::to_bytes;
-        #[tokio::test]
-        async fn acme_router_works() {
-            let token = "another-token-456".to_string();
-            let key_auth = "another-key-auth-def".to_string();
-            let challenges = HashMap::from([(token.clone(), key_auth.clone())]);
-
-            let app = acme_router(challenges);
-
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(format!("/.well-known/acme-challenge/{}", token))
-                        .body(axum::body::Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-
-            assert_eq!(response.status(), StatusCode::OK);
-            let body = response.into_body();
-            let body = to_bytes(body, usize::MAX).await.unwrap();
-            assert_eq!(&body[..], key_auth.as_bytes());
-
-            let response_not_found = app
-                .oneshot(
-                    Request::builder()
-                        .uri("/.well-known/acme-challenge/wrong-token")
-                        .body(axum::body::Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-
-            assert_eq!(response_not_found.status(), StatusCode::NOT_FOUND);
-        }
+    #[tokio::test]
+    #[ignore]
+    async fn test_request_cert_ok1() {
+        let lets_entrypt = LetsEntrypt::_new(
+            String::from("lsk@gmail.com"),
+            String::from("www.silverwind.top"),
+        );
+        let request_result = lets_entrypt
+            .request_cert(DirectoryUrl::LetsEncryptStaging)
+            .await;
+        assert!(request_result.is_err());
     }
 
     #[tokio::test]

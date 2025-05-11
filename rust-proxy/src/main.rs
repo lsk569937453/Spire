@@ -24,8 +24,7 @@ mod utils;
 use tracing_subscriber::filter::LevelFilter;
 #[macro_use]
 extern crate tracing;
-#[macro_use]
-extern crate anyhow;
+
 #[macro_use]
 extern crate axum;
 mod vojo;
@@ -40,10 +39,13 @@ use tracing_subscriber::reload::Handle;
 async fn main() -> Result<(), AppError> {
     let reload_handle = setup_logger()?;
 
-    if let Err(e) = run_app(reload_handle).await {
-        error!("Application failed to start: {:?}", e);
-        return Err(e);
-    }
+fn main() -> Result<(), AppError> {
+    let num = num_cpus::get();
+    let rt = runtime::Builder::new_multi_thread()
+        .worker_threads(num * 2)
+        .enable_all()
+        .build()
+        .unwrap();
 
     rt.block_on(async {
         if let Err(e) = start().await {
@@ -68,7 +70,10 @@ async fn start() -> Result<(), AppError> {
     println!("config is {:?}", config);
     let _ = reload_handle.modify(|filter| {
         *filter = filter::Targets::new()
-            .with_targets(vec![("delay_timer", LevelFilter::OFF), ("hyper_util", LevelFilter::OFF)])
+            .with_targets(vec![
+                ("delay_timer", LevelFilter::OFF),
+                ("hyper_util", LevelFilter::OFF),
+            ])
             .with_default(config.static_config.get_log_level())
     });
 
