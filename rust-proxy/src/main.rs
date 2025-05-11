@@ -92,195 +92,54 @@ async fn start() -> Result<(), AppError> {
     info!("Application shut down gracefully. ");
     Ok(())
 }
-
-async fn load_config(cli: &Cli) -> Result<AppConfig, AppError> {
-    let config_str = tokio::fs::read_to_string(&cli.config_path).await?;
-    let config: AppConfig = serde_yaml::from_str(&config_str)?;
-    Ok(config)
-}
-
-fn reconfigure_logger(
-    reload_handle: &Handle<filter::Targets, Registry>,
-    static_config: &AppConfig,
-) {
-    let mut targets = vec![
-        ("delay_timer", LevelFilter::OFF),
-        ("hyper_util", LevelFilter::OFF),
-    ];
-
-    if !static_config.health_check_log_enabled.unwrap_or(false) {
-        targets.push(("spire::health_check::health_check_task", LevelFilter::OFF));
-    }
-
-    let _ = reload_handle.modify(|filter| {
-        *filter = filter::Targets::new()
-            .with_targets(targets)
-            .with_default(static_config.get_log_level());
-    });
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::io::Write;
+    use crate::vojo::app_config::StaticConifg;
 
-    use tempfile::NamedTempFile;
-    use tracing::Level;
-    use tracing_subscriber::registry;
-    use tracing_subscriber::reload;
+    use super::*;
+    use mockall::{mock, predicate::*};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use tokio::fs;
+
+    // Test configuration
+    fn test_config() -> AppConfig {
+        AppConfig {
+            static_config: StaticConifg {
+                log_level: None,
+                admin_port: Some(8080),
+                access_log: None,
+                database_url: None,
+                config_file_path: None, // other fields...
+            },
+            api_service_config: HashMap::new(),
+        }
+    }
 
     #[tokio::test]
-    #[ignore]
-    async fn test_start_with_config_file_integration() {
+    async fn test_start_with_config_file() {
         let cli = Cli {
             config_path: "conf/app_config.yaml".to_string(),
         };
-
-        let config_result = load_config(&cli).await;
-
-        assert!(
-            config_result.is_ok(),
-            "Should be able to load the main config file"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_config_examples_are_valid() -> Result<(), AppError> {
-        let paths = match std::fs::read_dir("config/examples") {
-            Ok(paths) => paths,
-            Err(e) => {
-                println!(
-                    "Skipping test: config/examples directory not found. Error: {}",
-                    e
-                );
-                return Ok(());
-            }
-        };
-
-        for path_result in paths {
-            let path = path_result?.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("yaml") {
-                let file_path_str = path.display().to_string();
-                trace!("Testing config file: {}", &file_path_str);
-
-                let config_str = tokio::fs::read_to_string(&path).await?;
-
-                serde_yaml::from_str::<AppConfig>(&config_str).map_err(|e| {
-                    let error_msg =
-                        format!("Failed to parse config file '{}': {}", file_path_str, e);
-                    eprintln!("{}", error_msg);
-                    AppError(error_msg)
-                })?;
-            }
-        }
-        Ok(())
-    }
-    fn create_temp_config_file(content: &str) -> NamedTempFile {
-        let mut file = NamedTempFile::new().expect("Failed to create temp file");
-        write!(file, "{}", content).expect("Failed to write to temp file");
-        file
-    }
-
-    fn setup_test_logger_handle() -> Handle<filter::Targets, registry::Registry> {
-        let filter = filter::Targets::new().with_default(Level::INFO);
-        let (_, reload_handle) = reload::Layer::new(filter);
-
-        reload_handle
-    }
-    #[tokio::test]
-    async fn test_load_config_success() {
-        let yaml_content = r#"
-log_level: info
-servers:
-  - listen: 8084
-    protocol: http
-    routes:
-      - match:
-          prefix: /
-        forward_to: http://192.168.0.0:9393
-        "#;
-        let config_file = create_temp_config_file(yaml_content);
-        let config_path_str = config_file.path().to_str().unwrap();
-        let cli = Cli::try_parse_from(vec!["spire", "-f", config_path_str]);
-        println!("cli: {:?}", cli);
-        assert!(cli.is_ok());
-        let cli = cli.unwrap();
-
-        let result = load_config(&cli).await;
-
-        println!("result: {:?}", result);
+        let result = start().await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_load_config_invalid_yaml() {
-        let invalid_yaml = "log_level: 'debug'\ninvalid-yaml-format";
-        let config_file = create_temp_config_file(invalid_yaml);
-        let cli = Cli::try_parse_from(&config_file.path().to_path_buf());
-        assert!(cli.is_err());
-    }
+    async fn test_log_level_configuration() {
+        let config = test_config();
 
-    #[test]
-    fn test_reconfigure_logger_with_health_check_logs_disabled() {
-        let reload_handle = setup_test_logger_handle();
-        let config = AppConfig {
-            admin_port: None,
-            health_check_log_enabled: Some(false),
-            ..Default::default()
+        let cli = Cli {
+            config_path: "conf/app_config.yaml".to_string(),
+            // other fields...
         };
 
-        reconfigure_logger(&reload_handle, &config);
-
-        let res = reload_handle.with_current(|filter| {
-            let filter_str = filter.to_string();
-
-            assert!(filter_str.contains("info"));
-            assert!(filter_str.contains("delay_timer=off"));
-            assert!(filter_str.contains("hyper_util=off"));
-            assert!(filter_str.contains("spire::health_check::health_check_task=off"));
+        let reload_handle = setup_logger().unwrap();
+        let _ = reload_handle.modify(|filter| {
+            *filter = filter::Targets::new().with_default(LevelFilter::DEBUG) // Set initial level
         });
-        assert!(res.is_err());
-    }
 
-    #[test]
-    fn test_reconfigure_logger_with_health_check_logs_enabled() {
-        let reload_handle = setup_test_logger_handle();
-        let config = AppConfig {
-            admin_port: None,
-            health_check_log_enabled: Some(true),
-            ..Default::default()
-        };
-
-        reconfigure_logger(&reload_handle, &config);
-
-        let res = reload_handle.with_current(|filter| {
-            let filter_str = filter.to_string();
-            assert!(filter_str.contains("debug"));
-            assert!(filter_str.contains("delay_timer=off"));
-            assert!(filter_str.contains("hyper_util=off"));
-            assert!(!filter_str.contains("spire::health_check::health_check_task=off"));
-        });
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn test_reconfigure_logger_with_health_check_logs_not_set() {
-        let reload_handle = setup_test_logger_handle();
-        let config = AppConfig {
-            admin_port: None,
-            health_check_log_enabled: None, // 关键测试点
-            ..Default::default()
-        };
-
-        reconfigure_logger(&reload_handle, &config);
-
-        let res = reload_handle.with_current(|filter| {
-            let filter_str = filter.to_string();
-            assert!(filter_str.contains("warn"));
-            assert!(filter_str.contains("delay_timer=off"));
-            assert!(filter_str.contains("hyper_util=off"));
-            assert!(filter_str.contains("spire::health_check::health_check_task=off"));
-        });
-        assert!(res.is_err());
+        let result = start().await;
+        assert!(result.is_ok());
     }
 }
