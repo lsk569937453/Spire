@@ -120,31 +120,40 @@ impl HealthCheck {
     }
 
     async fn do_health_check(&mut self) -> Result<(), AppError> {
-        let app_config = self.shared_config.shared_data.lock()?.clone();
-        let mut route_list = HashMap::new();
-        for (_, service_config) in app_config.api_service_config.iter() {
-            for route in &service_config.route_configs {
-                if route.health_check.is_none() || route.liveness_config.is_none() {
-                    continue;
-                }
-                let endpoint_list = get_endpoint_list(route.clone()).await;
-
-                let health_check = route.health_check.as_ref().ok_or("Health check is none!")?;
-                let liveness_config = route
-                    .liveness_config
-                    .as_ref()
-                    .ok_or("Liveness config is none!")?;
-
-                let task_key = TaskKey::new(
-                    route.route_id.clone(),
-                    health_check.clone(),
-                    endpoint_list,
-                    liveness_config.min_liveness_count,
-                );
-
-                route_list.insert(task_key, route.clone());
-            }
-        }
+        info!("Start health check loop!");
+        let app_config = self.shared_config.shared_data.lock().unwrap().clone();
+        let handles = app_config
+            .api_service_config
+            .iter()
+            .flat_map(|(_, item)| item.service_config.routes.clone())
+            .filter(|item| item.health_check.is_some() && item.liveness_config.is_some())
+            .map(|item| {
+                info!("The health check route is {:?}", item);
+                tokio::spawn(async move {
+                    let endpoint_list = get_endpoint_list(item.clone()).await;
+                    let min_liveness_count =
+                        item.liveness_config.clone().unwrap().min_liveness_count;
+                    (
+                        TaskKey::new(
+                            item.route_id.clone(),
+                            item.health_check.clone().unwrap(),
+                            endpoint_list,
+                            min_liveness_count,
+                        ),
+                        item,
+                    )
+                })
+            });
+        let route_list = join_all(handles)
+            .await
+            .iter()
+            .filter(|item| item.is_ok())
+            .map(|item| {
+                let (a, b) = item.as_ref().unwrap();
+                (a.clone(), b.clone())
+            })
+            .collect::<HashMap<TaskKey, Route>>();
+        info!("The route list is {:?}", route_list);
         self.task_id_map.retain(|route_id, task_id| {
             if !route_list.contains_key(route_id) {
                 let res = self.delay_timer.remove_task(*task_id);
@@ -158,7 +167,8 @@ impl HealthCheck {
             true
         });
         let old_map = self.task_id_map.clone();
-
+        info!("the route list old is {:?}", old_map);
+        info!("the route list new is {:?}", route_list);
         route_list
             .iter()
             .filter(|(task_key, _)| !old_map.contains_key(&(*task_key).clone()))
@@ -192,8 +202,9 @@ async fn do_http_health_check<HC: HttpClientTrait + Send + Sync + 'static>(
     http_health_check_client: Arc<HC>,
     shared_config: SharedConfig,
 ) -> Result<(), AppError> {
-    info!("Do http health check,the route is {:?}!", route);
-    let route_list = route.router.get_all_route().await?;
+    info!("Do http health check!");
+    let route_list = route.route_cluster.get_all_route().await?;
+    let http_client = http_health_check_client.http_clients.clone();
     let mut set = JoinSet::new();
     for item in route_list {
         let http_client_shared = http_health_check_client.clone();
@@ -221,19 +232,20 @@ async fn do_http_health_check<HC: HttpClientTrait + Send + Sync + 'static>(
             (res, cloned_route, item)
         });
     }
+    info!("Start to wait for the response!,{:?}", set);
     while let Some(response_result1) = set.join_next().await {
-        match response_result1 {
-            Ok((res, route, base_route)) => {
-                let mut lock = shared_config.shared_data.lock()?;
-                let shared_route = lock
-                    .api_service_config
-                    .iter_mut()
-                    .flat_map(|(_, item)| &mut item.route_configs)
-                    .find(|item| item.route_id == route.route_id);
-                let new_route = match shared_route {
-                    Some(route) => route,
-                    None => {
-                        continue;
+        if let Ok((response_result2, base_route)) = response_result1 {
+            info!("The response result is {:?}", response_result2);
+            match response_result2 {
+                Ok(Ok(t)) => if t.status() == StatusCode::OK {},
+                _ => {
+                    info!("timeout");
+                    if let Some(current_liveness_config) = route.liveness_config.clone() {
+                    } else {
+                        error!(
+                            "Can not update the route-{} to fail,as the liveness_status is empty!",
+                            base_route.endpoint.clone()
+                        );
                     }
                 };
 
@@ -248,9 +260,8 @@ async fn do_http_health_check<HC: HttpClientTrait + Send + Sync + 'static>(
                     let _ = new_route.router.update_route_alive(base_route, false);
                 }
             }
-            Err(e) => {
-                error!("set join error,the error is {}", e);
-            }
+        } else {
+            error!("response_result1 is timeout");
         }
     }
     Ok(())
