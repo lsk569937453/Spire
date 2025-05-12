@@ -235,8 +235,8 @@ impl RandomRoute {
     }
 
     fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-        let mut rng = rand::thread_rng();
-        let random_index = rng.gen_range(0..self.routes.len());
+        let mut rng = rand::rng();
+        let random_index = rng.random_range(0..self.routes.len());
         Ok(self.routes[random_index].base_route.clone())
     }
 }
@@ -299,5 +299,178 @@ impl WeightBasedRoute {
         } else {
             Err(AppError(String::from("WeightRoute get route error")))
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::HeaderValue;
+
+    #[tokio::test]
+    async fn test_poll_route() {
+        let mut poll_route = PollRoute {
+            routes: vec![
+                PollBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: "server1".to_string(),
+                        ..Default::default()
+                    },
+                },
+                PollBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: "server2".to_string(),
+                        ..Default::default()
+                    },
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            poll_route.get_route(HeaderMap::new()).unwrap().endpoint,
+            "server2"
+        );
+        assert_eq!(
+            poll_route.get_route(HeaderMap::new()).unwrap().endpoint,
+            "server1"
+        );
+        assert_eq!(
+            poll_route.get_route(HeaderMap::new()).unwrap().endpoint,
+            "server2"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_header_based_route() {
+        let header_route = HeaderBasedRoute {
+            routes: vec![
+                HeaderRoute {
+                    header_key: "x-version".to_string(),
+                    header_value_mapping_type: HeaderValueMappingType::Text(TextMatch {
+                        value: "v1".to_string(),
+                    }),
+                    base_route: BaseRoute {
+                        endpoint: "server_v1".to_string(),
+                        ..Default::default()
+                    },
+                },
+                HeaderRoute {
+                    header_key: "x-debug".to_string(),
+                    header_value_mapping_type: HeaderValueMappingType::Regex(RegexMatch {
+                        value: r"true|1".to_string(),
+                    }),
+                    base_route: BaseRoute {
+                        endpoint: "debug_server".to_string(),
+                        ..Default::default()
+                    },
+                },
+            ],
+        };
+
+        let mut strategy = LoadbalancerStrategy::HeaderBased(header_route);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-version", HeaderValue::from_static("v1"));
+        assert_eq!(strategy.get_route(headers).unwrap().endpoint, "server_v1");
+
+        // 测试正则匹配
+        let mut headers = HeaderMap::new();
+        headers.insert("x-debug", HeaderValue::from_static("true"));
+        assert_eq!(
+            strategy.get_route(headers).unwrap().endpoint,
+            "debug_server"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_random_route() {
+        let mut strategy = LoadbalancerStrategy::Random(RandomRoute {
+            routes: vec![
+                RandomBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: "server_a".to_string(),
+                        ..Default::default()
+                    },
+                },
+                RandomBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: "server_b".to_string(),
+                        ..Default::default()
+                    },
+                },
+            ],
+        });
+
+        let mut results = vec![];
+        for _ in 0..100 {
+            let route = strategy.get_route(HeaderMap::new()).unwrap();
+            results.push(route.endpoint);
+        }
+        assert!(results.contains(&"server_a".to_string()));
+        assert!(results.contains(&"server_b".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_weight_based_route() {
+        let mut strategy = LoadbalancerStrategy::WeightBased(WeightBasedRoute {
+            routes: vec![
+                WeightRoute {
+                    weight: 3,
+                    base_route: BaseRoute {
+                        endpoint: "server_heavy".to_string(),
+                        ..Default::default()
+                    },
+                    index: 0,
+                },
+                WeightRoute {
+                    weight: 1,
+                    base_route: BaseRoute {
+                        endpoint: "server_light".to_string(),
+                        ..Default::default()
+                    },
+                    index: 0,
+                },
+            ],
+        });
+
+        let mut results = vec![];
+        for _ in 0..4 {
+            let route = strategy.get_route(HeaderMap::new()).unwrap();
+            results.push(route.endpoint);
+        }
+        assert_eq!(results[0..3], vec!["server_heavy"; 3]);
+        assert_eq!(results[3], "server_light");
+    }
+
+    #[tokio::test]
+    async fn test_get_all_routes() {
+        let mut poll_strategy = LoadbalancerStrategy::PollRoute(PollRoute {
+            routes: vec![
+                PollBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: "s1".to_string(),
+                        ..Default::default()
+                    },
+                },
+                PollBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: "s2".to_string(),
+                        ..Default::default()
+                    },
+                },
+            ],
+            ..Default::default()
+        });
+
+        let routes = poll_strategy.get_all_route().await.unwrap();
+        assert_eq!(routes.len(), 2);
+        assert_eq!(routes[0].endpoint, "s1");
+        assert_eq!(routes[1].endpoint, "s2");
+    }
+
+    #[tokio::test]
+    async fn test_empty_routes() {
+        let mut strategy = LoadbalancerStrategy::WeightBased(WeightBasedRoute { routes: vec![] });
+        assert!(strategy.get_route(HeaderMap::new()).is_err());
     }
 }

@@ -10,8 +10,6 @@ use iprange::IpRange;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::net::Ipv4Addr;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use super::app_error::AppError;
 
@@ -232,5 +230,182 @@ impl FixedWindowRateLimit {
     }
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+    
+    use http::{HeaderName, HeaderValue};
+    fn create_headers(key: &str, value: &str) -> HeaderMap<HeaderValue> {
+        let mut headers = HeaderMap::new();
+
+        let ss = HeaderName::from_str(key).unwrap();
+        headers.insert(ss, HeaderValue::from_str(value).unwrap());
+        headers
+    }
+
+    #[test]
+    fn test_token_bucket_basic() {
+        let mut tb = TokenBucketRateLimit {
+            rate_per_unit: 1,
+            unit: TimeUnit::Second,
+            capacity: 2,
+            limit_location: LimitLocation::IP(IPBasedRatelimit {
+                value: "127.0.0.1".to_string(),
+            }),
+            current_count: 2,
+            lock: 0,
+            last_update_time: UNIX_EPOCH,
+        };
+
+        // First request should pass
+        assert!(!tb
+            .should_limit(HeaderMap::new(), "127.0.0.1".to_string())
+            .unwrap());
+        // Second request should pass
+        assert!(!tb
+            .should_limit(HeaderMap::new(), "127.0.0.1".to_string())
+            .unwrap());
+        // Third request should be limited
+        assert!(tb
+            .should_limit(HeaderMap::new(), "127.0.0.1".to_string())
+            .unwrap());
+    }
+
+    #[test]
+    fn test_fixed_window_basic() {
+        let mut fw = FixedWindowRateLimit {
+            rate_per_unit: 2,
+            unit: TimeUnit::Second,
+            limit_location: LimitLocation::Header(HeaderBasedRatelimit {
+                key: "X-User".to_string(),
+                value: "test".to_string(),
+            }),
+            count_map: HashMap::new(),
+        };
+
+        let headers = create_headers("X-User", "test");
+
+        // First request
+        assert!(!fw
+            .should_limit(headers.clone(), "127.0.0.1".to_string())
+            .unwrap());
+        // Second request
+        assert!(!fw
+            .should_limit(headers.clone(), "127.0.0.1".to_string())
+            .unwrap());
+        // Third request should be limited
+        assert!(fw.should_limit(headers, "127.0.0.1".to_string()).unwrap());
+    }
+
+    #[test]
+    fn test_ip_matching() {
+        let ip_limit = LimitLocation::IP(IPBasedRatelimit {
+            value: "192.168.1.1".to_string(),
+        });
+
+        // Matching IP
+        assert!(matched(
+            ip_limit.clone(),
+            HeaderMap::new(),
+            "192.168.1.1".to_string()
+        )
+        .unwrap());
+        // Non-matching IP
+        assert!(!matched(ip_limit, HeaderMap::new(), "10.0.0.1".to_string()).unwrap());
+    }
+
+    #[test]
+    fn test_header_matching() {
+        let header_limit = LimitLocation::Header(HeaderBasedRatelimit {
+            key: "Authorization".to_string(),
+            value: "Bearer token".to_string(),
+        });
+
+        // Matching header
+        let headers = create_headers("Authorization", "Bearer token");
+        assert!(matched(header_limit.clone(), headers, "127.0.0.1".to_string()).unwrap());
+
+        // Non-matching value
+        let headers = create_headers("Authorization", "Invalid");
+        assert!(!matched(header_limit.clone(), headers, "127.0.0.1".to_string()).unwrap());
+
+        // Missing header
+        assert!(!matched(header_limit, HeaderMap::new(), "127.0.0.1".to_string()).unwrap());
+    }
+
+    #[test]
+    fn test_ip_range_matching() {
+        let ip_range_limit = LimitLocation::Iprange(IpRangeBasedRatelimit {
+            value: "192.168.1.0/24".to_string(),
+        });
+
+        // IP in range
+        assert!(matched(
+            ip_range_limit.clone(),
+            HeaderMap::new(),
+            "192.168.1.100".to_string()
+        )
+        .unwrap());
+
+        // IP out of range
+        assert!(!matched(ip_range_limit, HeaderMap::new(), "192.168.2.1".to_string()).unwrap());
+    }
+
+    #[test]
+    fn test_fixed_window_map_eviction() {
+        let mut fw = FixedWindowRateLimit {
+            rate_per_unit: 1,
+            unit: TimeUnit::MillionSecond,
+            limit_location: LimitLocation::IP(IPBasedRatelimit {
+                value: "127.0.0.1".to_string(),
+            }),
+            count_map: HashMap::with_capacity(DEFAULT_FIXEDWINDOW_MAP_SIZE as usize),
+        };
+
+        // Fill the map to capacity
+        for i in 0..DEFAULT_FIXEDWINDOW_MAP_SIZE {
+            let key = format!("key{}", i);
+            fw.count_map.insert(key, 1);
+        }
+
+        // Add one more entry should evict the oldest
+        fw.should_limit(HeaderMap::new(), "127.0.0.1".to_string())
+            .unwrap();
+        assert_eq!(fw.count_map.len(), DEFAULT_FIXEDWINDOW_MAP_SIZE as usize);
+    }
+
+    #[test]
+    fn test_token_refill() {
+        let mut tb = TokenBucketRateLimit {
+            rate_per_unit: 2, // 2 tokens per second
+            unit: TimeUnit::Second,
+            capacity: 4,
+            limit_location: LimitLocation::default(),
+            current_count: 0,
+            lock: 0,
+            last_update_time: SystemTime::now(),
+        };
+
+        // Simulate 500ms passing
+        tb.last_update_time = SystemTime::now() - std::time::Duration::from_millis(500);
+        tb.should_limit(HeaderMap::new(), "127.0.0.1".to_string())
+            .unwrap();
+
+        // Should have refilled 1 token (500ms * 2 tokens/s = 1 token)
+        assert_eq!(tb.current_count, 0); // Because we used the refilled token
+    }
+
+    #[test]
+    fn test_invalid_ip_range() {
+        let ip_range_limit = LimitLocation::Iprange(IpRangeBasedRatelimit {
+            value: "invalid_ip".to_string(),
+        });
+
+        let result = matched(ip_range_limit, HeaderMap::new(), "192.168.1.1".to_string());
+        assert!(result.is_err());
     }
 }

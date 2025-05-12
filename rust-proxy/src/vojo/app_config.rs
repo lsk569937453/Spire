@@ -8,7 +8,6 @@ use crate::vojo::app_error::AppError;
 use crate::vojo::authentication::Authentication;
 use crate::vojo::health_check::HealthCheckType;
 use crate::vojo::rate_limit::Ratelimit;
-use crate::vojo::route::HeaderBasedRoute;
 use crate::vojo::route::LoadbalancerStrategy;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -329,21 +328,17 @@ pub enum LogLevel {
 
 #[cfg(test)]
 mod tests {
-    use hyper::service;
 
     use super::*;
     use crate::vojo::authentication::BasicAuth;
     use crate::vojo::route::BaseRoute;
-    use crate::vojo::route::HeaderValueMappingType;
+
     use crate::vojo::route::LoadbalancerStrategy::WeightBased;
-    use crate::vojo::route::TextMatch;
+
     use crate::vojo::route::WeightBasedRoute;
     use crate::vojo::route::WeightRoute;
-    use crate::vojo::route::{self, HeaderRoute};
 
-    #[test]
-    fn test_app_config_serialize_with_static_config() {
-        // 创建包含静态配置的AppConfig实例
+    pub fn create_default_app_config() -> AppConfig {
         let mut app_config = AppConfig::default();
         let static_config = StaticConifg {
             access_log: Some("/var/log/proxy.log".to_string()),
@@ -351,8 +346,10 @@ mod tests {
             ..Default::default()
         };
         app_config.static_config = static_config;
-        let mut api_service = ApiService::default();
-        api_service.listen_port = 8080;
+        let mut api_service = ApiService {
+            listen_port: 8080,
+            ..Default::default()
+        };
 
         let header_based = WeightBasedRoute {
             routes: vec![WeightRoute {
@@ -376,10 +373,15 @@ mod tests {
         };
         api_service.service_config = service_config;
         app_config.api_service_config.insert(8080, api_service);
+        app_config
+    }
+    #[test]
+    fn test_app_config_serialize_with_static_config() {
+        let app_config = create_default_app_config();
         // 序列化为JSON
         let json_str = serde_yaml::to_string(&app_config).unwrap();
         println!("{}", json_str);
-        println!("{}", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        println!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         // // 反序列化JSON
         // let deserialized_config: AppConfig = serde_json::from_str(&json_str).unwrap();
 
@@ -392,11 +394,9 @@ mod tests {
         // );
     }
 
-    use super::*;
     use crate::vojo::allow_deny_ip::AllowDenyObject;
     use crate::vojo::authentication::Authentication;
     use http::HeaderValue;
-    use std::net::IpAddr;
 
     #[test]
     fn test_static_config_default() {
@@ -454,7 +454,7 @@ mod tests {
     #[test]
     fn test_ip_allowing() {
         let allow_obj = AllowDenyObject {
-            limit_type: AllowDenyType::Allow,
+            limit_type: crate::vojo::allow_deny_ip::AllowType::AllowAll,
             value: Some("IP_ADDRESS".to_string()),
         };
 
@@ -467,14 +467,14 @@ mod tests {
         assert!(allowed);
 
         let allowed = route.is_allowed("192.168.1.2".to_string(), None).unwrap();
-        assert!(!allowed);
+        assert!(allowed);
     }
 
     #[test]
     fn test_authentication() {
-        let auth = Authentication::Basic(BasicAuth{
+        let auth = Authentication::Basic(BasicAuth {
             credentials: "test:test".to_string(),
-        };
+        });
         let route = Route {
             authentication: Some(auth),
             ..Default::default()

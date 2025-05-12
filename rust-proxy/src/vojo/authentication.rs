@@ -71,3 +71,150 @@ impl ApiKeyAuth {
         Ok(header_value == self.value)
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::HeaderValue;
+
+    // BasicAuth 测试
+    #[test]
+    fn test_basic_auth_success() {
+        let mut auth = BasicAuth {
+            credentials: "user:pass".to_string(),
+        };
+        let encoded = general_purpose::STANDARD_NO_PAD.encode("user:pass");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_str(&format!("Basic {}", encoded)).unwrap(),
+        );
+
+        assert!(auth.check_authentication(headers).unwrap());
+    }
+
+    #[test]
+    fn test_basic_auth_missing_header() {
+        let mut auth = BasicAuth {
+            credentials: "user:pass".to_string(),
+        };
+        let headers = HeaderMap::new();
+
+        assert!(!auth.check_authentication(headers).unwrap());
+    }
+
+    #[test]
+    fn test_basic_auth_invalid_format() {
+        let mut auth = BasicAuth {
+            credentials: "user:pass".to_string(),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", HeaderValue::from_static("Bearer token"));
+
+        assert!(!auth.check_authentication(headers).unwrap());
+    }
+
+    #[test]
+    fn test_basic_auth_wrong_credentials() {
+        let mut auth = BasicAuth {
+            credentials: "user:wrong".to_string(),
+        };
+        let encoded = general_purpose::STANDARD_NO_PAD.encode("user:pass");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_str(&format!("Basic {}", encoded)).unwrap(),
+        );
+
+        assert!(!auth.check_authentication(headers).unwrap());
+    }
+
+    #[test]
+    fn test_api_key_auth_success() {
+        let mut auth = ApiKeyAuth {
+            key: "X-API-KEY".to_string(),
+            value: "secret".to_string(),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("X-API-KEY", HeaderValue::from_static("secret"));
+
+        assert!(auth.check_authentication(headers).unwrap());
+    }
+
+    #[test]
+    fn test_api_key_auth_missing_header() {
+        let mut auth = ApiKeyAuth {
+            key: "X-API-KEY".to_string(),
+            value: "secret".to_string(),
+        };
+        let headers = HeaderMap::new();
+
+        assert!(!auth.check_authentication(headers).unwrap());
+    }
+
+    #[test]
+    fn test_api_key_auth_wrong_value() {
+        let mut auth = ApiKeyAuth {
+            key: "X-API-KEY".to_string(),
+            value: "secret".to_string(),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("X-API-KEY", HeaderValue::from_static("wrong"));
+
+        assert!(!auth.check_authentication(headers).unwrap());
+    }
+
+    #[test]
+    fn test_api_key_auth_case_sensitive() {
+        let mut auth = ApiKeyAuth {
+            key: "X-API-KEY".to_string(),
+            value: "Secret".to_string(),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("X-API-KEY", HeaderValue::from_static("secret"));
+
+        assert!(!auth.check_authentication(headers).unwrap());
+    }
+
+    #[test]
+    fn test_authentication_enum_basic() {
+        let mut auth = Authentication::Basic(BasicAuth {
+            credentials: "admin:admin".to_string(),
+        });
+        let encoded = general_purpose::STANDARD_NO_PAD.encode("admin:admin");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_str(&format!("Basic {}", encoded)).unwrap(),
+        );
+
+        assert!(auth.check_authentication(headers).unwrap());
+    }
+
+    #[test]
+    fn test_authentication_enum_api_key() {
+        let mut auth = Authentication::ApiKey(ApiKeyAuth {
+            key: "Authorization".to_string(),
+            value: "Bearer token".to_string(),
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", HeaderValue::from_static("Bearer token"));
+
+        assert!(auth.check_authentication(headers).unwrap());
+    }
+
+    #[test]
+    fn test_invalid_header_value() {
+        let mut auth = BasicAuth {
+            credentials: "user:pass".to_string(),
+        };
+        let mut headers = HeaderMap::new();
+        let invalid_value = vec![0xff, 0xff, 0xff];
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_bytes(&invalid_value).unwrap(),
+        );
+
+        let result = auth.check_authentication(headers);
+        assert!(result.is_err());
+    }
+}
