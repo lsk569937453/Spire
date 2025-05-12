@@ -92,6 +92,7 @@ impl HealthCheck {
     }
 
     async fn do_health_check(&mut self) -> Result<(), AppError> {
+        info!("Start health check loop!");
         let app_config = self.shared_config.shared_data.lock().unwrap().clone();
         let handles = app_config
             .api_service_config
@@ -99,6 +100,7 @@ impl HealthCheck {
             .flat_map(|(_, item)| item.service_config.routes.clone())
             .filter(|item| item.health_check.is_some() && item.liveness_config.is_some())
             .map(|item| {
+                info!("The health check route is {:?}", item);
                 tokio::spawn(async move {
                     let endpoint_list = get_endpoint_list(item.clone()).await;
                     let min_liveness_count =
@@ -123,7 +125,7 @@ impl HealthCheck {
                 (a.clone(), b.clone())
             })
             .collect::<HashMap<TaskKey, Route>>();
-
+        info!("The route list is {:?}", route_list);
         self.task_id_map.retain(|route_id, task_id| {
             if !route_list.contains_key(route_id) {
                 let res = self.delay_timer.remove_task(*task_id);
@@ -137,10 +139,13 @@ impl HealthCheck {
             true
         });
         let old_map = self.task_id_map.clone();
+        info!("the route list old is {:?}", old_map);
+        info!("the route list new is {:?}", route_list);
         route_list
             .iter()
             .filter(|(task_key, _)| !old_map.contains_key(&(*task_key).clone()))
             .for_each(|(task_key, route)| {
+                info!("The route is {:?}", route);
                 let current_id = self.current_id.fetch_add(1, Ordering::SeqCst);
                 let submit_task_result =
                     submit_task(current_id, route.clone(), self.health_check_client.clone());
@@ -164,6 +169,7 @@ async fn do_http_health_check(
     timeout_number: i32,
     http_health_check_client: HealthCheckClient,
 ) -> Result<(), AppError> {
+    info!("Do http health check!");
     let route_list = route.route_cluster.get_all_route().await?;
     let http_client = http_health_check_client.http_clients.clone();
     let mut set = JoinSet::new();
@@ -196,11 +202,14 @@ async fn do_http_health_check(
             (res, item)
         });
     }
+    info!("Start to wait for the response!,{:?}", set);
     while let Some(response_result1) = set.join_next().await {
         if let Ok((response_result2, base_route)) = response_result1 {
+            info!("The response result is {:?}", response_result2);
             match response_result2 {
                 Ok(Ok(t)) => if t.status() == StatusCode::OK {},
                 _ => {
+                    info!("timeout");
                     if let Some(current_liveness_config) = route.liveness_config.clone() {
                     } else {
                         error!(
@@ -210,6 +219,8 @@ async fn do_http_health_check(
                     }
                 }
             }
+        } else {
+            error!("response_result1 is timeout");
         }
     }
     Ok(())
@@ -219,6 +230,7 @@ fn submit_task(
     route: Route,
     health_check_clients: HealthCheckClient,
 ) -> Result<Task, AppError> {
+    info!("Submit task!");
     if let Some(health_check) = route.health_check.clone() {
         let mut task_builder = TaskBuilder::default();
         let base_param = health_check.get_base_param();

@@ -33,3 +33,11 @@ services:
               - base_route:
                   endpoint: http://localhost:7777/
                 weight: 3
+          health_check:
+            type: HttpGet
+            base_health_check_param:
+              timeout: 5
+              interval: 5
+            path: /health
+          liveness_config:
+            min_liveness_count: 1

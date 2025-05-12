@@ -2,6 +2,7 @@ use super::allow_deny_ip::AllowResult;
 
 use crate::constants::common_constants::DEFAULT_ADMIN_PORT;
 use crate::constants::common_constants::DEFAULT_LOG_LEVEL;
+use crate::utils::uuid::get_uuid;
 use crate::vojo::allow_deny_ip::AllowDenyObject;
 use crate::vojo::anomaly_detection::AnomalyDetectionType;
 use crate::vojo::app_error::AppError;
@@ -94,7 +95,7 @@ pub struct LivenessStatus {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Route {
-    #[serde(skip_deserializing, skip_serializing)]
+    #[serde(skip_deserializing, skip_serializing, default = "default_route_id")]
     pub route_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_name: Option<String>,
@@ -117,6 +118,9 @@ pub struct Route {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ratelimit: Option<Ratelimit>,
     pub route_cluster: LoadbalancerStrategy,
+}
+fn default_route_id() -> String {
+    get_uuid()
 }
 
 impl Route {
@@ -331,6 +335,8 @@ mod tests {
 
     use super::*;
     use crate::vojo::authentication::BasicAuth;
+    use crate::vojo::health_check::BaseHealthCheckParam;
+    use crate::vojo::health_check::HttpHealthCheckParam;
     use crate::vojo::route::BaseRoute;
 
     use crate::vojo::route::LoadbalancerStrategy::WeightBased;
@@ -364,6 +370,17 @@ mod tests {
         let route = Route {
             route_id: "test_route".to_string(),
             route_cluster: LoadbalancerStrategy::WeightBased(header_based),
+            health_check: Some(HealthCheckType::HttpGet(HttpHealthCheckParam {
+                path: "/health".to_string(),
+                base_health_check_param: BaseHealthCheckParam {
+                    interval: 5,
+                    timeout: 5,
+                },
+            })),
+
+            liveness_config: Some(LivenessConfig {
+                min_liveness_count: 1,
+            }),
             ..Default::default()
         };
         let service_config = ServiceConfig {
