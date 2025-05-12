@@ -94,8 +94,7 @@ async fn check(
     let route = service_config_clone.routes.first().unwrap();
     let is_allowed = route
         .clone()
-        .is_allowed(remote_addr.ip().to_string(), None)
-        ?;
+        .is_allowed(remote_addr.ip().to_string(), None)?;
     Ok(is_allowed)
 }
 async fn get_route_cluster(
@@ -230,4 +229,143 @@ mod tests {
     }
     let mut route = service_config_clone.first().unwrap().route_cluster.clone();
     route.get_route(HeaderMap::new()).map(|s| s.endpoint)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vojo::app_config::{ApiService, AppConfig, Route, ServiceConfig};
+    use crate::vojo::route::BaseRoute;
+    use crate::vojo::route::LoadbalancerStrategy;
+
+    use crate::vojo::route::WeightBasedRoute;
+    use crate::vojo::route::WeightRoute;
+
+    use std::collections::HashMap;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use std::sync::{Arc, Mutex};
+
+    fn create_mock_shared_config(
+        port: i32,
+        allowed_ips: Vec<&str>,
+        endpoint: &str,
+    ) -> SharedConfig {
+        let header_based = WeightBasedRoute {
+            routes: vec![WeightRoute {
+                weight: 1,
+                index: 0,
+                base_route: BaseRoute {
+                    endpoint: "http://www.baidu.com".to_string(),
+                    ..Default::default()
+                },
+            }],
+        };
+        let route = Route {
+            route_id: "test_route".to_string(),
+            route_cluster: LoadbalancerStrategy::WeightBased(header_based),
+            ..Default::default()
+        };
+        let api_service = ApiService {
+            service_config: ServiceConfig {
+                routes: vec![route],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut api_service_config = HashMap::new();
+        api_service_config.insert(port, api_service);
+
+        SharedConfig {
+            shared_data: Arc::new(Mutex::new(AppConfig {
+                api_service_config,
+                ..Default::default()
+            })),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_allowed_ip() {
+        let port = 8080;
+        let shared_config = create_mock_shared_config(port, vec!["127.0.0.1"], "127.0.0.1:8080");
+
+        let allowed_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
+        let denied_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), 1234);
+
+        // 测试允许的IP
+        let result = check(
+            port,
+            shared_config.clone(),
+            "test_key".to_string(),
+            allowed_addr,
+        )
+        .await;
+        assert!(result.unwrap());
+
+        // 测试禁止的IP
+        let result = check(port, shared_config, "test_key".to_string(), denied_addr).await;
+        println!("{:?}", result);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_route_cluster_success() {
+        let port = 8080;
+        let shared_config = create_mock_shared_config(port, vec!["127.0.0.1"], "127.0.0.1:8080");
+
+        let result = get_route_cluster("test_key".to_string(), shared_config, port).await;
+        assert_eq!(result.unwrap(), "http://www.baidu.com");
+    }
+
+    #[tokio::test]
+    async fn test_get_route_cluster_no_service() {
+        let shared_config = SharedConfig {
+            shared_data: Arc::new(Mutex::new(AppConfig {
+                api_service_config: HashMap::new(),
+                ..Default::default()
+            })),
+        };
+
+        let result = get_route_cluster("test_key".to_string(), shared_config, 8080).await;
+        assert!(result.is_err());
+    }
+
+    // #[tokio::test]
+    // async fn test_transfer_basic() {
+    //     let (mut client, server) = tokio::io::duplex(1024);
+    //     let mock_config = create_mock_shared_config(8080, vec![], "127.0.0.1:8080");
+
+    //     // 启动传输任务
+    //     let transfer_task = tokio::spawn(async move {
+    //         transfer(server, "test_key".to_string(), mock_config, 8080).await
+    //     });
+
+    //     // 客户端写入数据
+    //     client.write_all(b"ping").await.unwrap();
+    //     client.shutdown().await.unwrap();
+
+    //     // 检查服务端接收的数据
+    //     let mut buf = [0u8; 4];
+    //     transfer_task.await.unwrap().unwrap();
+    //     client.read_exact(&mut buf).await.unwrap();
+    //     assert_eq!(&buf, b"ping");
+    // }
+
+    #[tokio::test]
+    async fn test_proxy_shutdown() {
+        let (tx, rx) = mpsc::channel(1);
+        let mut proxy = TcpProxy {
+            port: 8080,
+            mapping_key: "test".to_string(),
+            channel: rx,
+            shared_config: create_mock_shared_config(8080, vec!["127.0.0.1"], "127.0.0.1:8080"),
+        };
+
+        // 发送关闭信号
+        let _ = tx.send(()).await;
+
+        // 应该正常退出
+        let result = proxy.start_proxy().await;
+        assert!(result.is_ok());
+    }
 }

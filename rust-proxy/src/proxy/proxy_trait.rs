@@ -4,16 +4,7 @@ use crate::vojo::app_error::AppError;
 use crate::vojo::router::BaseRoute;
 use crate::vojo::router::StaticFileRoute;
 use crate::SharedConfig;
-use bytes::Bytes;
-use http::header;
 use http::header::HeaderMap;
-use http::HeaderValue;
-use http::Request;
-use http::StatusCode;
-use http_body_util::combinators::BoxBody;
-use http_body_util::BodyExt;
-use http_body_util::Full;
-use hyper::Response;
 use hyper::Uri;
 use mockall::automock;
 use serde::Deserialize;
@@ -54,9 +45,8 @@ impl CheckTrait for CommonCheckRequest {
         let mut app_config = shared_config
             .shared_data
             .lock()
-            .map_err(|e| AppError(e.to_string()))?
-          ;
-        let  api_service = app_config
+            .map_err(|e| AppError(e.to_string()))?;
+        let api_service = app_config
             .api_service_config
             .get_mut(&port)
             .ok_or(AppError(String::from("")))?;
@@ -70,16 +60,11 @@ impl CheckTrait for CommonCheckRequest {
             }
             let headers1 = headers.clone();
             let addr_string1 = addr_string.clone();
-            let is_allowed = item
-                .is_allowed(addr_string1, Some(headers1))
-                ?;
+            let is_allowed = item.is_allowed(addr_string1, Some(headers1))?;
             if !is_allowed {
                 return Ok(None);
             }
-            let base_route = item
-                .route_cluster
-                .get_route(headers.clone())
-                ?;
+            let base_route = item.route_cluster.get_route(headers.clone())?;
             let endpoint = base_route.endpoint.clone();
             debug!("The endpoint is {}", endpoint);
             if endpoint.contains("http") {
@@ -306,7 +291,7 @@ mod tests {
     use super::*;
     use crate::vojo::app_config::ApiService;
     use crate::vojo::app_config::AppConfig;
-    use crate::vojo::app_config::RouteConfig;
+    use crate::vojo::app_config::ServiceConfig;
     use http::HeaderName;
     use http::HeaderValue;
     use std::collections::HashMap;
@@ -320,10 +305,21 @@ mod tests {
             HeaderValue::from_static("test.com"),
         );
 
-        let route = RouteConfig::default();
+        let base_route = BaseRoute {
+            endpoint: String::from("http://backend.test.com"),
+            ..Default::default()
+        };
+
+        let route_cluster = crate::vojo::route::LoadbalancerStrategy::default();
+
+        let mut route = Route::default();
+        route.route_cluster = route_cluster;
+
+        let mut service_config = ServiceConfig::default();
+        service_config.routes.push(route);
 
         let mut api_service = ApiService::default();
-        api_service.route_configs.push(route);
+        api_service.service_config = service_config;
 
         let mut config_map = HashMap::new();
         config_map.insert(8080, api_service);
@@ -331,24 +327,16 @@ mod tests {
         let shared_config = SharedConfig {
             shared_data: Arc::new(Mutex::new(crate::vojo::app_config::AppConfig {
                 api_service_config: config_map,
-                ..Default::default()
+                static_config: Default::default(),
             })),
         };
 
-        let checker = CommonCheckRequest {};
+        let checker = CommonCheckRequest::new();
         let uri = "/api/test/users".parse().unwrap();
         let peer_addr = "127.0.0.1:12345".parse().unwrap();
 
         let result = checker
-            .get_destination(
-                shared_config,
-                8080,
-                "test".into(),
-                &headers,
-                uri,
-                peer_addr,
-                &mut SpireContext::new(8080, None),
-            )
+            .check_before_request(shared_config, 8080, "test".into(), headers, uri, peer_addr)
             .await;
         assert!(result.is_err());
         // assert!(result.is_some());
@@ -356,6 +344,7 @@ mod tests {
         // assert_eq!(check_result.request_path, "http://backend.test.com/users");
     }
 
+    // 测试文件系统路由匹配
     #[tokio::test]
     async fn test_check_file_route() {
         let mut headers = HeaderMap::new();
@@ -364,10 +353,21 @@ mod tests {
             HeaderValue::from_static("test.com"),
         );
 
-        let route = RouteConfig::default();
+        let base_route = BaseRoute {
+            endpoint: String::from("/var/www"),
+            ..Default::default()
+        };
+
+        let route_cluster = crate::vojo::route::LoadbalancerStrategy::default();
+
+        let mut route = Route::default();
+        route.route_cluster = route_cluster;
+
+        let mut service_config = ServiceConfig::default();
+        service_config.routes.push(route);
 
         let mut api_service = ApiService::default();
-        api_service.route_configs.push(route);
+        api_service.service_config = service_config;
 
         let mut config_map = HashMap::new();
         config_map.insert(8080, api_service);
@@ -375,28 +375,21 @@ mod tests {
         let shared_config = SharedConfig {
             shared_data: Arc::new(Mutex::new(AppConfig {
                 api_service_config: config_map,
-                ..Default::default()
+                static_config: Default::default(),
             })),
         };
 
-        let checker = CommonCheckRequest {};
+        let checker = CommonCheckRequest::new();
         let uri = "/static/images/test.jpg".parse().unwrap();
         let peer_addr = "127.0.0.1:12345".parse().unwrap();
 
         let result = checker
-            .get_destination(
-                shared_config,
-                8080,
-                "test".into(),
-                &headers,
-                uri,
-                peer_addr,
-                &mut SpireContext::new(8080, None),
-            )
+            .check_before_request(shared_config, 8080, "test".into(), headers, uri, peer_addr)
             .await;
         assert!(result.is_err());
     }
 
+    // 测试不匹配的路由
     #[tokio::test]
     async fn test_check_no_match() {
         let headers = HeaderMap::new();
@@ -406,24 +399,16 @@ mod tests {
         let shared_config = SharedConfig {
             shared_data: Arc::new(Mutex::new(AppConfig {
                 api_service_config: config_map,
-                ..Default::default()
+                static_config: Default::default(),
             })),
         };
 
-        let checker = CommonCheckRequest {};
+        let checker = CommonCheckRequest::new();
         let uri = "/not/exist/path".parse().unwrap();
         let peer_addr = "127.0.0.1:12345".parse().unwrap();
 
         let result = checker
-            .get_destination(
-                shared_config,
-                8080,
-                "test".into(),
-                &headers,
-                uri,
-                peer_addr,
-                &mut SpireContext::new(8080, None),
-            )
+            .check_before_request(shared_config, 8080, "test".into(), headers, uri, peer_addr)
             .await
             .unwrap();
 

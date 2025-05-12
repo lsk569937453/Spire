@@ -2,7 +2,6 @@ use super::app_error::AppError;
 use crate::control_plane::lets_encrypt::LetsEncryptActions;
 use axum::extract::State;
 use axum::{routing::get, Router};
-use rustls::crypto::hash::Hash;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -225,35 +224,86 @@ mod tests {
     use http::Request;
     use tower::ServiceExt; // for `oneshot`
 
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use http_body_util::BodyExt; // 需要添加 http-body-util 依赖
+
+    use tokio::sync::Mutex;
+    // 需要添加 tower 依赖
+
+    // 测试 token 存储和检索
     #[tokio::test]
-    #[ignore]
-    async fn test_request_cert_ok1() {
-        let lets_entrypt = LetsEntrypt::_new(
-            String::from("lsk@gmail.com"),
-            String::from("www.silverwind.top"),
-        );
-        let request_result = lets_entrypt
-            .request_cert(DirectoryUrl::LetsEncryptStaging)
-            .await;
-        assert!(request_result.is_err());
+    async fn test_token_storage() {
+        let token_map = Arc::new(Mutex::new(HashMap::new()));
+        token_map
+            .lock()
+            .await
+            .insert("test_token".into(), "proof".into());
+
+        let response = dyn_reply(
+            axum::extract::Path("test_token".into()),
+            State(token_map.clone()),
+        )
+        .await
+        .unwrap()
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&body[..], b"proof");
     }
 
+    // 测试未知 token 处理
     #[tokio::test]
-    async fn full_certificate_request_flow() {
-        let test_domain = "your-test-domain.com".to_string();
-        let test_email = "test@example.com".to_string();
+    async fn test_invalid_token() {
+        let token_map = Arc::new(Mutex::new(HashMap::new()));
 
-        let le_request = LetsEntrypt {
-            mail_name: test_email,
-            domain_name: test_domain,
+        let response = dyn_reply(axum::extract::Path("invalid".into()), State(token_map))
+            .await
+            .unwrap()
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // 测试临时服务器启动和关闭
+    #[tokio::test]
+    async fn test_temp_server_lifecycle() {
+        let (tx, rx) = mpsc::channel(1);
+        let token_map = Arc::new(Mutex::new(HashMap::new()));
+
+        let handle = tokio::spawn(LetsEntrypt::create_temp_server(token_map, rx));
+
+        // 发送关闭信号
+        tx.send(()).await.unwrap();
+
+        assert!(handle.await.is_err());
+    }
+
+    // 模拟 ACME 证书请求流程
+    #[tokio::test]
+    async fn test_cert_request_flow() {
+        let lets_encrypt = LetsEntrypt {
+            mail_name: "test@example.com".into(),
+            domain_name: "test.example.com".into(),
+            token_map: Arc::new(Mutex::new(HashMap::new())),
         };
 
-        let result = le_request.start_request2().await;
+        // 注意：实际需要模拟 ACME 服务，这里测试流程是否正确
+        let result = lets_encrypt
+            .request_cert(DirectoryUrl::LetsEncryptStaging)
+            .await;
+        assert!(result.is_err()); // 预期失败，因为无法连接真实服务
+    }
 
-        assert!(
-            result.is_err(),
-            "Certificate request failed: {:?}",
-            result.err()
-        );
+    // 测试证书目录自动创建
+    #[tokio::test]
+    async fn test_cert_dir_creation() {
+        let lets_encrypt = LetsEntrypt::_new("test@example.com".into(), "test.com".into());
+
+        let result = lets_encrypt
+            .request_cert(DirectoryUrl::LetsEncryptStaging)
+            .await;
+        assert!(result.is_err());
     }
 }

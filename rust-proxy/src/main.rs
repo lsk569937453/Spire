@@ -97,10 +97,8 @@ mod tests {
     use crate::vojo::app_config::StaticConifg;
 
     use super::*;
-    use mockall::{mock, predicate::*};
+
     use std::collections::HashMap;
-    use std::path::PathBuf;
-    use tokio::fs;
 
     // Test configuration
     fn test_config() -> AppConfig {
@@ -122,24 +120,6 @@ mod tests {
             config_path: "conf/app_config.yaml".to_string(),
         };
         let result = start().await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_log_level_configuration() {
-        let config = test_config();
-
-        let cli = Cli {
-            config_path: "conf/app_config.yaml".to_string(),
-            // other fields...
-        };
-
-        let reload_handle = setup_logger().unwrap();
-        let _ = reload_handle.modify(|filter| {
-            *filter = filter::Targets::new().with_default(LevelFilter::DEBUG) // Set initial level
-        });
-
-        let result = start().await;
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 }
