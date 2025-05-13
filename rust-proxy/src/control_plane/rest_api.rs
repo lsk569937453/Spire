@@ -77,7 +77,6 @@ async fn post_app_config_with_error(
     shared_config: SharedConfig,
     api_service: ApiService,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
-    let cloned_config = shared_config.clone();
     let current_type = api_service.service_config.server_type.clone();
     let port = api_service.listen_port;
     if current_type == ServiceType::Https || current_type == ServiceType::Http2Tls {

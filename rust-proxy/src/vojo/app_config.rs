@@ -51,8 +51,8 @@ where
 {
     info!("deserialize_static_config");
     let mut static_config = StaticConifg::deserialize(deserializer)?;
-    if static_config.access_log.is_none() {
-        static_config.access_log = Some("".to_string());
+    if static_config.health_check_log_enabled.is_none() {
+        static_config.health_check_log_enabled = Some(false);
     }
     if static_config.database_url.is_none() {
         static_config.database_url = Some("".to_string());
@@ -290,7 +290,7 @@ impl Default for ApiService {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StaticConifg {
-    pub access_log: Option<String>,
+    pub health_check_log_enabled: Option<bool>,
     pub database_url: Option<String>,
     pub admin_port: Option<i32>,
     pub config_file_path: Option<String>,
@@ -299,7 +299,7 @@ pub struct StaticConifg {
 impl Default for StaticConifg {
     fn default() -> Self {
         Self {
-            access_log: Some("".to_string()),
+            health_check_log_enabled: Some(false),
             database_url: Some("".to_string()),
             admin_port: Some(DEFAULT_ADMIN_PORT),
             config_file_path: Some("".to_string()),
@@ -339,15 +339,210 @@ mod tests {
     use crate::vojo::health_check::HttpHealthCheckParam;
     use crate::vojo::route::BaseRoute;
 
+    use crate::vojo::route::HeaderBasedRoute;
+    use crate::vojo::route::HeaderRoute;
     use crate::vojo::route::LoadbalancerStrategy::WeightBased;
 
+    use crate::vojo::route::PollBaseRoute;
+    use crate::vojo::route::PollRoute;
+    use crate::vojo::route::RandomBaseRoute;
+    use crate::vojo::route::RandomRoute;
+    use crate::vojo::route::TextMatch;
     use crate::vojo::route::WeightBasedRoute;
     use crate::vojo::route::WeightRoute;
+    fn create_api_service1() -> ApiService {
+        let mut api_service = ApiService {
+            listen_port: 8080,
+            ..Default::default()
+        };
 
+        let header_based = WeightBasedRoute {
+            routes: vec![
+                WeightRoute {
+                    weight: 1,
+                    index: 0,
+                    base_route: BaseRoute {
+                        endpoint: "http://127.0.0.1:9394".to_string(),
+                        ..Default::default()
+                    },
+                },
+                WeightRoute {
+                    weight: 2,
+                    index: 0,
+                    base_route: BaseRoute {
+                        endpoint: "http://127.0.0.1:9396".to_string(),
+                        ..Default::default()
+                    },
+                },
+                WeightRoute {
+                    weight: 3,
+                    index: 0,
+                    base_route: BaseRoute {
+                        endpoint: "http://127.0.0.1:9395".to_string(),
+                        ..Default::default()
+                    },
+                },
+            ],
+        };
+        let route = Route {
+            route_id: "test_route".to_string(),
+            route_cluster: LoadbalancerStrategy::WeightBased(header_based),
+            ..Default::default()
+        };
+        let service_config = ServiceConfig {
+            server_type: ServiceType::Http,
+            routes: vec![route],
+            ..Default::default()
+        };
+        api_service.service_config = service_config;
+        api_service
+    }
+    fn create_api_service2() -> ApiService {
+        let mut api_service = ApiService {
+            listen_port: 8080,
+            ..Default::default()
+        };
+
+        let poll_route = PollRoute {
+            routes: vec![
+                PollBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: "http://127.0.0.1:9394".to_string(),
+                        ..Default::default()
+                    },
+                },
+                PollBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: "http://127.0.0.1:9395".to_string(),
+                        ..Default::default()
+                    },
+                },
+                PollBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: "http://127.0.0.1:9396".to_string(),
+                        ..Default::default()
+                    },
+                },
+            ],
+            current_index: 0,
+        };
+        let route = Route {
+            route_id: "test_route".to_string(),
+            route_cluster: LoadbalancerStrategy::Poll(poll_route),
+            ..Default::default()
+        };
+        let service_config = ServiceConfig {
+            server_type: ServiceType::Http,
+            routes: vec![route],
+            ..Default::default()
+        };
+        api_service.service_config = service_config;
+        api_service
+    }
+    fn create_api_service3() -> ApiService {
+        let mut api_service = ApiService {
+            listen_port: 8080,
+            ..Default::default()
+        };
+
+        let poll_route = RandomRoute {
+            routes: vec![
+                RandomBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: "http://127.0.0.1:9394".to_string(),
+                        ..Default::default()
+                    },
+                },
+                RandomBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: "http://127.0.0.1:9395".to_string(),
+                        ..Default::default()
+                    },
+                },
+                RandomBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: "http://127.0.0.1:9396".to_string(),
+                        ..Default::default()
+                    },
+                },
+            ],
+        };
+        let route = Route {
+            route_id: "test_route".to_string(),
+            route_cluster: LoadbalancerStrategy::Random(poll_route),
+            ..Default::default()
+        };
+        let service_config = ServiceConfig {
+            server_type: ServiceType::Http,
+            routes: vec![route],
+            ..Default::default()
+        };
+        api_service.service_config = service_config;
+        api_service
+    }
+    fn create_api_service4() -> ApiService {
+        let mut api_service = ApiService {
+            listen_port: 8080,
+            ..Default::default()
+        };
+
+        let poll_route = HeaderBasedRoute {
+            routes: vec![
+                HeaderRoute {
+                    base_route: BaseRoute {
+                        endpoint: "http://127.0.0.1:9395".to_string(),
+                        ..Default::default()
+                    },
+                    header_key: "test".to_string(),
+                    header_value_mapping_type: crate::vojo::route::HeaderValueMappingType::Text(
+                        TextMatch {
+                            value: "test".to_string(),
+                        },
+                    ),
+                },
+                HeaderRoute {
+                    base_route: BaseRoute {
+                        endpoint: "http://127.0.0.1:9396".to_string(),
+                        ..Default::default()
+                    },
+                    header_key: "test".to_string(),
+                    header_value_mapping_type: crate::vojo::route::HeaderValueMappingType::Text(
+                        TextMatch {
+                            value: "test".to_string(),
+                        },
+                    ),
+                },
+                HeaderRoute {
+                    base_route: BaseRoute {
+                        endpoint: "http://127.0.0.1:9397".to_string(),
+                        ..Default::default()
+                    },
+                    header_key: "test".to_string(),
+                    header_value_mapping_type: crate::vojo::route::HeaderValueMappingType::Text(
+                        TextMatch {
+                            value: "test".to_string(),
+                        },
+                    ),
+                },
+            ],
+        };
+        let route = Route {
+            route_id: "test_route".to_string(),
+            route_cluster: LoadbalancerStrategy::HeaderBased(poll_route),
+            ..Default::default()
+        };
+        let service_config = ServiceConfig {
+            server_type: ServiceType::Http,
+            routes: vec![route],
+            ..Default::default()
+        };
+        api_service.service_config = service_config;
+        api_service
+    }
     pub fn create_default_app_config() -> AppConfig {
         let mut app_config = AppConfig::default();
         let static_config = StaticConifg {
-            access_log: Some("/var/log/proxy.log".to_string()),
+            health_check_log_enabled: Some(false),
             admin_port: Some(9090),
             ..Default::default()
         };
@@ -389,7 +584,18 @@ mod tests {
             ..Default::default()
         };
         api_service.service_config = service_config;
-        app_config.api_service_config.insert(8080, api_service);
+        app_config
+            .api_service_config
+            .insert(8080, create_api_service1());
+        app_config
+            .api_service_config
+            .insert(8081, create_api_service2());
+        app_config
+            .api_service_config
+            .insert(8082, create_api_service3());
+        app_config
+            .api_service_config
+            .insert(8083, create_api_service4());
         app_config
     }
     #[test]
@@ -407,7 +613,7 @@ mod tests {
     #[test]
     fn test_static_config_default() {
         let config = StaticConifg::default();
-        assert_eq!(config.access_log, Some("".to_string()));
+        assert_eq!(config.health_check_log_enabled, Some(false));
         assert_eq!(config.database_url, Some("".to_string()));
         assert_eq!(config.admin_port, Some(DEFAULT_ADMIN_PORT));
         assert_eq!(config.config_file_path, Some("".to_string()));

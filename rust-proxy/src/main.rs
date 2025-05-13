@@ -63,12 +63,20 @@ async fn start() -> Result<(), AppError> {
         serde_yaml::from_str(&config_str).map_err(|e| AppError(e.to_string()))?;
     info!("config is {:?}", config);
     println!("config is {:?}", config);
+    let mut targets = vec![
+        ("delay_timer", LevelFilter::OFF),
+        ("hyper_util", LevelFilter::OFF),
+    ];
+    if !config
+        .static_config
+        .health_check_log_enabled
+        .unwrap_or(false)
+    {
+        targets.push(("spire::health_check::health_check_task", LevelFilter::OFF));
+    }
     let _ = reload_handle.modify(|filter| {
         *filter = filter::Targets::new()
-            .with_targets(vec![
-                ("delay_timer", LevelFilter::OFF),
-                ("hyper_util", LevelFilter::OFF),
-            ])
+            .with_targets(targets)
             .with_default(config.static_config.get_log_level())
     });
 
@@ -96,7 +104,7 @@ mod tests {
             static_config: StaticConifg {
                 log_level: None,
                 admin_port: Some(8080),
-                access_log: None,
+                health_check_log_enabled: None,
                 database_url: None,
                 config_file_path: None, // other fields...
             },

@@ -16,7 +16,7 @@ use tokio::time::{sleep, Duration};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum LoadbalancerStrategy {
-    PollRoute(PollRoute),
+    Poll(PollRoute),
     HeaderBased(HeaderBasedRoute),
     #[serde(rename = "randomRoute")]
     Random(RandomRoute),
@@ -24,13 +24,13 @@ pub enum LoadbalancerStrategy {
 }
 impl Default for LoadbalancerStrategy {
     fn default() -> Self {
-        LoadbalancerStrategy::PollRoute(PollRoute::default())
+        LoadbalancerStrategy::Poll(PollRoute::default())
     }
 }
 impl LoadbalancerStrategy {
     pub fn get_route(&mut self, headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         match self {
-            LoadbalancerStrategy::PollRoute(poll_route) => poll_route.get_route(headers),
+            LoadbalancerStrategy::Poll(poll_route) => poll_route.get_route(headers),
 
             LoadbalancerStrategy::HeaderBased(poll_route) => poll_route.get_route(headers),
 
@@ -41,7 +41,7 @@ impl LoadbalancerStrategy {
     }
     pub async fn get_all_route(&mut self) -> Result<Vec<BaseRoute>, AppError> {
         match self {
-            LoadbalancerStrategy::PollRoute(poll_route) => poll_route.get_all_route().await,
+            LoadbalancerStrategy::Poll(poll_route) => poll_route.get_all_route().await,
             LoadbalancerStrategy::HeaderBased(poll_route) => poll_route.get_all_route().await,
 
             LoadbalancerStrategy::Random(poll_route) => poll_route.get_all_route().await,
@@ -55,7 +55,7 @@ impl LoadbalancerStrategy {
         is_alive: bool,
     ) -> Result<(), AppError> {
         match self {
-            LoadbalancerStrategy::PollRoute(poll_route) => {
+            LoadbalancerStrategy::Poll(poll_route) => {
                 poll_route.update_route_alive(base_route, is_alive)
             }
             LoadbalancerStrategy::HeaderBased(poll_route) => {
@@ -189,7 +189,18 @@ impl HeaderBasedRoute {
     }
 
     fn get_route(&mut self, headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-        for item in self.routes.iter() {
+        let has_unconfigured = self.routes.iter().any(|r| r.base_route.is_alive.is_none());
+        debug!("has_unconfigured:{}", has_unconfigured);
+        let routes = if has_unconfigured {
+            self.routes.clone()
+        } else {
+            self.routes
+                .iter()
+                .filter(|r| r.base_route.is_alive == Some(true))
+                .cloned()
+                .collect()
+        };
+        for item in routes.iter() {
             let headers_contais_key = headers.contains_key(item.header_key.clone());
             if !headers_contais_key {
                 continue;
@@ -232,7 +243,7 @@ impl HeaderBasedRoute {
                 }
             }
         }
-        error!("Can not find the route!And siverWind has selected the first route!");
+        error!("Can not find the route!And Spire has selected the first route!");
 
         let first = self.routes.first().unwrap().base_route.clone();
         Ok(first)
@@ -269,9 +280,31 @@ impl RandomRoute {
     }
 
     fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-        let mut rng = rand::rng();
-        let random_index = rng.random_range(0..self.routes.len());
-        Ok(self.routes[random_index].base_route.clone())
+        let has_unconfigured = self.routes.iter().any(|r| r.base_route.is_alive.is_none());
+
+        if has_unconfigured {
+            let mut rng = rand::rng();
+            let random_index = rng.random_range(0..self.routes.len());
+            Ok(self.routes[random_index].base_route.clone())
+        } else {
+            let alive_indices: Vec<usize> = self
+                .routes
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.base_route.is_alive == Some(true))
+                .map(|(i, _)| i)
+                .collect();
+            if alive_indices.is_empty() {
+                debug!("All routes are dead, selecting a random route");
+                let mut rng = rand::rng();
+                let random_index = rng.random_range(0..self.routes.len());
+                Ok(self.routes[random_index].base_route.clone())
+            } else {
+                let mut rng = rand::rng();
+                let random_index = rng.random_range(0..alive_indices.len());
+                Ok(self.routes[alive_indices[random_index]].base_route.clone())
+            }
+        }
     }
     fn update_route_alive(
         &mut self,
@@ -309,13 +342,42 @@ impl PollRoute {
     }
 
     fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-        self.current_index += 1;
-        if self.current_index >= self.routes.len() as i128 {
-            self.current_index = 0;
+        let has_unconfigured = self.routes.iter().any(|r| r.base_route.is_alive.is_none());
+        if has_unconfigured {
+            self.current_index += 1;
+            if self.current_index >= self.routes.len() as i128 {
+                self.current_index = 0;
+            }
+            debug!("current_index:{}", self.current_index);
+            let route = self.routes[self.current_index as usize].base_route.clone();
+            Ok(route)
+        } else {
+            let alive_indices: Vec<usize> = self
+                .routes
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.base_route.is_alive == Some(true))
+                .map(|(i, _)| i)
+                .collect();
+            if alive_indices.is_empty() {
+                debug!("All routes are dead, selecting a random route");
+                let mut rng = rand::rng();
+                let random_index = rng.random_range(0..self.routes.len());
+                Ok(self.routes[random_index].base_route.clone())
+            } else {
+                self.current_index += 1;
+                if self.current_index >= alive_indices.len() as i128 {
+                    self.current_index = 0;
+                }
+                let selected_index = alive_indices[self.current_index as usize];
+                debug!(
+                    "current_index:{} (alive index), selected_index: {}",
+                    self.current_index, selected_index
+                );
+                let route = self.routes[selected_index].base_route.clone();
+                Ok(route)
+            }
         }
-        debug!("current_index:{}", self.current_index);
-        let route = self.routes[self.current_index as usize].base_route.clone();
-        Ok(route)
     }
     fn update_route_alive(
         &mut self,
@@ -348,18 +410,52 @@ impl WeightBasedRoute {
         if self.routes.is_empty() {
             return Err(AppError(String::from("No routes available")));
         }
-        let all_reached = self.routes.iter().all(|r| r.index >= r.weight);
-        if all_reached {
-            for route in &mut self.routes {
-                route.index = 0;
+
+        let has_unconfigured = self.routes.iter().any(|r| r.base_route.is_alive.is_none());
+        if has_unconfigured {
+            let all_reached = self.routes.iter().all(|r| r.index >= r.weight);
+            if all_reached {
+                for route in &mut self.routes {
+                    route.index = 0;
+                }
             }
-        }
-        debug!("{:?}", self.routes);
-        if let Some(route) = self.routes.iter_mut().find(|r| r.index < r.weight) {
-            route.index += 1;
-            Ok(route.base_route.clone())
+            if let Some(route) = self.routes.iter_mut().find(|r| r.index < r.weight) {
+                route.index += 1;
+                Ok(route.base_route.clone())
+            } else {
+                Err(AppError(String::from("WeightRoute get route error")))
+            }
         } else {
-            Err(AppError(String::from("WeightRoute get route error")))
+            let alive_indices: Vec<usize> = self
+                .routes
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.base_route.is_alive == Some(true))
+                .map(|(i, _)| i)
+                .collect();
+
+            if !alive_indices.is_empty() {
+                let all_reached = alive_indices
+                    .iter()
+                    .all(|&i| self.routes[i].index >= self.routes[i].weight);
+                if all_reached {
+                    for &i in &alive_indices {
+                        self.routes[i].index = 0;
+                    }
+                }
+                for &i in &alive_indices {
+                    if self.routes[i].index < self.routes[i].weight {
+                        self.routes[i].index += 1;
+                        return Ok(self.routes[i].base_route.clone());
+                    }
+                }
+                Err(AppError(String::from("WeightRoute get route error")))
+            } else {
+                let mut rng = rand::rng();
+                let idx = rng.random_range(0..self.routes.len());
+                self.routes[idx].index += 1;
+                Ok(self.routes[idx].base_route.clone())
+            }
         }
     }
     fn update_route_alive(
@@ -518,7 +614,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_all_routes() {
-        let mut poll_strategy = LoadbalancerStrategy::PollRoute(PollRoute {
+        let mut poll_strategy = LoadbalancerStrategy::Poll(PollRoute {
             routes: vec![
                 PollBaseRoute {
                     base_route: BaseRoute {
