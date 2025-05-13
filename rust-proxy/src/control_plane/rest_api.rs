@@ -12,6 +12,7 @@ use crate::vojo::base_response::BaseResponse;
 use crate::vojo::cli::SharedConfig;
 use axum::extract::Request;
 use axum::extract::State;
+use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::delete;
 use axum::routing::put;
@@ -28,12 +29,39 @@ use tower_http::cors::CorsLayer;
 
 async fn get_app_config(
     State(shared_config): State<SharedConfig>,
-) -> Result<impl axum::response::IntoResponse, AppError> {
-    let app_config = shared_config.shared_data.lock()?.clone();
-    Ok(Json(BaseResponse {
+) -> Result<impl axum::response::IntoResponse, Infallible> {
+    let app_config_res = shared_config.shared_data.lock();
+
+    if app_config_res.is_err() {
+        // return Ok((
+        //     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        //     format!("No route {}", INTERNAL_SERVER_ERROR),
+        // ));
+        let response = Response::builder()
+            .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(format!("No route {}", INTERNAL_SERVER_ERROR))
+            .unwrap();
+        return Ok(response);
+    }
+    let data = BaseResponse {
         response_code: 0,
-        response_object: app_config,
-    }))
+        response_object: app_config_res.unwrap().clone(),
+    };
+    let (status, body) = match serde_yaml::to_string(&data) {
+        Ok(json) => (axum::http::StatusCode::OK, json),
+        Err(_) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("No route {}", INTERNAL_SERVER_ERROR),
+        ),
+    };
+    let response = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .unwrap();
+
+    Ok(response)
 }
 
 async fn get_prometheus_metrics() -> Result<impl axum::response::IntoResponse, AppError> {
@@ -174,24 +202,35 @@ async fn put_route_with_error(
 }
 async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
     let mut data = app_config;
-    tokio::fs::create_dir_all(DEFAULT_TEMPORARY_DIR).await?;
-    let file_path = Path::new(DEFAULT_TEMPORARY_DIR).join("new_spire_config.yml");
+    let result: bool = Path::new(DEFAULT_TEMPORARY_DIR).is_dir();
+    if !result {
+        let path = env::current_dir().map_err(|e| AppError(e.to_string()))?;
+        let absolute_path = path.join(DEFAULT_TEMPORARY_DIR);
+        std::fs::create_dir_all(absolute_path).map_err(|e| AppError(e.to_string()))?;
+    }
 
     let mut f = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
-        .open(&file_path)
-        .await?;
+        .open("temporary/new_silverwind_config.yml")
+        .await
+        .map_err(|e| AppError(e.to_string()))?;
     data.api_service_config
         .iter_mut()
         .for_each(|(_, api_service)| {
-            api_service.route_configs.iter_mut().for_each(|route| {
-                route.route_id = "".to_string();
-            });
+            api_service
+                .service_config
+                .routes
+                .iter_mut()
+                .for_each(|route| {
+                    route.route_id = "".to_string();
+                });
         });
-    let api_service_str = serde_yaml::to_string(&data)?;
-    f.write_all(api_service_str.as_bytes()).await?;
+    let api_service_str = serde_yaml::to_string(&data).map_err(|e| AppError(e.to_string()))?;
+    f.write_all(api_service_str.as_bytes())
+        .await
+        .map_err(|e| AppError(e.to_string()))?;
     Ok(())
 }
 pub fn validate_tls_config(
