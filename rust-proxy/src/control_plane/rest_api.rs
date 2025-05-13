@@ -58,10 +58,7 @@ async fn post_app_config_with_error(
     shared_config: SharedConfig,
     req: Request,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
-    let (_, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX).await?;
-    let api_service: ApiService = serde_yaml::from_slice(&bytes)?;
-    let current_type = api_service.server_type.clone();
+    let current_type = api_service.service_config.server_type.clone();
     let port = api_service.listen_port;
     if current_type == ServiceType::Https || current_type == ServiceType::Http2Tls {
         validate_tls_config(api_service.cert_str.clone(), api_service.key_str.clone())?;

@@ -1,5 +1,5 @@
 static_config:
-  log_level: debug
+  log_level: info
 services:
   - listen_port: 4486
     service_config:
@@ -29,17 +29,14 @@ services:
             prefix: /
             prefix_rewrite: /
           route_cluster:
-            type: WeightBased
+            type: randomRoute
             routes:
               - base_route:
-                  endpoint: http://localhost:8888/
-                weight: 1
+                  endpoint: http://127.0.0.1:9394
               - base_route:
-                  endpoint: http://localhost:9999/
-                weight: 2
+                  endpoint: http://127.0.0.1:8090
               - base_route:
-                  endpoint: http://localhost:7777/
-                weight: 3
+                  endpoint: http://127.0.0.1:9396
           health_check:
             type: HttpGet
             base_health_check_param:

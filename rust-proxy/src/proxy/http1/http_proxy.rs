@@ -232,31 +232,11 @@ async fn proxy_adapter_with_error(
         .for_each(|item| item.observe_duration());
     inc(mapping_key.clone(), path.clone(), status);
 
-    if log_enabled!(Level::Debug) {
-        let (parts, body) = res.into_parts();
-        let response_bytes = body
-            .collect()
-            .await
-            .map_err(|_| AppError(String::from("Can not get bytes from body")))?
-            .to_bytes();
-        let response_str =
-            String::from_utf8(response_bytes.to_vec()).map_err(|e| AppError(e.to_string()))?;
-        debug!(
-            "{}$${}$${}$${}$${}$${}$${}$${:?}",
-            remote_addr,
-            elapsed_time,
-            status,
-            method,
-            path,
-            json_value,
-            response_str,
-            parts.headers.clone()
-        );
-        let res = Response::from_parts(parts, Full::new(response_bytes).boxed());
-        Ok(res)
-    } else {
-        Ok(res)
-    }
+    info!(
+        "{} - -  \"{} {} HTTP/1.1\" {}  \"-\" \"-\" {} {}ms",
+        remote_addr, method, path, status, json_value, elapsed_time
+    );
+    Ok(res)
 }
 
 async fn proxy(
@@ -683,63 +663,4 @@ mod tests {
     }
 }
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::vojo::app_config::{ApiService, ServiceConfig, StaticConifg};
-    use crate::vojo::route::WeightBasedRoute;
-    use crate::vojo::route::WeightRoute;
-    use crate::AppConfig;
-
-    use crate::vojo::app_config::Route;
-    use crate::vojo::app_config::ServiceType;
-    use crate::vojo::route::LoadbalancerStrategy;
-    use tokio::net::TcpListener;
-
-    // 辅助函数：获取可用端口
-    async fn get_available_port() -> u16 {
-        TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
-    }
-    pub fn create_default_app_config() -> AppConfig {
-        let mut app_config = AppConfig::default();
-        let static_config = StaticConifg {
-            access_log: Some("/var/log/proxy.log".to_string()),
-            admin_port: Some(9090),
-            ..Default::default()
-        };
-        app_config.static_config = static_config;
-        let mut api_service = ApiService {
-            listen_port: 8080,
-            ..Default::default()
-        };
-
-        let header_based = WeightBasedRoute {
-            routes: vec![WeightRoute {
-                weight: 1,
-                index: 0,
-                base_route: BaseRoute {
-                    endpoint: "http://www.baidu.com".to_string(),
-                    ..Default::default()
-                },
-            }],
-        };
-        let route = Route {
-            route_id: "test_route".to_string(),
-            route_cluster: LoadbalancerStrategy::WeightBased(header_based),
-            ..Default::default()
-        };
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Http,
-            routes: vec![route],
-            ..Default::default()
-        };
-        api_service.service_config = service_config;
-        app_config.api_service_config.insert(8080, api_service);
-        app_config
-    }
-}
+mod tests {}
