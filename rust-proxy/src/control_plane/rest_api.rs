@@ -11,9 +11,11 @@ use crate::vojo::cli::SharedConfig;
 use crate::vojo::route::BaseRoute;
 use axum::extract::State;
 use axum::response::IntoResponse;
+use axum::response::Response;
 use axum::routing::delete;
 use axum::routing::{get, post};
 use axum::Router;
+use http::header;
 use prometheus::{Encoder, TextEncoder};
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -31,23 +33,35 @@ async fn get_app_config(
     let app_config_res = shared_config.shared_data.lock();
 
     if app_config_res.is_err() {
-        return Ok((
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("No route {}", INTERNAL_SERVER_ERROR),
-        ));
+        // return Ok((
+        //     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        //     format!("No route {}", INTERNAL_SERVER_ERROR),
+        // ));
+        let response = Response::builder()
+            .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(format!("No route {}", INTERNAL_SERVER_ERROR))
+            .unwrap();
+        return Ok(response);
     }
     let data = BaseResponse {
         response_code: 0,
         response_object: app_config_res.unwrap().clone(),
     };
-    let res = match serde_json::to_string(&data) {
+    let (status, body) = match serde_yaml::to_string(&data) {
         Ok(json) => (axum::http::StatusCode::OK, json),
         Err(_) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             format!("No route {}", INTERNAL_SERVER_ERROR),
         ),
     };
-    Ok(res)
+    let response = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .unwrap();
+
+    Ok(response)
 }
 async fn get_prometheus_metrics() -> Result<impl axum::response::IntoResponse, Infallible> {
     let metric_families = prometheus::gather();
@@ -228,7 +242,7 @@ async fn put_route_with_error(
     Ok(serde_json::to_string(&data).unwrap())
 }
 async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
-    let data = app_config;
+    let mut data = app_config;
     let result: bool = Path::new(DEFAULT_TEMPORARY_DIR).is_dir();
     if !result {
         let path = env::current_dir().map_err(|e| AppError(e.to_string()))?;
@@ -243,6 +257,17 @@ async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
         .open("temporary/new_silverwind_config.yml")
         .await
         .map_err(|e| AppError(e.to_string()))?;
+    data.api_service_config
+        .iter_mut()
+        .for_each(|(_, api_service)| {
+            api_service
+                .service_config
+                .routes
+                .iter_mut()
+                .for_each(|route| {
+                    route.route_id = "".to_string();
+                });
+        });
     let api_service_str = serde_yaml::to_string(&data).map_err(|e| AppError(e.to_string()))?;
     f.write_all(api_service_str.as_bytes())
         .await
