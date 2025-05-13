@@ -14,6 +14,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::delete;
+use axum::routing::put;
 use axum::routing::{get, post};
 use axum::Router;
 use http::header;
@@ -176,13 +177,12 @@ async fn delete_route(
     let json_str = serde_json::to_string(&data).unwrap();
     Ok((axum::http::StatusCode::OK, json_str))
 }
-async fn puts_route2(
-    // State(shared_config): State<SharedConfig>,
-    axum::extract::Json(route): axum::extract::Json<Route>,
+#[debug_handler]
+async fn put_routex(
+    State(shared_config): State<SharedConfig>,
+    axum::extract::Json(route_vistor): axum::extract::Json<Route>,
 ) -> Result<impl axum::response::IntoResponse, Infallible> {
-    let shared_config = SharedConfig::from_app_config(AppConfig::default());
-
-    let t = match put_route_with_error(shared_config, route).await {
+    let t = match put_route_with_error(shared_config, route_vistor).await {
         Ok(r) => r.into_response(),
         Err(err) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -191,17 +191,6 @@ async fn puts_route2(
             .into_response(),
     };
     Ok(t)
-}
-async fn put_route(
-    State(shared_config): State<SharedConfig>,
-    axum::extract::Json(route_vistor): axum::extract::Json<Route>,
-) -> Result<impl axum::response::IntoResponse, Infallible> {
-    // let shared_config = SharedConfig::from_app_config(AppConfig::default());
-
-    match put_route_with_error(shared_config, route_vistor).await {
-        Ok(r) => Ok((axum::http::StatusCode::OK, r)),
-        Err(e) => Ok((axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-    }
 }
 async fn put_route_with_error(
     shared_config: SharedConfig,
@@ -315,6 +304,7 @@ pub fn get_router(shared_config: SharedConfig) -> Router {
         .route("/appConfig", get(get_app_config).post(post_app_config))
         .route("/metrics", get(get_prometheus_metrics))
         .route("/route/{id}", delete(delete_route))
+        .route("/xasxaxas", put(put_routex))
         .route("/letsEncryptCertificate", post(lets_encrypt_certificate))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
