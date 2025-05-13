@@ -12,8 +12,15 @@ services:
             type: randomRoute
             routes:
               - base_route:
-                  endpoint: http://localhost:7777/
-                  try_file: null
+                  endpoint: http://localhost:6666/
+          health_check:
+            type: HttpGet
+            base_health_check_param:
+              timeout: 10
+              interval: 10
+            path: /health
+          liveness_config:
+            min_liveness_count: 1
   - listen_port: 9969
     service_config:
       server_type: Http

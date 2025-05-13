@@ -362,7 +362,7 @@ mod tests {
                 weight: 1,
                 index: 0,
                 base_route: BaseRoute {
-                    endpoint: "http://www.baidu.com".to_string(),
+                    endpoint: "http://127.0.0.1:9393".to_string(),
                     ..Default::default()
                 },
             }],
@@ -398,17 +398,6 @@ mod tests {
         // 序列化为JSON
         let json_str = serde_yaml::to_string(&app_config).unwrap();
         println!("{}", json_str);
-        println!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        // // 反序列化JSON
-        // let deserialized_config: AppConfig = serde_json::from_str(&json_str).unwrap();
-
-        // // 验证静态配置是否正确序列化和反序列化
-        // assert_eq!(app_config, deserialized_config);
-        // assert_eq!(deserialized_config.static_config.admin_port, Some(9090));
-        // assert_eq!(
-        //     deserialized_config.static_config.access_log,
-        //     Some("/var/log/proxy.log".to_string())
-        // );
     }
 
     use crate::vojo::allow_deny_ip::AllowDenyObject;

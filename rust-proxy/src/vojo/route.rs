@@ -49,6 +49,28 @@ impl LoadbalancerStrategy {
             LoadbalancerStrategy::WeightBased(poll_route) => poll_route.get_all_route().await,
         }
     }
+    pub fn update_route_alive(
+        &mut self,
+        base_route: BaseRoute,
+        is_alive: bool,
+    ) -> Result<(), AppError> {
+        match self {
+            LoadbalancerStrategy::PollRoute(poll_route) => {
+                poll_route.update_route_alive(base_route, is_alive)
+            }
+            LoadbalancerStrategy::HeaderBased(poll_route) => {
+                poll_route.update_route_alive(base_route, is_alive)
+            }
+
+            LoadbalancerStrategy::Random(poll_route) => {
+                poll_route.update_route_alive(base_route, is_alive)
+            }
+
+            LoadbalancerStrategy::WeightBased(poll_route) => {
+                poll_route.update_route_alive(base_route, is_alive)
+            }
+        }
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct AnomalyDetectionStatus {
@@ -215,6 +237,18 @@ impl HeaderBasedRoute {
         let first = self.routes.first().unwrap().base_route.clone();
         Ok(first)
     }
+    fn update_route_alive(
+        &mut self,
+        base_route: BaseRoute,
+        is_alive: bool,
+    ) -> Result<(), AppError> {
+        for item in self.routes.iter_mut() {
+            if item.base_route.endpoint == base_route.endpoint {
+                item.base_route.is_alive = Some(is_alive);
+            }
+        }
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RandomBaseRoute {
@@ -238,6 +272,18 @@ impl RandomRoute {
         let mut rng = rand::rng();
         let random_index = rng.random_range(0..self.routes.len());
         Ok(self.routes[random_index].base_route.clone())
+    }
+    fn update_route_alive(
+        &mut self,
+        base_route: BaseRoute,
+        is_alive: bool,
+    ) -> Result<(), AppError> {
+        for item in self.routes.iter_mut() {
+            if item.base_route.endpoint == base_route.endpoint {
+                item.base_route.is_alive = Some(is_alive);
+            }
+        }
+        Ok(())
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -271,6 +317,18 @@ impl PollRoute {
         let route = self.routes[self.current_index as usize].base_route.clone();
         Ok(route)
     }
+    fn update_route_alive(
+        &mut self,
+        base_route: BaseRoute,
+        is_alive: bool,
+    ) -> Result<(), AppError> {
+        for item in self.routes.iter_mut() {
+            if item.base_route.endpoint == base_route.endpoint {
+                item.base_route.is_alive = Some(is_alive);
+            }
+        }
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WeightBasedRoute {
@@ -279,7 +337,11 @@ pub struct WeightBasedRoute {
 
 impl WeightBasedRoute {
     async fn get_all_route(&mut self) -> Result<Vec<BaseRoute>, AppError> {
-        Ok(vec![])
+        Ok(self
+            .routes
+            .iter_mut()
+            .map(|item| item.base_route.clone())
+            .collect::<Vec<BaseRoute>>())
     }
 
     fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
@@ -299,6 +361,18 @@ impl WeightBasedRoute {
         } else {
             Err(AppError(String::from("WeightRoute get route error")))
         }
+    }
+    fn update_route_alive(
+        &mut self,
+        base_route: BaseRoute,
+        is_alive: bool,
+    ) -> Result<(), AppError> {
+        for item in self.routes.iter_mut() {
+            if item.base_route.endpoint == base_route.endpoint {
+                item.base_route.is_alive = Some(is_alive);
+            }
+        }
+        Ok(())
     }
 }
 #[cfg(test)]

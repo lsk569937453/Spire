@@ -92,7 +92,6 @@ impl HealthCheck {
     }
 
     async fn do_health_check(&mut self) -> Result<(), AppError> {
-        info!("Start health check loop!");
         let app_config = self.shared_config.shared_data.lock().unwrap().clone();
         let handles = app_config
             .api_service_config
@@ -100,7 +99,6 @@ impl HealthCheck {
             .flat_map(|(_, item)| item.service_config.routes.clone())
             .filter(|item| item.health_check.is_some() && item.liveness_config.is_some())
             .map(|item| {
-                info!("The health check route is {:?}", item);
                 tokio::spawn(async move {
                     let endpoint_list = get_endpoint_list(item.clone()).await;
                     let min_liveness_count =
@@ -125,7 +123,6 @@ impl HealthCheck {
                 (a.clone(), b.clone())
             })
             .collect::<HashMap<TaskKey, Route>>();
-        info!("The route list is {:?}", route_list);
         self.task_id_map.retain(|route_id, task_id| {
             if !route_list.contains_key(route_id) {
                 let res = self.delay_timer.remove_task(*task_id);
@@ -139,16 +136,19 @@ impl HealthCheck {
             true
         });
         let old_map = self.task_id_map.clone();
-        info!("the route list old is {:?}", old_map);
-        info!("the route list new is {:?}", route_list);
+
         route_list
             .iter()
             .filter(|(task_key, _)| !old_map.contains_key(&(*task_key).clone()))
             .for_each(|(task_key, route)| {
                 info!("The route is {:?}", route);
                 let current_id = self.current_id.fetch_add(1, Ordering::SeqCst);
-                let submit_task_result =
-                    submit_task(current_id, route.clone(), self.health_check_client.clone());
+                let submit_task_result = submit_task(
+                    current_id,
+                    route.clone(),
+                    self.health_check_client.clone(),
+                    self.shared_config.clone(),
+                );
                 if let Ok(submit_result) = submit_task_result {
                     let res = self.delay_timer.insert_task(submit_result);
                     if let Ok(_task_instance_chain) = res {
@@ -168,8 +168,9 @@ async fn do_http_health_check(
     mut route: Route,
     timeout_number: i32,
     http_health_check_client: HealthCheckClient,
+    shared_config: SharedConfig,
 ) -> Result<(), AppError> {
-    info!("Do http health check!");
+    info!("Do http health check,the route is {:?}!", route);
     let route_list = route.route_cluster.get_all_route().await?;
     let http_client = http_health_check_client.http_clients.clone();
     let mut set = JoinSet::new();
@@ -197,30 +198,57 @@ async fn do_http_health_check(
         let task_with_timeout = http_client_shared
             .clone()
             .request_http(req, timeout_number as u64);
+        let cloned_route = route.clone();
         set.spawn(async {
             let res = task_with_timeout.await;
-            (res, item)
+            (res, cloned_route, item)
         });
     }
-    info!("Start to wait for the response!,{:?}", set);
     while let Some(response_result1) = set.join_next().await {
-        if let Ok((response_result2, base_route)) = response_result1 {
-            info!("The response result is {:?}", response_result2);
-            match response_result2 {
-                Ok(Ok(t)) => if t.status() == StatusCode::OK {},
-                _ => {
-                    info!("timeout");
-                    if let Some(current_liveness_config) = route.liveness_config.clone() {
-                    } else {
-                        error!(
-                            "Can not update the route-{} to fail,as the liveness_status is empty!",
-                            base_route.endpoint.clone()
-                        );
+        match response_result1 {
+            Ok((res, route, base_route)) => {
+                let mut lock = shared_config.shared_data.lock().unwrap();
+                let shared_route = lock
+                    .api_service_config
+                    .iter_mut()
+                    .flat_map(|(_, item)| &mut item.service_config.routes)
+                    .find(|item| item.route_id == route.route_id);
+                let new_route = match shared_route {
+                    Some(route) => route,
+                    None => {
+                        continue;
                     }
+                };
+
+                if let Ok(res) = res {
+                    match res {
+                        Ok(o) => {
+                            if o.status() == StatusCode::OK {
+                                let _ = new_route
+                                    .route_cluster
+                                    .update_route_alive(base_route.clone(), true);
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "Request error,url:{}, the error is {}",
+                                base_route.endpoint, e
+                            );
+                            let _ = new_route
+                                .route_cluster
+                                .update_route_alive(base_route, false);
+                        }
+                    }
+                } else {
+                    error!("Request time out, the url is {}", base_route.endpoint);
+                    let _ = new_route
+                        .route_cluster
+                        .update_route_alive(base_route, false);
                 }
             }
-        } else {
-            error!("response_result1 is timeout");
+            Err(e) => {
+                error!("set join error,the error is {}", e);
+            }
         }
     }
     Ok(())
@@ -229,6 +257,7 @@ fn submit_task(
     task_id: u64,
     route: Route,
     health_check_clients: HealthCheckClient,
+    shared_config: SharedConfig,
 ) -> Result<Task, AppError> {
     info!("Submit task!");
     if let Some(health_check) = route.health_check.clone() {
@@ -240,6 +269,7 @@ fn submit_task(
             let timeout_share = timeout;
             let health_check_client_shared = health_check_clients.clone();
             let health_check_type_shared = health_check.clone();
+            let cloned_shared_config = shared_config.clone();
             async move {
                 match health_check_type_shared {
                     HealthCheckType::HttpGet(http_health_check_param) => {
@@ -248,6 +278,7 @@ fn submit_task(
                             route_share,
                             timeout_share,
                             health_check_client_shared,
+                            cloned_shared_config,
                         )
                         .await
                     }
