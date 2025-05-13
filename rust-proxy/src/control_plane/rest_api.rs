@@ -10,6 +10,7 @@ use std::time::Instant;
 use crate::vojo::app_error::AppError;
 use crate::vojo::base_response::BaseResponse;
 use crate::vojo::cli::SharedConfig;
+use crate::vojo::route::BaseRoute;
 use axum::extract::Request;
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -20,6 +21,7 @@ use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
 use http::header;
+use http_body_util::BodyExt;
 use prometheus::{Encoder, TextEncoder};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -79,13 +81,27 @@ async fn get_prometheus_metrics() -> Result<impl axum::response::IntoResponse, A
 async fn post_app_config(
     State(shared_config): State<SharedConfig>,
     req: Request,
-) -> Result<impl axum::response::IntoResponse, AppError> {
-    post_app_config_with_error(shared_config, req).await
+) -> Result<impl axum::response::IntoResponse, Infallible> {
+    let t = match post_app_config_with_error(shared_config, req).await {
+        Ok(r) => r.into_response(),
+        Err(err) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+        )
+            .into_response(),
+    };
+    Ok(t)
 }
 async fn post_app_config_with_error(
     shared_config: SharedConfig,
     req: Request,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
+    let (_, body) = req.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|err| AppError(err.to_string()))?;
+    let api_service: ApiService =
+        serde_yaml::from_slice(&bytes).map_err(|e| AppError(e.to_string()))?;
     let current_type = api_service.service_config.server_type.clone();
     let port = api_service.listen_port;
     if current_type == ServiceType::Https || current_type == ServiceType::Http2Tls {
@@ -118,12 +134,13 @@ async fn post_app_config_with_error(
         response_code: 0,
         response_object: 0,
     };
-    let json_str = serde_yaml::to_string(&data)?;
+    let json_str = serde_json::to_string(&data).unwrap();
 
     let response = Response::builder()
         .status(axum::http::StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
-        .body(json_str)?;
+        .body(json_str)
+        .unwrap();
 
     Ok(response)
 }
@@ -282,7 +299,6 @@ pub fn get_router(shared_config: SharedConfig) -> Router {
         .route("/appConfig", get(get_app_config).post(post_app_config))
         .route("/metrics", get(get_prometheus_metrics))
         .route("/route/{id}", delete(delete_route))
-        .route("/route", put(put_routex))
         .route("/letsEncryptCertificate", post(lets_encrypt_certificate))
         .layer(axum::middleware::from_fn(print_request_response))
         .layer(CorsLayer::permissive())
