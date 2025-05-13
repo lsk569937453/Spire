@@ -181,11 +181,20 @@ async fn delete_route_with_error(
     let json_str = serde_yaml::to_string(&data)?;
     Ok(json_str)
 }
+#[debug_handler]
 async fn put_routex(
     State(shared_config): State<SharedConfig>,
-    req: Request,
-) -> Result<impl axum::response::IntoResponse, AppError> {
-    put_route_with_error(shared_config, req).await
+    axum::extract::Json(route_vistor): axum::extract::Json<Route>,
+) -> Result<impl axum::response::IntoResponse, Infallible> {
+    let t = match put_route_with_error(shared_config, route_vistor).await {
+        Ok(r) => r.into_response(),
+        Err(err) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+        )
+            .into_response(),
+    };
+    Ok(t)
 }
 async fn put_route_with_error(
     shared_config: SharedConfig,
@@ -299,6 +308,7 @@ pub fn get_router(shared_config: SharedConfig) -> Router {
         .route("/appConfig", get(get_app_config).post(post_app_config))
         .route("/metrics", get(get_prometheus_metrics))
         .route("/route/{id}", delete(delete_route))
+        .route("/xasxaxas", put(put_routex))
         .route("/letsEncryptCertificate", post(lets_encrypt_certificate))
         .layer(axum::middleware::from_fn(print_request_response))
         .layer(CorsLayer::permissive())
