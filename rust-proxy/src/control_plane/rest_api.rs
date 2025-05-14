@@ -10,7 +10,6 @@ use std::time::Instant;
 use crate::vojo::app_error::AppError;
 use crate::vojo::base_response::BaseResponse;
 use crate::vojo::cli::SharedConfig;
-use crate::vojo::route::BaseRoute;
 use axum::extract::Request;
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -181,12 +180,11 @@ async fn delete_route_with_error(
     let json_str = serde_yaml::to_string(&data)?;
     Ok(json_str)
 }
-#[debug_handler]
 async fn put_routex(
     State(shared_config): State<SharedConfig>,
-    axum::extract::Json(route_vistor): axum::extract::Json<Route>,
+    req: Request,
 ) -> Result<impl axum::response::IntoResponse, Infallible> {
-    let t = match put_route_with_error(shared_config, route_vistor).await {
+    let t = match put_route_with_error(shared_config, req).await {
         Ok(r) => r.into_response(),
         Err(err) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -201,16 +199,20 @@ async fn put_route_with_error(
     req: Request,
 ) -> Result<String, AppError> {
     let (_, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX).await?;
-    let route: RouteConfig = serde_yaml::from_slice(&bytes)?;
-    let mut rw_global_lock = shared_config.shared_data.lock()?;
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|err| AppError(err.to_string()))?;
+    let route: Route = serde_yaml::from_slice(&bytes).map_err(|e| AppError(e.to_string()))?;
+    let mut rw_global_lock = shared_config.shared_data.lock().unwrap();
 
     let old_route = rw_global_lock
         .api_service_config
         .iter_mut()
-        .flat_map(|(_, item)| item.route_configs.iter_mut())
+        .flat_map(|(_, item)| item.service_config.routes.iter_mut())
         .find(|r| r.route_id == route.route_id)
-        .ok_or(AppError::from("Can not find the route by route id!"))?;
+        .ok_or(AppError(String::from(
+            "Can not find the route by route id!",
+        )))?;
 
     *old_route = route;
 
@@ -277,7 +279,6 @@ pub fn validate_tls_config(
         return Err(AppError::from("Can not parse the certs pem."));
     }
     let key_pem = key_pem_option.unwrap();
-    // pkcs8::PrivateKeyInfo::from_pem(key_pem.as_str());
     let key_pem_result = pkcs8::Document::from_pem(key_pem.as_str());
     if key_pem_result.is_err() {
         return Err(AppError::from("Can not parse the key pem."));
@@ -308,7 +309,7 @@ pub fn get_router(shared_config: SharedConfig) -> Router {
         .route("/appConfig", get(get_app_config).post(post_app_config))
         .route("/metrics", get(get_prometheus_metrics))
         .route("/route/{id}", delete(delete_route))
-        .route("/xasxaxas", put(put_routex))
+        .route("/route", put(put_routex))
         .route("/letsEncryptCertificate", post(lets_encrypt_certificate))
         .layer(axum::middleware::from_fn(print_request_response))
         .layer(CorsLayer::permissive())

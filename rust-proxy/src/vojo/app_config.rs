@@ -98,11 +98,7 @@ fn is_empty(value: &String) -> bool {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Route {
-    #[serde(
-        skip_deserializing,
-        skip_serializing_if = "is_empty",
-        default = "default_route_id"
-    )]
+    #[serde(skip_serializing_if = "is_empty", default = "default_route_id")]
     pub route_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_name: Option<String>,
