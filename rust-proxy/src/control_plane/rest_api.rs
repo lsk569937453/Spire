@@ -8,7 +8,6 @@ use crate::vojo::app_config::ServiceType;
 use crate::vojo::app_error::AppError;
 use crate::vojo::base_response::BaseResponse;
 use crate::vojo::cli::SharedConfig;
-use crate::vojo::route::BaseRoute;
 use axum::extract::Request;
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -177,12 +176,11 @@ async fn delete_route(
     let json_str = serde_json::to_string(&data).unwrap();
     Ok((axum::http::StatusCode::OK, json_str))
 }
-#[debug_handler]
 async fn put_routex(
     State(shared_config): State<SharedConfig>,
-    axum::extract::Json(route_vistor): axum::extract::Json<Route>,
+    req: Request,
 ) -> Result<impl axum::response::IntoResponse, Infallible> {
-    let t = match put_route_with_error(shared_config, route_vistor).await {
+    let t = match put_route_with_error(shared_config, req).await {
         Ok(r) => r.into_response(),
         Err(err) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -194,45 +192,26 @@ async fn put_routex(
 }
 async fn put_route_with_error(
     shared_config: SharedConfig,
-    route: Route,
+    req: Request,
 ) -> Result<String, AppError> {
+    let (_, body) = req.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|err| AppError(err.to_string()))?;
+    let route: Route = serde_yaml::from_slice(&bytes).map_err(|e| AppError(e.to_string()))?;
     let mut rw_global_lock = shared_config.shared_data.lock().unwrap();
 
     let old_route = rw_global_lock
         .api_service_config
         .iter_mut()
-        .flat_map(|(_, item)| item.service_config.routes.clone())
-        .find(|item| item.route_id == route.route_id)
+        .flat_map(|(_, item)| item.service_config.routes.iter_mut())
+        .find(|r| r.route_id == route.route_id)
         .ok_or(AppError(String::from(
             "Can not find the route by route id!",
         )))?;
 
-    let mut new_route = route;
-    let mut new_liveness_status = &new_route.liveness_status;
-    new_liveness_status = &old_route.liveness_status.clone();
+    *old_route = route;
 
-    let old_base_clusters = old_route.clone().route_cluster.get_all_route().await?;
-    let hashmap = old_base_clusters
-        .iter()
-        .map(|item| (item.endpoint.clone(), item.clone()))
-        .collect::<HashMap<String, BaseRoute>>();
-    let mut new_routes = new_route.route_cluster.get_all_route().await?;
-    for new_base_route in new_routes.iter_mut() {
-        if hashmap.clone().contains_key(&new_base_route.endpoint) {
-            let old_base_route = hashmap.get(&new_base_route.endpoint).unwrap();
-            let mut alive = new_base_route.is_alive;
-            alive = old_base_route.is_alive;
-            let mut anomaly_detection_status = &new_base_route.anomaly_detection_status;
-            anomaly_detection_status = &old_base_route.anomaly_detection_status.clone();
-        }
-    }
-    for (_, api_service) in rw_global_lock.api_service_config.iter_mut() {
-        for route in api_service.service_config.routes.iter_mut() {
-            if route.route_id == route.route_id {
-                *route = new_route.clone();
-            }
-        }
-    }
     let app_config = rw_global_lock.clone();
     tokio::spawn(async {
         if let Err(err) = save_config_to_file(app_config).await {
@@ -292,7 +271,6 @@ fn validate_tls_config(
         return Err(AppError(String::from("Can not parse the certs pem.")));
     }
     let key_pem = key_pem_option.unwrap();
-    // pkcs8::PrivateKeyInfo::from_pem(key_pem.as_str());
     let key_pem_result = pkcs8::Document::from_pem(key_pem.as_str());
     if key_pem_result.is_err() {
         return Err(AppError(String::from("Can not parse the key pem.")));
@@ -304,7 +282,7 @@ pub fn get_router(shared_config: SharedConfig) -> Router {
         .route("/appConfig", get(get_app_config).post(post_app_config))
         .route("/metrics", get(get_prometheus_metrics))
         .route("/route/{id}", delete(delete_route))
-        .route("/xasxaxas", put(put_routex))
+        .route("/route", put(put_routex))
         .route("/letsEncryptCertificate", post(lets_encrypt_certificate))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
