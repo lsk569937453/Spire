@@ -1,26 +1,30 @@
-
-
 # Benchmarks
+
 Tests performance of various proxies/load balancers. Based on the [Proxy-Benchmarks](https://github.com/NickMRamirez/Proxy-Benchmarks).
 
 We test the following proxies:
 
-* Caddy
-* Envoy
-* NGINX
-* Silverwind
+- Caddy
+- Envoy
+- NGINX
+- Spire
 
 ## Setup
-We use the **docker-compose** to do the performance test.Install the docker on your computer and confirm that the your computer have enough cpu and memory.There are three services in the docker-compose including the hey(Testing Tool),proxy and the backend.We limit **the cpu cores(4 core) and memory(8GB)** for the service. 
+
+We use the **docker-compose** to do the performance test.Install the docker on your computer and confirm that the your computer have enough cpu and memory.There are three services in the docker-compose including the hey(Testing Tool),proxy and the backend.We limit **the cpu cores(4 core) and memory(8GB)** for the service.
 
 Our testing environment is based on the PC.And the cpu of the PC is 13th Gen Intel(R) Core(TM) i5-13600K,the memory of the PC is 32GB.
+
 ## Results using Hey
+
 ![alt tag](https://raw.githubusercontent.com/lsk569937453/image_repo/main/benchmarks2/rps.png)
 ![alt tag](https://raw.githubusercontent.com/lsk569937453/image_repo/main/benchmarks2/avt.png)
 ![alt tag](https://raw.githubusercontent.com/lsk569937453/image_repo/main/benchmarks2/ld.png)
 
 Graphs created using [https://www.rapidtables.com/tools/bar-graph.html](https://www.rapidtables.com/tools/bar-graph.html)
+
 ## Haproxy(2.7.3)
+
 ```
  hey -n 100000 -c 250 -m GET http://haproxy:80/
 
@@ -30,7 +34,7 @@ Summary:
   Fastest:	0.0001 secs
   Average:	0.0030 secs
   Requests/sec:	81674.2776
-  
+
   Total data:	13300000 bytes
   Size/request:	133 bytes
 
@@ -68,9 +72,11 @@ Status code distribution:
   [200]	100000 responses
 
 ```
+
 ## SilverWind
+
 ```
-hey -n 100000 -c 250 -m GET http://silverwind:6667
+hey -n 100000 -c 250 -m GET http://spire:6667
 
 Summary:
   Total:	1.5067 secs
@@ -78,7 +84,7 @@ Summary:
   Fastest:	0.0001 secs
   Average:	0.0037 secs
   Requests/sec:	66370.1064
-  
+
   Total data:	13800000 bytes
   Size/request:	138 bytes
 
@@ -115,7 +121,9 @@ Details (average, fastest, slowest):
 Status code distribution:
   [200]	100000 responses
 ```
+
 ## Envoy(1.22.8)
+
 ```
 hey -n 100000 -c 250 -m GET http://envoy:8050
 
@@ -125,7 +133,7 @@ Summary:
   Fastest:	0.0001 secs
   Average:	0.0040 secs
   Requests/sec:	61847.1944
-  
+
   Total data:	24700000 bytes
   Size/request:	247 bytes
 
@@ -162,7 +170,9 @@ Details (average, fastest, slowest):
 Status code distribution:
   [200]	100000 responses
 ```
+
 ## Traefik(2.9.8)
+
 ```
 hey -n 100000 -c 250 -m GET http://traefik:80/
 
@@ -172,7 +182,7 @@ Summary:
   Fastest:	0.0001 secs
   Average:	0.0041 secs
   Requests/sec:	59486.9083
-  
+
   Total data:	28800000 bytes
   Size/request:	288 bytes
 
@@ -210,7 +220,9 @@ Status code distribution:
   [200]	100000 responses
 
 ```
+
 ## Nginx(1.23.3)
+
 ```
  hey -n 100000 -c 250 -m GET http://nginx:80/
 
@@ -257,7 +269,9 @@ Details (average, fastest, slowest):
 Status code distribution:
   [200] 100000 responses
 ```
+
 ## Caddy(2.6.4)
+
 ```
 hey -n 100000 -c 250 -m GET http://caddy:80/
 
@@ -268,7 +282,7 @@ Summary:
   Fastest:	0.0001 secs
   Average:	0.0137 secs
   Requests/sec:	17787.6741
-  
+
   Total data:	20900000 bytes
   Size/request:	209 bytes
 

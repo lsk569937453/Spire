@@ -10,7 +10,7 @@ use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::reload::Handle;
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
-use tracing_subscriber::{filter, prelude::*, reload};
+use tracing_subscriber::{filter, reload};
 
 struct LocalTime;
 use tracing_subscriber::util::SubscriberInitExt;

@@ -61,7 +61,6 @@ pub async fn start_proxy(
         };
         http_proxy.start_http_server().await
     } else if server_type == ServiceType::Https {
-        let key_clone = mapping_key.clone();
         let pem_str = service_config
             .cert_str
             .ok_or(AppError("Pem is null.".to_string()))?;
@@ -92,7 +91,6 @@ pub async fn start_proxy(
         };
         grpc_proxy.start_proxy().await
     } else {
-        let key_clone = mapping_key.clone();
         let pem_str = service_config.cert_str.unwrap();
         let key_str = service_config.key_str.unwrap();
         let mut grpc_proxy = GrpcProxy {

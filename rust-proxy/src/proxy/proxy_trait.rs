@@ -1,4 +1,3 @@
-use crate::vojo::app_config::Route;
 use crate::vojo::app_error::AppError;
 use crate::vojo::route::BaseRoute;
 use crate::SharedConfig;
@@ -19,15 +18,10 @@ pub trait CheckTrait {
     ) -> Result<Option<CheckResult>, AppError>;
 }
 pub struct CommonCheckRequest;
-impl CommonCheckRequest {
-    pub fn new() -> Self {
-        CommonCheckRequest {}
-    }
-}
+
 #[derive(Debug, Clone)]
 pub struct CheckResult {
     pub request_path: String,
-    pub route: Route,
     pub base_route: BaseRoute,
 }
 
@@ -36,7 +30,7 @@ impl CheckTrait for CommonCheckRequest {
         &self,
         shared_config: SharedConfig,
         port: i32,
-        mapping_key: String,
+        _mapping_key: String,
         headers: HeaderMap,
         uri: Uri,
         peer_addr: SocketAddr,
@@ -80,7 +74,6 @@ impl CheckTrait for CommonCheckRequest {
                     .to_string();
                 return Ok(Some(CheckResult {
                     request_path,
-                    route: item.clone(),
                     base_route,
                 }));
             } else {
@@ -89,7 +82,6 @@ impl CheckTrait for CommonCheckRequest {
                 let request_path = path.join(rest_path);
                 return Ok(Some(CheckResult {
                     request_path: String::from(request_path.to_str().unwrap_or_default()),
-                    route: item.clone(),
                     base_route,
                 }));
             }
@@ -102,6 +94,7 @@ mod tests {
     use super::*;
     use crate::vojo::app_config::ApiService;
     use crate::vojo::app_config::AppConfig;
+    use crate::vojo::app_config::Route;
     use crate::vojo::app_config::ServiceConfig;
     use http::HeaderName;
     use http::HeaderValue;
@@ -116,21 +109,12 @@ mod tests {
             HeaderValue::from_static("test.com"),
         );
 
-        let base_route = BaseRoute {
-            endpoint: String::from("http://backend.test.com"),
-            ..Default::default()
-        };
-
-        let route_cluster = crate::vojo::route::LoadbalancerStrategy::default();
-
-        let mut route = Route::default();
-        route.route_cluster = route_cluster;
+        let route = Route::default();
 
         let mut service_config = ServiceConfig::default();
         service_config.routes.push(route);
 
-        let mut api_service = ApiService::default();
-        api_service.service_config = service_config;
+        let api_service = ApiService::default();
 
         let mut config_map = HashMap::new();
         config_map.insert(8080, api_service);
@@ -142,7 +126,7 @@ mod tests {
             })),
         };
 
-        let checker = CommonCheckRequest::new();
+        let checker = CommonCheckRequest {};
         let uri = "/api/test/users".parse().unwrap();
         let peer_addr = "127.0.0.1:12345".parse().unwrap();
 
@@ -164,21 +148,12 @@ mod tests {
             HeaderValue::from_static("test.com"),
         );
 
-        let base_route = BaseRoute {
-            endpoint: String::from("/var/www"),
-            ..Default::default()
-        };
-
-        let route_cluster = crate::vojo::route::LoadbalancerStrategy::default();
-
-        let mut route = Route::default();
-        route.route_cluster = route_cluster;
+        let route = Route::default();
 
         let mut service_config = ServiceConfig::default();
         service_config.routes.push(route);
 
-        let mut api_service = ApiService::default();
-        api_service.service_config = service_config;
+        let api_service = ApiService::default();
 
         let mut config_map = HashMap::new();
         config_map.insert(8080, api_service);
@@ -190,7 +165,7 @@ mod tests {
             })),
         };
 
-        let checker = CommonCheckRequest::new();
+        let checker = CommonCheckRequest {};
         let uri = "/static/images/test.jpg".parse().unwrap();
         let peer_addr = "127.0.0.1:12345".parse().unwrap();
 
@@ -214,7 +189,7 @@ mod tests {
             })),
         };
 
-        let checker = CommonCheckRequest::new();
+        let checker = CommonCheckRequest {};
         let uri = "/not/exist/path".parse().unwrap();
         let peer_addr = "127.0.0.1:12345".parse().unwrap();
 

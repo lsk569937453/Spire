@@ -1,7 +1,4 @@
-use super::app_config::LivenessConfig;
-use super::app_config::LivenessStatus;
 use super::app_error::AppError;
-use crate::vojo::anomaly_detection::HttpAnomalyDetectionParam;
 
 use core::fmt::Debug;
 use http::HeaderMap;
@@ -10,9 +7,6 @@ use rand::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tokio::time::{sleep, Duration};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum LoadbalancerStrategy {
@@ -85,52 +79,6 @@ pub struct BaseRoute {
     pub is_alive: Option<bool>,
     #[serde(skip_serializing, skip_deserializing)]
     pub anomaly_detection_status: AnomalyDetectionStatus,
-}
-
-impl BaseRoute {
-    async fn update_ok(&mut self, liveness_status_lock: LivenessStatus) -> bool {
-        false
-    }
-    async fn update_fail(&self, liveness_status_lock: Arc<RwLock<LivenessStatus>>) -> bool {
-        false
-    }
-    pub async fn update_health_check_status_with_ok(
-        &self,
-        liveness_status_lock: Arc<RwLock<LivenessStatus>>,
-    ) -> bool {
-        false
-    }
-    pub async fn update_health_check_status_with_fail(
-        &self,
-        liveness_status_lock: Arc<RwLock<LivenessStatus>>,
-        liveness_config: LivenessConfig,
-    ) -> bool {
-        false
-    }
-    pub async fn trigger_http_anomaly_detection(
-        &self,
-        http_anomaly_detection_param: HttpAnomalyDetectionParam,
-        liveness_status_lock: Arc<RwLock<LivenessStatus>>,
-        is_5xx: bool,
-        liveness_config: LivenessConfig,
-    ) -> Result<(), AppError> {
-        Ok(())
-    }
-
-    pub async fn wait_for_alive(
-        is_alive_lock: Arc<RwLock<Option<bool>>>,
-        wait_second: u64,
-        liveness_status_lock: Arc<RwLock<LivenessStatus>>,
-        anomaly_detection_status_lock: Arc<RwLock<AnomalyDetectionStatus>>,
-    ) {
-        sleep(Duration::from_secs(wait_second)).await;
-        let mut is_alive_option = is_alive_lock.write().await;
-        let mut liveness_status = liveness_status_lock.write().await;
-        let mut anomaly_detection_status = anomaly_detection_status_lock.write().await;
-        *is_alive_option = Some(true);
-        liveness_status.current_liveness_count += 1;
-        anomaly_detection_status.consecutive_5xx = 0;
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

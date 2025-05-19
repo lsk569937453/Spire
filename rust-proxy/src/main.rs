@@ -21,11 +21,7 @@ mod proxy;
 use tracing_subscriber::filter;
 mod utils;
 use tracing_subscriber::filter::LevelFilter;
-#[macro_use]
-extern crate tracing;
 
-#[macro_use]
-extern crate axum;
 mod vojo;
 use crate::vojo::app_error::AppError;
 #[macro_use]
@@ -92,29 +88,12 @@ async fn start() -> Result<(), AppError> {
 }
 #[cfg(test)]
 mod tests {
-    use crate::vojo::app_config::StaticConifg;
 
     use super::*;
 
-    use std::collections::HashMap;
-
-    // Test configuration
-    fn test_config() -> AppConfig {
-        AppConfig {
-            static_config: StaticConifg {
-                log_level: None,
-                admin_port: Some(8080),
-                health_check_log_enabled: None,
-                database_url: None,
-                config_file_path: None, // other fields...
-            },
-            api_service_config: HashMap::new(),
-        }
-    }
-
     #[tokio::test]
     async fn test_start_with_config_file() {
-        let cli = Cli {
+        let _ = Cli {
             config_path: "conf/app_config.yaml".to_string(),
         };
         let result = start().await;

@@ -4,21 +4,18 @@ use prometheus::{CounterVec, Gauge, Histogram, HistogramVec};
 
 lazy_static! {
     static ref HTTP_COUNTER: CounterVec = register_counter_vec!(
-        opts!(
-            "silverwind_http_requests_total",
-            "Number of HTTP requests made.",
-        ),
+        opts!("spire_http_requests_total", "Number of HTTP requests made.",),
         &["port", "request_path", "status_code"]
     )
     .unwrap();
     static ref HTTP_BODY_GAUGE: Gauge = register_gauge!(opts!(
-        "silverwind_http_response_size_bytes",
+        "spire_http_response_size_bytes",
         "The HTTP response sizes in bytes.",
         labels! {"handler" => "all",}
     ))
     .unwrap();
     static ref HTTP_REQ_HISTOGRAM: HistogramVec = register_histogram_vec!(
-        "silverwind_http_request_duration_seconds",
+        "spire_http_request_duration_seconds",
         "The HTTP request latencies in seconds.",
         &["port", "request_path"]
     )

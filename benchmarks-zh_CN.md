@@ -1,42 +1,55 @@
-
-
 # 基准测试
+
 本次性能测试主要针对主流的代理/负载均衡。测试方法基于此项目[Proxy-Benchmarks](https://github.com/NickMRamirez/Proxy-Benchmarks).
 
 测试的代理列表如下:
-* Caddy
-* Envoy
-* Nginx
-* Silverwind
-* Haproxy
-* Traefik
+
+- Caddy
+- Envoy
+- Nginx
+- Spire
+- Haproxy
+- Traefik
+
 ## 测试环境&&测试工具
+
 ### 测试什么
+
 本次基准测试主要测试各个项目作为反向代理的性能表现。
+
 ### 测试环境
-我们将在docker容器中做性能测试。第一个优点是任何人只要安装了docker都能一键启动性能测试。第二点是在docker swarm中限制服务的cpu和内存比较方便。我们主要启动三个服务:代理服务，后端服务，测试工具服务。这样三个服务都部署在docker容器中，三者相互访问时减少了网络通信的延迟。
+
+我们将在 docker 容器中做性能测试。第一个优点是任何人只要安装了 docker 都能一键启动性能测试。第二点是在 docker swarm 中限制服务的 cpu 和内存比较方便。我们主要启动三个服务:代理服务，后端服务，测试工具服务。这样三个服务都部署在 docker 容器中，三者相互访问时减少了网络通信的延迟。
 
 ### 服务配置
-每个服务的配置都是4核8G的docker容器。docker宿主机是PC(Cpu是13th Gen Intel(R) Core(TM) i5-13600K,内存是32GB)。
+
+每个服务的配置都是 4 核 8G 的 docker 容器。docker 宿主机是 PC(Cpu 是 13th Gen Intel(R) Core(TM) i5-13600K,内存是 32GB)。
 
 ### 测试工具
+
 本次测试工具使用[hey](https://github.com/rakyll/hey)。
 
 ### 测试参数
+
 测试指令如下：
+
 ```
 hey -n 100000 -c 250 -m GET http://proxy:80
 ```
-该指令指使用250并发去请求[http://proxy:80]，总共请求10w次。我们会在同一台机器上执行该指令多次，只统计数据最好的那一个。
+
+该指令指使用 250 并发去请求[http://proxy:80]，总共请求 10w 次。我们会在同一台机器上执行该指令多次，只统计数据最好的那一个。
 
 ## 测试结果如下
-Caddy的测试结果太差，图表中不再展示。在下一章中有全部的测试数据结果(文本)。
+
+Caddy 的测试结果太差，图表中不再展示。在下一章中有全部的测试数据结果(文本)。
 ![alt tag](https://raw.githubusercontent.com/lsk569937453/image_repo/main/benchmarks2/rps.png)
 ![alt tag](https://raw.githubusercontent.com/lsk569937453/image_repo/main/benchmarks2/avt.png)
 ![alt tag](https://raw.githubusercontent.com/lsk569937453/image_repo/main/benchmarks2/ld.png)
 
 ## 使用的指令和测试数据结果
+
 ### Haproxy(2.7.3)
+
 ```
  hey -n 100000 -c 250 -m GET http://haproxy:80/
 
@@ -46,7 +59,7 @@ Summary:
   Fastest:	0.0001 secs
   Average:	0.0030 secs
   Requests/sec:	81674.2776
-  
+
   Total data:	13300000 bytes
   Size/request:	133 bytes
 
@@ -84,14 +97,17 @@ Status code distribution:
   [200]	100000 responses
 
 ```
+
 ```
 启动内存:78MB
 波峰内存:82MB
 波谷内存:81MB
 ```
+
 ### SilverWind
+
 ```
-hey -n 100000 -c 250 -m GET http://silverwind:6667
+hey -n 100000 -c 250 -m GET http://spire:6667
 
 Summary:
   Total:	1.5067 secs
@@ -99,7 +115,7 @@ Summary:
   Fastest:	0.0001 secs
   Average:	0.0037 secs
   Requests/sec:	66370.1064
-  
+
   Total data:	13800000 bytes
   Size/request:	138 bytes
 
@@ -136,12 +152,15 @@ Details (average, fastest, slowest):
 Status code distribution:
   [200]	100000 responses
 ```
+
 ```
 启动内存:4MB
 波峰内存:35MB
 波谷内存:30MB
 ```
+
 ### Envoy(1.22.8)
+
 ```
 hey -n 100000 -c 250 -m GET http://envoy:8050
 
@@ -151,7 +170,7 @@ Summary:
   Fastest:	0.0001 secs
   Average:	0.0040 secs
   Requests/sec:	61847.1944
-  
+
   Total data:	24700000 bytes
   Size/request:	247 bytes
 
@@ -188,12 +207,15 @@ Details (average, fastest, slowest):
 Status code distribution:
   [200]	100000 responses
 ```
+
 ```
 启动内存:17MB
 波峰内存:36MB
 波谷内存:33MB
 ```
+
 ### Traefik(2.9.8)
+
 ```
 hey -n 100000 -c 250 -m GET http://traefik:80/
 
@@ -203,7 +225,7 @@ Summary:
   Fastest:	0.0001 secs
   Average:	0.0041 secs
   Requests/sec:	59486.9083
-  
+
   Total data:	28800000 bytes
   Size/request:	288 bytes
 
@@ -241,12 +263,15 @@ Status code distribution:
   [200]	100000 responses
 
 ```
+
 ```
 启动内存:22MB
 波峰内存:135MB
 波谷内存:120MB
 ```
+
 ### Nginx(1.23.3)
+
 ```
  hey -n 100000 -c 250 -m GET http://nginx:80/
 
@@ -293,12 +318,15 @@ Details (average, fastest, slowest):
 Status code distribution:
   [200] 100000 responses
 ```
+
 ```
 启动内存:29MB
 波峰内存:37MB
 波谷内存:34MB
 ```
+
 ### Caddy(2.6.4)
+
 ```
 hey -n 100000 -c 250 -m GET http://caddy:80/
 
@@ -309,7 +337,7 @@ Summary:
   Fastest:	0.0001 secs
   Average:	0.0137 secs
   Requests/sec:	17787.6741
-  
+
   Total data:	20900000 bytes
   Size/request:	209 bytes
 
@@ -347,25 +375,35 @@ Status code distribution:
   [200]	100000 responses
 
 ```
+
 ```
 启动内存:10MB
 波峰内存:60MB
 波谷内存:41MB
 ```
+
 ## 我想自己复现一下测试怎么办
-所有的测试都在[测试目录](https://github.com/lsk569937453/silverwind/tree/main/benchmarks)下。以Nginx为例，可以直接进入测试目录下的[Nginx目录](https://github.com/lsk569937453/silverwind/tree/main/benchmarks/nginx)。修改Nginx文件后，然后使用如下的命令启动测试集群
+
+所有的测试都在[测试目录](https://github.com/lsk569937453/spire/tree/main/benchmarks)下。以 Nginx 为例，可以直接进入测试目录下的[Nginx 目录](https://github.com/lsk569937453/spire/tree/main/benchmarks/nginx)。修改 Nginx 文件后，然后使用如下的命令启动测试集群
+
 ```
-docker stack deploy --compose-file docker-compose.yaml benchmark 
+docker stack deploy --compose-file docker-compose.yaml benchmark
 ```
-等测试集群启动完成，进入如下指令进入test容器。
+
+等测试集群启动完成，进入如下指令进入 test 容器。
+
 ```
-docker exec -it xxxx /bin/bash 
+docker exec -it xxxx /bin/bash
 ```
+
 然后使用如下指令启动测试
+
 ```
 hey -n 100000 -c 250 -m GET http://nginx:80/
 ```
+
 ## 后记
+
 我一共做了两次大的测试，这次的结果和上次不一样。
-上次的测试环境是windows 10下安装docker容器，然后启动测试。这次的测试环境是ubuntu 22.04安装docker容器，然后启动测试。  
-两次测试结果的不同点是nginx的性能有所下降，envoy和silverWind的性能有略微上升。猜测可能是ubuntu和windows的底层使用的虚拟化技术不一样导致的。
+上次的测试环境是 windows 10 下安装 docker 容器，然后启动测试。这次的测试环境是 ubuntu 22.04 安装 docker 容器，然后启动测试。  
+两次测试结果的不同点是 nginx 的性能有所下降，envoy 和 silverWind 的性能有略微上升。猜测可能是 ubuntu 和 windows 的底层使用的虚拟化技术不一样导致的。

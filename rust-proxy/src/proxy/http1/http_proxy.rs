@@ -3,8 +3,6 @@ use crate::constants::common_constants::DEFAULT_HTTP_TIMEOUT;
 use crate::monitor::prometheus_exporter::{get_timer_list, inc};
 use crate::proxy::http1::http_client::HttpClients;
 
-use crate::vojo::anomaly_detection::AnomalyDetectionType;
-use crate::vojo::app_config::{LivenessConfig, LivenessStatus};
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
 use crate::vojo::route::BaseRoute;
@@ -36,7 +34,6 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tokio::sync::RwLock;
 use tokio_rustls::TlsAcceptor;
 pub struct HttpProxy {
     pub port: i32,
@@ -292,7 +289,6 @@ async fn proxy(
     if let Some(check_request) = check_result {
         let request_path = check_request.request_path;
         let base_route = check_request.base_route;
-        let route = check_request.route;
         if !request_path.clone().contains("http") {
             let mut parts = req.uri().clone().into_parts();
             parts.path_and_query = Some(request_path.try_into().unwrap());
@@ -316,18 +312,7 @@ async fn proxy(
                 )))
             }
         };
-        if let (Some(anomaly_detection), Some(liveness_config)) = (
-            route.clone().anomaly_detection,
-            route.clone().liveness_config,
-        ) {
-            let is_5xx = match response_result.as_ref() {
-                Ok(response) => {
-                    let status_code = response.status();
-                    status_code.clone().as_u16() >= StatusCode::INTERNAL_SERVER_ERROR.as_u16()
-                }
-                Err(_) => true,
-            };
-        }
+
         let res = response_result?
             .map(|b| b.boxed())
             .map(|item| item.map_err(|_| -> Infallible { unreachable!() }).boxed());
@@ -338,31 +323,7 @@ async fn proxy(
         .body(Full::new(Bytes::from(common_constants::NOT_FOUND)).boxed())
         .unwrap())
 }
-async fn trigger_anomaly_detection(
-    anomaly_detection: AnomalyDetectionType,
-    liveness_status_lock: Arc<RwLock<LivenessStatus>>,
-    base_route: BaseRoute,
-    is_5xx: bool,
-    liveness_config: LivenessConfig,
-) -> Result<(), AppError> {
-    let AnomalyDetectionType::Http(http_anomaly_detection_param) = anomaly_detection;
-    let res = base_route
-        .trigger_http_anomaly_detection(
-            http_anomaly_detection_param,
-            liveness_status_lock,
-            is_5xx,
-            liveness_config,
-        )
-        .await;
-    if res.is_err() {
-        error!(
-            "trigger_http_anomaly_detection error,the error is {}",
-            res.unwrap_err()
-        );
-    }
 
-    Ok(())
-}
 async fn route_file(
     base_route: BaseRoute,
     req: Request<BoxBody<Bytes, Infallible>>,

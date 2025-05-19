@@ -10,7 +10,7 @@ struct LetsEncryptResponse {
     certificate_perm: String,
 }
 pub async fn lets_encrypt_certificate(
-    State(shared_config): State<SharedConfig>,
+    State(_): State<SharedConfig>,
 
     axum::extract::Json(lets_encrypt_object): axum::extract::Json<LetsEntrypt>,
 ) -> Result<impl axum::response::IntoResponse, Infallible> {

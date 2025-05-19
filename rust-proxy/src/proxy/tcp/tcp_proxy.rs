@@ -81,7 +81,7 @@ async fn transfer(
 async fn check(
     port: i32,
     shared_config: SharedConfig,
-    mapping_key: String,
+    _mapping_key: String,
     remote_addr: SocketAddr,
 ) -> Result<bool, AppError> {
     let app_config = shared_config.shared_data.lock().unwrap().clone();
@@ -139,8 +139,8 @@ mod tests {
 
     fn create_mock_shared_config(
         port: i32,
-        allowed_ips: Vec<&str>,
-        endpoint: &str,
+        _allowed_ips: Vec<&str>,
+        _endpoint: &str,
     ) -> SharedConfig {
         let header_based = WeightBasedRoute {
             routes: vec![WeightRoute {
