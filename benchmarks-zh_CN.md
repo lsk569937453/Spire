@@ -54,14 +54,14 @@ Caddy 的测试结果太差，图表中不再展示。在下一章中有全部�
 hey -n 100000 -c 250 -m GET http://haproxy:80/
 
 Summary:
-  Total:        1.1709 secs
-  Slowest:      0.0496 secs
-  Fastest:      0.0001 secs
-  Average:      0.0029 secs
-  Requests/sec: 85406.0342
+  Total:	1.2244 secs
+  Slowest:	0.0890 secs
+  Fastest:	0.0001 secs
+  Average:	0.0030 secs
+  Requests/sec:	81674.2776
 
-  Total data:   15300000 bytes
-  Size/request: 153 bytes
+  Total data:	13300000 bytes
+  Size/request:	133 bytes
 
 Response time histogram:
   0.000 [1]     |
@@ -104,20 +104,20 @@ Status code distribution:
 波谷内存:81MB
 ```
 
-### Spire
+### SilverWind
 
 ```
 hey -n 100000 -c 250 -m GET http://spire:6667
 
 Summary:
-  Total:        0.8733 secs
-  Slowest:      0.0528 secs
-  Fastest:      0.0001 secs
-  Average:      0.0022 secs
-  Requests/sec: 114511.6388
+  Total:	1.5067 secs
+  Slowest:	0.0199 secs
+  Fastest:	0.0001 secs
+  Average:	0.0037 secs
+  Requests/sec:	66370.1064
 
-  Total data:   15500000 bytes
-  Size/request: 155 bytes
+  Total data:	13800000 bytes
+  Size/request:	138 bytes
 
 Response time histogram:
   0.000 [1]     |
@@ -165,14 +165,14 @@ Status code distribution:
 hey -n 100000 -c 250 -m GET http://envoy:8050
 
 Summary:
-  Total:        2.0816 secs
-  Slowest:      0.0571 secs
-  Fastest:      0.0001 secs
-  Average:      0.0051 secs
-  Requests/sec: 48040.4346
+  Total:	1.6169 secs
+  Slowest:	0.0276 secs
+  Fastest:	0.0001 secs
+  Average:	0.0040 secs
+  Requests/sec:	61847.1944
 
-  Total data:   29400000 bytes
-  Size/request: 294 bytes
+  Total data:	24700000 bytes
+  Size/request:	247 bytes
 
 Response time histogram:
   0.000 [1]     |
@@ -331,14 +331,14 @@ Status code distribution:
 hey -n 100000 -c 250 -m GET http://caddy:80/
 
 Summary:
-  Total:        7.5941 secs
-  Slowest:      0.2924 secs
-  Fastest:      0.0001 secs
-  Average:      0.0183 secs
-  Requests/sec: 13168.1413
+  Total:	5.6219 secs
+  Slowest:	0.1762 secs
+  Fastest:	0.0001 secs
+  Average:	0.0137 secs
+  Requests/sec:	17787.6741
 
-  Total data:   25700000 bytes
-  Size/request: 257 bytes
+  Total data:	20900000 bytes
+  Size/request:	209 bytes
 
 Response time histogram:
   0.000 [1]     |

@@ -20,7 +20,6 @@ use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
 use http::header;
-use http_body_util::BodyExt;
 use prometheus::{Encoder, TextEncoder};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -241,7 +240,7 @@ async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
         .write(true)
         .create(true)
         .truncate(true)
-        .open("temporary/new_silverwind_config.yml")
+        .open("temporary/new_spire_config.yml")
         .await
         .map_err(|e| AppError(e.to_string()))?;
     data.api_service_config

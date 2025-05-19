@@ -247,8 +247,8 @@ mod tests {
 
     fn create_mock_shared_config(
         port: i32,
-        allowed_ips: Vec<&str>,
-        endpoint: &str,
+        _allowed_ips: Vec<&str>,
+        _endpoint: &str,
     ) -> SharedConfig {
         let header_based = WeightBasedRoute {
             routes: vec![WeightRoute {

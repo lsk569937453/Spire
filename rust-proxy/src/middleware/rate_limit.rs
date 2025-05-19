@@ -8,7 +8,6 @@ use http::HeaderValue;
 use ipnet::Ipv4Net;
 use iprange::IpRange;
 use serde::{Deserialize, Serialize};
-use std::any::Any;
 use std::net::Ipv4Addr;
 
 use super::app_error::AppError;
@@ -191,9 +190,6 @@ impl TokenBucketRateLimit {
             Ok(true) // Limited
         }
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 
@@ -210,7 +206,6 @@ impl FixedWindowRateLimit {
         headers: HeaderMap<HeaderValue>,
         remote_ip: String,
     ) -> Result<bool, AppError> {
-        // Check if request matches our limiting criteria
         if !matched(self.limit_location.clone(), headers, remote_ip)? {
             return Ok(false);
         }
@@ -228,16 +223,13 @@ impl FixedWindowRateLimit {
         *counter += 1;
         Ok(*counter > self.rate_per_unit as i32)
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
     use super::*;
-    
+
     use http::{HeaderName, HeaderValue};
     fn create_headers(key: &str, value: &str) -> HeaderMap<HeaderValue> {
         let mut headers = HeaderMap::new();

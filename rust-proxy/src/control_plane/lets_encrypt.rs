@@ -12,14 +12,23 @@ struct LetsEncryptResponse {
     key_perm: String,
     certificate_perm: String,
 }
-#[automock]
-pub trait LetsEncryptActions: Send + Sync {
-    async fn start_request2(&self) -> Result<String, AppError>;
-}
-pub async fn lets_encrypt_certificate_logic<LEO: LetsEncryptActions>(
-    lets_encrypt_object: LEO,
-) -> Result<impl IntoResponse, AppError> {
-    let certificate_response = lets_encrypt_object.start_request2().await?;
+pub async fn lets_encrypt_certificate(
+    State(_): State<SharedConfig>,
+
+    axum::extract::Json(lets_encrypt_object): axum::extract::Json<LetsEntrypt>,
+) -> Result<impl axum::response::IntoResponse, Infallible> {
+    let request_result = lets_encrypt_object.start_request().await;
+    if let Err(err) = request_result {
+        return Ok((
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+        ));
+    }
+    let certificate = request_result.unwrap();
+    let response = LetsEncryptResponse {
+        key_perm: String::from(certificate.private_key()),
+        certificate_perm: String::from(certificate.certificate()),
+    };
     let data = BaseResponse {
         response_code: 0,
         response_object: certificate_response,

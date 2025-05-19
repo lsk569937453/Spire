@@ -2,12 +2,39 @@
 
 Spire 是一个高性能的反向代理/负载均衡调度器。它同时也可以在 K8S 集群中用作入口控制器。
 
+## Sivlverwind-Dashboard
+
+### docker-compose 启动
+
+通过如下命令来启动 Sivlverwind 的 Dashboard  
+docker-compose.yaml 的文件如下所示
+
+```
+version: "3.9"
+services:
+  spire-dashboard:
+    image: lsk569937453/spire-dashboard:0.0.7
+    container_name: spire-dashboard
+    ports:
+      - "4486:4486"
+
+  spire:
+      image: lsk569937453/spire:0.0.7
+      container_name: spire
+      ports:
+        - "6980:6980"
+      environment:
+        ADMIN_PORT: 6980
+```
+
+您执行**docker-compose up** 命令后，可以在浏览器中打开[主页](http://localhost:4486/index.html)来查看 Spire 的仪表盘。
+
 ## 为什么我们选择 Spire&&Spire 的优点
 
 ### 基准测试
 
 我们针对当前主流的代理/负载均衡器(NGINX, Envoy, and Caddy)做了性能测试。测试结果在[这里](https://github.com/lsk569937453/spire/blob/main/benchmarks-zh_CN.md)。
-测试结果表明在相同的机器配置下(4 核 8G),在某些指标上(每秒请求数,平均响应时间),Spire 的数据与 NGINX, 水平接近。
+测试结果表明在相同的机器配置下(4 核 8G),在某些指标上(每秒请求数,平均响应时间),Spire 的数据与 NGINX, Envoy 水平接近。
 在请求延迟上，Spire 的数据要明显好于 NGINX 和 Envoy。
 
 ### 所有的基础功能全都是原生语言开发-速度快
@@ -15,7 +42,7 @@ Spire 是一个高性能的反向代理/负载均衡调度器。它同时也可�
 Spire 不止是一个反向代理/负载均衡器，而且是一个 API 网关。作为一个 API 网关，Spire 将会涵盖所有的基础功能(黑白名单/授权/熔断限流/灰度发布
 ,蓝绿发布/监控/缓存/协议转换)。
 
-与其他的网关相比，Spire 的优点是涵盖 API 网关所有的基础服务，并且性能高。
+与其他的网关相比，Spire 的优点是涵盖 API 网关所有的基础服务，并且性能高。其次，Spire 的动态配置接近实时。每次修改完配置，会在 5 秒内生效(接近实时)。
 
 ### Kong
 
@@ -27,7 +54,30 @@ Envoy 没有内嵌限流功能。Envoy 提供了限流接口让用户自己实�
 第一个缺点是该项目只支持固定窗口限流。固定窗口限流算法的坏处是不支持突发流量。  
 第二个缺点是每次请求 Envoy 都会通过使用 grpc 去请求限流集群。相比内嵌的限流算法，这其实额外的增加了一次网络跃点。
 
+## 动态配置
+
+您可以通过 Rest API 更改配置。并且新配置将在**5 秒内**生效。
+
 ## 编译
+
+### 安装 Openssl
+
+#### Mac & Linux
+
+https://docs.rs/openssl/latest/openssl/
+
+#### Windows
+
+通过 vcpkg 安装 openssl。
+
+```
+> git clone https://github.com/microsoft/vcpkg
+> .\vcpkg\bootstrap-vcpkg.bat
+> .\vcpkg.exe install openssl
+```
+
+从https://strawberryperl.com/
+下载安装 strawberryperl.
 
 ### 开始编译
 
@@ -59,9 +109,9 @@ servers:
 
 ```
 
-Spire 将会监听 8084 端口然后转发流量到 http://192.168.0.0:9393。
+Spire 将会监听 9969 端口然后转发流量到 http://localhost:8888/,http://localhost:9999/.http://localhost:7777/ 。
 
-### 配置 Spire 作为文件服务器
+### Spire as the tcp proxy
 
 ```
 servers:
@@ -82,14 +132,104 @@ servers:
 
 ```
 
-Spire 将会监听 8084 端口。
+Spire 将会监听 4486 端口然后转发流量到 httpbin.org:443。
 
 ### 启动:
 
 #### Windows 下启动
 
 ```
-.\target\release\spire.exe -f .\config\app_config_simple.yaml
+$env:CONFIG_FILE_PATH='D:\code\app_config.yaml'; .\rust-proxy.exe
+```
+
+或者也可以无配置文件启动。
+
+```
+.\rust-proxy.exe
+```
+
+## Rest Api
+
+### 修改配置
+
+```
+POST /appConfig HTTP/1.1
+Host: 127.0.0.1:8870
+Content-Type: application/json
+Content-Length: 1752
+
+[
+    {
+        "listen_port": 4486,
+        "service_config": {
+            "server_type": "HTTP",
+            "cert_str": null,
+            "key_str": null,
+            "routes": [
+                {
+                    "matcher": {
+                        "prefix": "ss",
+                        "prefix_rewrite": "ssss"
+                    },
+                    "allow_deny_list": null,
+                    "route_cluster": {
+                        "type": "WeightBasedRoute",
+                        "routes": [
+                            {
+                                "base_route": {
+                                    "endpoint": "http://localhost:10000",
+                                    "try_file": null
+                                }
+                            }
+                        ]
+                    }
+                },
+                {
+                    "matcher": {
+                        "prefix": "sst",
+                        "prefix_rewrite": "ssss"
+                    },
+                    "allow_deny_list": null,
+                    "route_cluster": {
+                        "type": "WeightBasedRoute",
+                        "routes": [
+                            {
+                                "base_route": {
+                                    "endpoint": "http://localhost:9898",
+                                    "try_file": null
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    }
+]
+```
+
+### 获取配置
+
+```
+GET /appConfig HTTP/1.1
+Host: 127.0.0.1:8870
+```
+
+### 更新路由
+
+```
+PUT /route HTTP/1.1
+Host: 127.0.0.1:8870
+Content-Type: application/json
+Content-Length: 629
+
+```
+
+### 删除路由
+
+```
+DELETE /route/90c66439-5c87-4902-aebb-1c2c9443c154 HTTP/1.1
+Host: 127.0.0.1:8870
 ```
 
 ## <span id="api-gateway">API 网关中的基础功能</span>

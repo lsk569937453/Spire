@@ -293,56 +293,36 @@ async fn proxy(
         return server_upgrade(req, handling_result, client).await;
     }
 
-    if let Some(check_request) = handling_result {
-        let request_path = check_request.request_path.as_str();
-        let router_destination = check_request.router_destination;
-        if let Some(middlewares) = spire_context.middlewares.clone() {
-            if !middlewares.is_empty() {
-                chain_trait
-                    .handle_before_request(middlewares, remote_addr, &mut req)
-                    .await?;
-            }
-        }
-        let mut res = if router_destination.is_file() {
+    if let Some(check_request) = check_result {
+        let request_path = check_request.request_path;
+        let base_route = check_request.base_route;
+        if !request_path.clone().contains("http") {
             let mut parts = req.uri().clone().into_parts();
-            parts.path_and_query = Some(request_path.try_into()?);
-            *req.uri_mut() = Uri::from_parts(parts)?;
-            route_file(router_destination, req).await?
-        } else {
-            *req.uri_mut() = request_path.parse()?;
-            let host = req
-                .uri()
-                .host()
-                .ok_or("Uri to host cause error")?
-                .to_string();
-            req.headers_mut()
-                .insert(http::header::HOST, HeaderValue::from_str(&host)?);
-
-            let request_future = if request_path.contains("https") {
-                client.request_https(req, DEFAULT_HTTP_TIMEOUT)
-            } else {
-                client.request_http(req, DEFAULT_HTTP_TIMEOUT)
-            };
-            let response_result = match request_future.await {
-                Ok(response) => response.map_err(AppError::from),
-                _ => {
-                    return Err(AppError(format!(
-                        "Request time out,the uri is {}",
-                        request_path
-                    )))
-                }
-            };
-            response_result?
-                .map(|b| b.boxed())
-                .map(|item: BoxBody<Bytes, hyper::Error>| item.map_err(AppError::from).boxed())
-        };
-        if let Some(middlewares) = spire_context.middlewares {
-            if !middlewares.is_empty() {
-                chain_trait
-                    .handle_before_response(middlewares, request_path, &mut res)
-                    .await?;
-            }
+            parts.path_and_query = Some(request_path.try_into().unwrap());
+            *req.uri_mut() = Uri::from_parts(parts).unwrap();
+            return route_file(base_route, req).await;
         }
+        *req.uri_mut() = request_path
+            .parse()
+            .map_err(|err: InvalidUri| AppError(err.to_string()))?;
+        let request_future = if request_path.contains("https") {
+            client.request_https(req, DEFAULT_HTTP_TIMEOUT)
+        } else {
+            client.request_http(req, DEFAULT_HTTP_TIMEOUT)
+        };
+        let response_result = match request_future.await {
+            Ok(response) => response.map_err(|e| AppError(e.to_string())),
+            _ => {
+                return Err(AppError(format!(
+                    "Request time out,the uri is {}",
+                    request_path
+                )))
+            }
+        };
+
+        let res = response_result?
+            .map(|b| b.boxed())
+            .map(|item| item.map_err(|_| -> Infallible { unreachable!() }).boxed());
         return Ok(res);
     }
     Ok(Response::builder()

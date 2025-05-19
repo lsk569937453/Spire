@@ -93,7 +93,7 @@ pub struct LivenessConfig {
 pub struct LivenessStatus {
     pub current_liveness_count: i32,
 }
-fn is_empty(value: &String) -> bool {
+fn is_empty(value: &str) -> bool {
     value.is_empty()
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
