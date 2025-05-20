@@ -1,7 +1,8 @@
 use crate::constants::common_constants::GRPC_STATUS_HEADER;
 use crate::constants::common_constants::GRPC_STATUS_OK;
-use crate::proxy::proxy_trait::CheckTrait;
+use crate::proxy::proxy_trait::ChainTrait;
 use crate::proxy::proxy_trait::CommonCheckRequest;
+use crate::proxy::proxy_trait::SpireContext;
 use crate::vojo::app_error::AppError;
 use h2::client;
 use h2::server;
@@ -235,21 +236,23 @@ async fn request_outbound(
     mut inbound_respond: SendResponse<Bytes>,
     mapping_key: String,
     peer_addr: SocketAddr,
-    check_trait: impl CheckTrait,
+    check_trait: impl ChainTrait,
 ) -> Result<(), AppError> {
     debug!("{:?}", inbount_request);
     let (inbound_parts, inbound_body) = inbount_request.into_parts();
 
     let inbound_headers = inbound_parts.headers.clone();
     let uri = inbound_parts.uri.clone();
+    let mut spire_context = SpireContext::new(port, None);
     let check_result = check_trait
-        .check_before_request(
+        .handle_before_request(
             shared_config,
             port,
             mapping_key.clone(),
             inbound_headers,
             uri,
             peer_addr,
+            &mut spire_context,
         )
         .await?;
     if check_result.is_none() {

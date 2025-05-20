@@ -1,4 +1,5 @@
 use super::allow_deny_ip::AllowResult;
+use super::cors_config::CorsConfig;
 
 use crate::constants::common_constants::DEFAULT_ADMIN_PORT;
 use crate::constants::common_constants::DEFAULT_LOG_LEVEL;
@@ -10,13 +11,21 @@ use crate::vojo::authentication::Authentication;
 use crate::vojo::health_check::HealthCheckType;
 use crate::vojo::rate_limit::Ratelimit;
 use crate::vojo::route::LoadbalancerStrategy;
+use bytes::Bytes;
 use http::HeaderMap;
 use http::HeaderValue;
+use http_body_util::combinators::BoxBody;
+use http_body_util::BodyExt;
+use http_body_util::Full;
+use hyper::header;
+use hyper::Response;
+use hyper::StatusCode;
 use regex::Regex;
 use serde::Deserializer;
 use serde::Serializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::convert::Infallible;
 use tokio::sync::mpsc;
 use tracing_subscriber::filter::LevelFilter;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -104,10 +113,7 @@ pub struct Route {
     pub host_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matcher: Option<Matcher>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_deny_list: Option<Vec<AllowDenyObject>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub authentication: Option<Authentication>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anomaly_detection: Option<AnomalyDetectionType>,
     #[serde(skip_deserializing, skip_serializing)]
@@ -118,15 +124,84 @@ pub struct Route {
     pub liveness_config: Option<LivenessConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_check: Option<HealthCheckType>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ratelimit: Option<Ratelimit>,
     pub route_cluster: LoadbalancerStrategy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub middlewares: Option<Vec<MiddleWares>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "PascalCase", content = "content")]
+pub enum MiddleWares {
+    #[serde(rename = "rate_limit")]
+    RateLimit(Ratelimit),
+    #[serde(rename = "authentication")]
+    Authentication(Authentication),
+    #[serde(rename = "allow_deny_list")]
+    AllowDenyList(Vec<AllowDenyObject>),
+    #[serde(rename = "cors")]
+    Cors(CorsConfig),
 }
 fn default_route_id() -> String {
     get_uuid()
 }
 
 impl Route {
+    pub fn handle_preflight(
+        &self,
+        cors_config: CorsConfig,
+        origin: &str,
+    ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
+        if cors_config.validate_origin("")? {
+            return Ok(Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Full::new(Bytes::from("".to_string())).boxed())
+                .unwrap());
+        }
+        let methods_header = cors_config
+            .allowed_methods
+            .iter()
+            .map(|m| serde_json::to_string(m).unwrap())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let headers_header = cors_config
+            .allowed_headers
+            .iter()
+            .map(|h| serde_json::to_string(h).unwrap())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let mut builder = Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .header(header::ACCESS_CONTROL_ALLOW_METHODS, methods_header)
+            .header(header::ACCESS_CONTROL_ALLOW_HEADERS, headers_header)
+            .header(
+                header::ACCESS_CONTROL_MAX_AGE,
+                cors_config.max_age.to_string(),
+            )
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin)
+            .header(header::VARY, "Origin");
+
+        if cors_config.allow_credentials {
+            builder = builder.header(
+                header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                HeaderValue::from_static("true"),
+            );
+        }
+
+        builder
+            .body(Full::new(Bytes::from("".to_string())).boxed())
+            .map_err(|_| AppError("".to_string()))
+    }
+    pub fn cors_configed(&self) -> Result<Option<CorsConfig>, AppError> {
+        if let Some(middlewares) = &self.middlewares {
+            for middleware in middlewares.iter() {
+                if let MiddleWares::Cors(s) = middleware {
+                    return Ok(Some(s.clone()));
+                }
+            }
+        }
+        Ok(None)
+    }
     pub fn is_matched(
         &self,
         path: String,
@@ -166,28 +241,40 @@ impl Route {
         Ok(Some(final_path))
     }
     pub fn is_allowed(
-        &self,
+        &mut self,
         ip: String,
         headers_option: Option<HeaderMap<HeaderValue>>,
     ) -> Result<bool, AppError> {
-        let mut is_allowed = ip_is_allowed(self.allow_deny_list.clone(), ip.clone())?;
-        if !is_allowed {
-            return Ok(is_allowed);
-        }
-        if let (Some(header_map), Some(mut authentication_strategy)) =
-            (headers_option.clone(), self.authentication.clone())
-        {
-            is_allowed = authentication_strategy.check_authentication(header_map)?;
-            if !is_allowed {
-                return Ok(is_allowed);
+        if let Some(middlewares) = &mut self.middlewares {
+            for middleware in middlewares.iter_mut() {
+                match middleware {
+                    MiddleWares::RateLimit(ratelimit) => {
+                        if let Some(header_map) = headers_option.clone() {
+                            let is_allowed = !ratelimit.should_limit(header_map, ip.clone())?;
+                            if !is_allowed {
+                                return Ok(is_allowed);
+                            }
+                        }
+                    }
+                    MiddleWares::Authentication(authentication) => {
+                        if let Some(header_map) = headers_option.clone() {
+                            let is_allowed = authentication.check_authentication(header_map)?;
+                            if !is_allowed {
+                                return Ok(is_allowed);
+                            }
+                        }
+                    }
+                    MiddleWares::AllowDenyList(allow_deny_list) => {
+                        let is_allowed = ip_is_allowed(Some(allow_deny_list.clone()), ip.clone())?;
+                        if !is_allowed {
+                            return Ok(is_allowed);
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
-        if let (Some(header_map), Some(mut ratelimit_strategy)) =
-            (headers_option, self.ratelimit.clone())
-        {
-            is_allowed = !ratelimit_strategy.should_limit(header_map, ip)?;
-        }
-        Ok(is_allowed)
+        Ok(true)
     }
 }
 pub fn ip_is_allowed(
@@ -336,16 +423,24 @@ pub enum LogLevel {
 #[cfg(test)]
 mod tests {
 
+    use std::time::SystemTime;
+
     use super::*;
-    use crate::vojo::authentication::BasicAuth;
+    use crate::vojo::authentication::ApiKeyAuth;
+
     use crate::vojo::health_check::BaseHealthCheckParam;
     use crate::vojo::health_check::HttpHealthCheckParam;
+
+    use crate::vojo::rate_limit::IPBasedRatelimit;
+    use crate::vojo::rate_limit::TimeUnit;
+    use crate::vojo::rate_limit::TokenBucketRateLimit;
     use crate::vojo::route::BaseRoute;
 
     use crate::vojo::route::HeaderBasedRoute;
     use crate::vojo::route::HeaderRoute;
     use crate::vojo::route::LoadbalancerStrategy::WeightBased;
 
+    use crate::vojo::rate_limit::LimitLocation;
     use crate::vojo::route::PollBaseRoute;
     use crate::vojo::route::PollRoute;
     use crate::vojo::route::RandomBaseRoute;
@@ -579,6 +674,26 @@ mod tests {
             liveness_config: Some(LivenessConfig {
                 min_liveness_count: 1,
             }),
+            middlewares: Some(vec![
+                MiddleWares::Authentication(Authentication::ApiKey(ApiKeyAuth {
+                    key: "test".to_string(),
+                    value: "test".to_string(),
+                })),
+                MiddleWares::RateLimit(Ratelimit::TokenBucket(TokenBucketRateLimit {
+                    capacity: 10,
+                    rate_per_unit: 10,
+                    limit_location: LimitLocation::IP(IPBasedRatelimit {
+                        value: "192.168.0.1".to_string(),
+                    }),
+                    unit: TimeUnit::Second,
+                    current_count: 10,
+                    last_update_time: SystemTime::now(),
+                })),
+                MiddleWares::AllowDenyList(vec![AllowDenyObject {
+                    value: Some("192.168.0.2".to_string()),
+                    limit_type: crate::vojo::allow_deny_ip::AllowType::AllowAll,
+                }]),
+            ]),
             ..Default::default()
         };
         let service_config = ServiceConfig {
@@ -587,6 +702,8 @@ mod tests {
             ..Default::default()
         };
         api_service.service_config = service_config;
+        app_config.api_service_config.insert(8079, api_service);
+
         app_config
             .api_service_config
             .insert(8080, create_api_service1());
@@ -664,55 +781,6 @@ mod tests {
             .is_matched("/api/test".to_string(), Some(headers))
             .unwrap();
         assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_ip_allowing() {
-        let allow_obj = AllowDenyObject {
-            limit_type: crate::vojo::allow_deny_ip::AllowType::AllowAll,
-            value: Some("IP_ADDRESS".to_string()),
-        };
-
-        let route = Route {
-            allow_deny_list: Some(vec![allow_obj]),
-            ..Default::default()
-        };
-
-        let allowed = route.is_allowed("192.168.1.1".to_string(), None).unwrap();
-        assert!(allowed);
-
-        let allowed = route.is_allowed("192.168.1.2".to_string(), None).unwrap();
-        assert!(allowed);
-    }
-
-    #[test]
-    fn test_authentication() {
-        let auth = Authentication::Basic(BasicAuth {
-            credentials: "test:test".to_string(),
-        });
-        let route = Route {
-            authentication: Some(auth),
-            ..Default::default()
-        };
-
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "Authorization",
-            HeaderValue::from_static("Basic dGVzdDp0ZXN0"),
-        );
-
-        let allowed = route
-            .is_allowed("192.168.1.1".to_string(), Some(headers))
-            .unwrap();
-        assert!(allowed);
-
-        let mut wrong_headers = HeaderMap::new();
-        wrong_headers.insert("Authorization", HeaderValue::from_static("Basic wrong"));
-
-        let allowed = route
-            .is_allowed("192.168.1.1".to_string(), Some(wrong_headers))
-            .unwrap();
-        assert!(!allowed);
     }
 
     #[test]

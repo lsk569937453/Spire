@@ -100,8 +100,6 @@ pub struct TokenBucketRateLimit {
     pub limit_location: LimitLocation,
     #[serde(skip_serializing, skip_deserializing)]
     pub current_count: i32,
-    #[serde(skip_serializing, skip_deserializing)]
-    pub lock: i32,
     #[serde(skip_serializing, skip_deserializing, default = "default_time")]
     pub last_update_time: SystemTime,
 }
@@ -249,7 +247,6 @@ mod tests {
                 value: "127.0.0.1".to_string(),
             }),
             current_count: 2,
-            lock: 0,
             last_update_time: UNIX_EPOCH,
         };
 
@@ -378,7 +375,6 @@ mod tests {
             capacity: 4,
             limit_location: LimitLocation::default(),
             current_count: 0,
-            lock: 0,
             last_update_time: SystemTime::now(),
         };
 

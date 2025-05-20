@@ -10,12 +10,14 @@ use bytes::Bytes;
 use http::uri::InvalidUri;
 use http::Uri;
 use hyper::body::Incoming;
+use hyper::header;
 use hyper::header::{CONNECTION, SEC_WEBSOCKET_KEY};
+use hyper::Method;
 use hyper::StatusCode;
 
 use crate::proxy::http1::websocket_proxy::server_upgrade;
-use crate::proxy::proxy_trait::CheckTrait;
 use crate::proxy::proxy_trait::CommonCheckRequest;
+use crate::proxy::proxy_trait::{ChainTrait, SpireContext};
 use http::uri::PathAndQuery;
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::server::conn::http1;
@@ -255,19 +257,22 @@ async fn proxy(
     mut req: Request<BoxBody<Bytes, Infallible>>,
     mapping_key: String,
     remote_addr: SocketAddr,
-    check_trait: impl CheckTrait,
+    chain_trait: impl ChainTrait,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
     debug!("req: {:?}", req);
+
     let inbound_headers = req.headers().clone();
     let uri = req.uri().clone();
-    let check_result = check_trait
-        .check_before_request(
+    let mut spire_context = SpireContext::new(port, None);
+    let check_result = chain_trait
+        .handle_before_request(
             shared_config.clone(),
             port,
             mapping_key.clone(),
             inbound_headers.clone(),
             uri,
             remote_addr,
+            &mut spire_context,
         )
         .await?;
     if check_result.is_none() {
@@ -275,6 +280,20 @@ async fn proxy(
             .status(StatusCode::FORBIDDEN)
             .body(Full::new(Bytes::from(common_constants::DENY_RESPONSE)).boxed())
             .unwrap());
+    }
+    let route = spire_context
+        .clone()
+        .route
+        .ok_or(AppError(String::from("Not found route!")))?;
+    if req.method() == Method::OPTIONS
+        && req.headers().contains_key(header::ORIGIN)
+        && req
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD)
+    {
+        if let Some(cors_config) = route.cors_configed()? {
+            return route.handle_preflight(cors_config, "");
+        }
     }
     if inbound_headers.clone().contains_key(CONNECTION)
         && inbound_headers.contains_key(SEC_WEBSOCKET_KEY)
@@ -313,9 +332,12 @@ async fn proxy(
             }
         };
 
-        let res = response_result?
+        let mut res = response_result?
             .map(|b| b.boxed())
             .map(|item| item.map_err(|_| -> Infallible { unreachable!() }).boxed());
+        chain_trait
+            .handle_after_request(spire_context, &mut res)
+            .await?;
         return Ok(res);
     }
     Ok(Response::builder()

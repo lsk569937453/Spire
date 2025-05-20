@@ -1,13 +1,30 @@
+use crate::vojo::app_config::Route;
 use crate::vojo::app_error::AppError;
 use crate::vojo::route::BaseRoute;
 use crate::SharedConfig;
+use bytes::Bytes;
 use http::header::HeaderMap;
+use http_body_util::combinators::BoxBody;
+use hyper::Response;
 use hyper::Uri;
+use serde::Deserialize;
+use serde::Serialize;
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Path;
 use url::Url;
-pub trait CheckTrait {
-    async fn check_before_request(
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpireContext {
+    pub port: i32,
+    pub route: Option<Route>,
+}
+impl SpireContext {
+    pub fn new(port: i32, route: Option<Route>) -> Self {
+        Self { port, route }
+    }
+}
+pub trait ChainTrait {
+    async fn handle_before_request(
         &self,
         shared_config: SharedConfig,
         port: i32,
@@ -15,7 +32,13 @@ pub trait CheckTrait {
         headers: HeaderMap,
         uri: Uri,
         peer_addr: SocketAddr,
+        spire_context: &mut SpireContext,
     ) -> Result<Option<CheckResult>, AppError>;
+    async fn handle_after_request(
+        &self,
+        spire_context: SpireContext,
+        response: &mut Response<BoxBody<Bytes, Infallible>>,
+    ) -> Result<(), AppError>;
 }
 pub struct CommonCheckRequest;
 
@@ -25,8 +48,16 @@ pub struct CheckResult {
     pub base_route: BaseRoute,
 }
 
-impl CheckTrait for CommonCheckRequest {
-    async fn check_before_request(
+impl ChainTrait for CommonCheckRequest {
+    async fn handle_after_request(
+        &self,
+        spire_context: SpireContext,
+
+        response: &mut Response<BoxBody<Bytes, Infallible>>,
+    ) -> Result<(), AppError> {
+        Ok(())
+    }
+    async fn handle_before_request(
         &self,
         shared_config: SharedConfig,
         port: i32,
@@ -34,6 +65,7 @@ impl CheckTrait for CommonCheckRequest {
         headers: HeaderMap,
         uri: Uri,
         peer_addr: SocketAddr,
+        spire_context: &mut SpireContext,
     ) -> Result<Option<CheckResult>, AppError> {
         let backend_path = uri
             .path_and_query()
@@ -72,6 +104,7 @@ impl CheckTrait for CommonCheckRequest {
                     .join(rest_path.as_str())
                     .map_err(|e| AppError(e.to_string()))?
                     .to_string();
+                spire_context.route = Some(item.clone());
                 return Ok(Some(CheckResult {
                     request_path,
                     base_route,
@@ -80,6 +113,7 @@ impl CheckTrait for CommonCheckRequest {
                 let path = Path::new(&endpoint);
                 let rest_path = match_result.unwrap();
                 let request_path = path.join(rest_path);
+                spire_context.route = Some(item.clone());
                 return Ok(Some(CheckResult {
                     request_path: String::from(request_path.to_str().unwrap_or_default()),
                     base_route,
@@ -131,7 +165,15 @@ mod tests {
         let peer_addr = "127.0.0.1:12345".parse().unwrap();
 
         let result = checker
-            .check_before_request(shared_config, 8080, "test".into(), headers, uri, peer_addr)
+            .handle_before_request(
+                shared_config,
+                8080,
+                "test".into(),
+                headers,
+                uri,
+                peer_addr,
+                &mut SpireContext::new(8080, None),
+            )
             .await;
         assert!(result.is_err());
         // assert!(result.is_some());
@@ -170,7 +212,15 @@ mod tests {
         let peer_addr = "127.0.0.1:12345".parse().unwrap();
 
         let result = checker
-            .check_before_request(shared_config, 8080, "test".into(), headers, uri, peer_addr)
+            .handle_before_request(
+                shared_config,
+                8080,
+                "test".into(),
+                headers,
+                uri,
+                peer_addr,
+                &mut SpireContext::new(8080, None),
+            )
             .await;
         assert!(result.is_err());
     }
@@ -194,7 +244,15 @@ mod tests {
         let peer_addr = "127.0.0.1:12345".parse().unwrap();
 
         let result = checker
-            .check_before_request(shared_config, 8080, "test".into(), headers, uri, peer_addr)
+            .handle_before_request(
+                shared_config,
+                8080,
+                "test".into(),
+                headers,
+                uri,
+                peer_addr,
+                &mut SpireContext::new(8080, None),
+            )
             .await
             .unwrap();
 
