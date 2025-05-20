@@ -225,7 +225,7 @@ async fn request_outbound(
     let uri = inbound_parts.uri.clone();
     let mut spire_context = SpireContext::new(port, None);
     let check_result = check_trait
-        .get_destination(
+        .handle_before_request(
             shared_config,
             port,
             mapping_key.clone(),

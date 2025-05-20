@@ -14,8 +14,8 @@ use hyper::Method;
 use hyper::StatusCode;
 
 use crate::proxy::http1::websocket_proxy::server_upgrade;
+use crate::proxy::proxy_trait::CommonCheckRequest;
 use crate::proxy::proxy_trait::{ChainTrait, SpireContext};
-use crate::proxy::proxy_trait::{CommonCheckRequest, RouterDestination};
 use http::uri::PathAndQuery;
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::server::conn::http1;
@@ -247,14 +247,14 @@ async fn proxy(
     mapping_key: String,
     remote_addr: SocketAddr,
     chain_trait: impl ChainTrait,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
+) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
     debug!("req: {:?}", req);
 
-    let inbound_headers = req.headers();
+    let inbound_headers = req.headers().clone();
     let uri = req.uri().clone();
     let mut spire_context = SpireContext::new(port, None);
-    let handling_result = chain_trait
-        .get_destination(
+    let check_result = chain_trait
+        .handle_before_request(
             shared_config.clone(),
             port,
             mapping_key.clone(),
@@ -281,6 +281,20 @@ async fn proxy(
     {
         if let Some(cors_config) = spire_context.cors_configed()? {
             return chain_trait.handle_preflight(cors_config, "");
+        }
+    }
+    let route = spire_context
+        .clone()
+        .route
+        .ok_or(AppError(String::from("Not found route!")))?;
+    if req.method() == Method::OPTIONS
+        && req.headers().contains_key(header::ORIGIN)
+        && req
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD)
+    {
+        if let Some(cors_config) = route.cors_configed()? {
+            return route.handle_preflight(cors_config, "");
         }
     }
     if inbound_headers.clone().contains_key(CONNECTION)
@@ -320,9 +334,12 @@ async fn proxy(
             }
         };
 
-        let res = response_result?
+        let mut res = response_result?
             .map(|b| b.boxed())
             .map(|item| item.map_err(|_| -> Infallible { unreachable!() }).boxed());
+        chain_trait
+            .handle_after_request(spire_context, &mut res)
+            .await?;
         return Ok(res);
     }
     Ok(Response::builder()
