@@ -30,14 +30,16 @@ strip = true
 
 
 [dependencies]
-acme-lib = "0.8.2"
 async-trait = "0.1.77"
 axum = { version = "0.8.4", features = ["macros"] }
-backtrace = "0.3.69"
-base64 = "0.22.0"
+rcgen = { version = "0.13", default-features = false, features = ["pem","crypto","ring"] }
+
+backtrace = "0.3.75"
+base64 = "0.22.1"
 bytes = "1"
-chrono = "0.4.26"
-clap = { version = "4.5.32", features = ["derive"] }
+chrono = "0.4.41"
+clap = { version = "4.5.38", features = ["derive"] }
+instant-acme = "0.7.2"
 delay_timer = "0.11.6"
 derive_builder = "0.20.2"
 dyn-clone = "1.0.11"
