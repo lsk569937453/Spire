@@ -157,7 +157,9 @@ impl GrpcProxy {
             rustls_pemfile::certs(&mut cer_reader).collect::<Result<Vec<_>, _>>()?;
 
         let mut key_reader = BufReader::new(key_str.as_bytes());
-        let key_der = rustls_pemfile::private_key(&mut key_reader)?.ok_or("key_der is none")?;
+        let key_der = rustls_pemfile::private_key(&mut key_reader)
+            .map_err(|e| AppError(e.to_string()))?
+            .ok_or("key_der is none")?;
 
         let tls_cfg = {
             let cfg = rustls::ServerConfig::builder()
@@ -239,7 +241,7 @@ async fn request_outbound(
         return Err(AppError::from("The request has been denied by the proxy!"));
     }
     let request_path = check_result.ok_or("check_result is none")?.request_path;
-    let url = Url::parse(&request_path)?;
+    let url = Url::parse(&request_path).map_err(|e| AppError(e.to_string()))?;
     let cloned_url = url.clone();
     let host = cloned_url
         .host()

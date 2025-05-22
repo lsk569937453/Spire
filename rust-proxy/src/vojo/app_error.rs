@@ -9,6 +9,11 @@ impl From<&str> for AppError {
         AppError(s.to_string())
     }
 }
+impl From<std::io::Error> for AppError {
+    fn from(error: std::io::Error) -> Self {
+        AppError(format!("IO error: {}", error))
+    }
+}
 impl From<url::ParseError> for AppError {
     fn from(error: url::ParseError) -> Self {
         AppError(format!("URL parse error: {}", error))

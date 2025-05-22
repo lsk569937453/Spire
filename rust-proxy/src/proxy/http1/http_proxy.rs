@@ -263,24 +263,10 @@ async fn proxy(
             &mut spire_context,
         )
         .await?;
-    debug!("The get_destination is {:?}", handling_result);
-    if handling_result.is_none() {
-        return Ok(Response::builder().status(StatusCode::FORBIDDEN).body(
-            Full::new(Bytes::from(common_constants::DENY_RESPONSE))
-                .map_err(AppError::from)
-                .boxed(),
-        )?);
-    }
-
-    if req.method() == Method::OPTIONS
-        && req.headers().contains_key(header::ORIGIN)
-        && req
-            .headers()
-            .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD)
-    {
-        if let Some(cors_config) = spire_context.cors_configed()? {
-            return chain_trait.handle_preflight(cors_config, "");
-        }
+    if check_result.is_none() {
+        return Ok(Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(Full::new(Bytes::from(common_constants::DENY_RESPONSE)).boxed())?);
     }
     let route = spire_context
         .clone()
@@ -311,8 +297,12 @@ async fn proxy(
         let base_route = check_request.base_route;
         if !request_path.clone().contains("http") {
             let mut parts = req.uri().clone().into_parts();
-            parts.path_and_query = Some(request_path.try_into().unwrap());
-            *req.uri_mut() = Uri::from_parts(parts).unwrap();
+            parts.path_and_query = Some(
+                request_path
+                    .try_into()
+                    .map_err(|e: InvalidUri| AppError(e.to_string()))?,
+            );
+            *req.uri_mut() = Uri::from_parts(parts).map_err(|e| AppError(e.to_string()))?;
             return route_file(base_route, req).await;
         }
         *req.uri_mut() = request_path
@@ -352,10 +342,52 @@ async fn proxy(
 }
 
 async fn route_file(
-    router_destination: RouterDestination,
-    req: Request<BoxBody<Bytes, AppError>>,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
-    let static_ = Static::new(Path::new(router_destination.get_endpoint().as_str()));
+    base_route: BaseRoute,
+    req: Request<BoxBody<Bytes, Infallible>>,
+) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
+    let static_ = Static::new(Path::new(base_route.endpoint.as_str()));
+    let current_res = static_.clone().serve(req).await;
+    if let Ok(res) = current_res {
+        if res.status() == StatusCode::NOT_FOUND {
+            let mut request: Request<()> = Request::default();
+            if base_route.try_file.is_none() {
+                return Err(AppError(String::from("Please config the try_file!")));
+            }
+            *request.uri_mut() = base_route
+                .try_file
+                .ok_or("try_file is none")?
+                .parse()
+                .map_err(|e: InvalidUri| AppError(e.to_string()))?;
+            return static_
+                .clone()
+                .serve(request)
+                .await
+                .map(|item| {
+                    item.map(|body| {
+                        body.boxed()
+                            .map_err(|_| -> Infallible { unreachable!() })
+                            .boxed()
+                    })
+                })
+                .map_err(|e| AppError(e.to_string()));
+        } else {
+            return Ok(res.map(|body| {
+                body.boxed()
+                    .map_err(|_| -> Infallible { unreachable!() })
+                    .boxed()
+            }));
+        }
+    }
+
+    let mut request: Request<()> = Request::default();
+    if base_route.try_file.is_none() {
+        return Err(AppError(String::from("Please config the try_file!")));
+    }
+    *request.uri_mut() = base_route
+        .try_file
+        .ok_or("try_file is none")?
+        .parse()
+        .map_err(|e: InvalidUri| AppError(e.to_string()))?;
     static_
         .clone()
         .serve(req)
