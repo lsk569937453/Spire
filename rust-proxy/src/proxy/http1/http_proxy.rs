@@ -110,14 +110,13 @@ impl HttpProxy {
 
         let mut key_reader = BufReader::new(key_str.as_bytes());
         let key_der = rustls_pemfile::private_key(&mut key_reader)
-            .map(|key| key.unwrap())
-            .map_err(|e| AppError(e.to_string()))?;
+            .map_err(|e| AppError(format!("IO error: {}", e)))?
+            .ok_or_else(|| AppError("Key not found in PEM file".to_string()))?;
 
         let tls_cfg = {
             let cfg = rustls::ServerConfig::builder()
                 .with_no_client_auth()
-                .with_single_cert(certs, key_der)
-                .unwrap();
+                .with_single_cert(certs, key_der)?;
             Arc::new(cfg)
         };
         let tls_acceptor = TlsAcceptor::from(tls_cfg);
@@ -172,7 +171,7 @@ async fn proxy_adapter(
     req: Request<BoxBody<Bytes, Infallible>>,
     mapping_key: String,
     remote_addr: SocketAddr,
-) -> Result<Response<BoxBody<Bytes, Infallible>>, Infallible> {
+) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
     let result =
         proxy_adapter_with_error(port, shared_config, client, req, mapping_key, remote_addr).await;
     match result {
@@ -182,10 +181,9 @@ async fn proxy_adapter(
             let json_value = json!({
                 "error": err.to_string(),
             });
-            Ok(Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes())).boxed())
-                .unwrap())
+            Ok(Response::builder().status(StatusCode::NOT_FOUND).body(
+                Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes())).boxed(),
+            )?)
         }
     }
 }

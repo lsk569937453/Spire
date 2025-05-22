@@ -8,7 +8,6 @@ use crate::vojo::health_check::HttpHealthCheckParam;
 use bytes::Bytes;
 use delay_timer::prelude::*;
 use futures;
-use futures::future::join_all;
 use futures::FutureExt;
 use http::Request;
 use http::StatusCode;
@@ -92,37 +91,31 @@ impl HealthCheck {
     }
 
     async fn do_health_check(&mut self) -> Result<(), AppError> {
-        let app_config = self.shared_config.shared_data.lock().unwrap().clone();
-        let handles = app_config
-            .api_service_config
-            .iter()
-            .flat_map(|(_, item)| item.service_config.routes.clone())
-            .filter(|item| item.health_check.is_some() && item.liveness_config.is_some())
-            .map(|item| {
-                tokio::spawn(async move {
-                    let endpoint_list = get_endpoint_list(item.clone()).await;
-                    let min_liveness_count =
-                        item.liveness_config.clone().unwrap().min_liveness_count;
-                    (
-                        TaskKey::new(
-                            item.route_id.clone(),
-                            item.health_check.clone().unwrap(),
-                            endpoint_list,
-                            min_liveness_count,
-                        ),
-                        item,
-                    )
-                })
-            });
-        let route_list = join_all(handles)
-            .await
-            .iter()
-            .filter(|item| item.is_ok())
-            .map(|item| {
-                let (a, b) = item.as_ref().unwrap();
-                (a.clone(), b.clone())
-            })
-            .collect::<HashMap<TaskKey, Route>>();
+        let app_config = self.shared_config.shared_data.lock()?.clone();
+        let mut route_list = HashMap::new();
+        for (_, service_config) in app_config.api_service_config.iter() {
+            for route in &service_config.service_config.routes {
+                if route.health_check.is_none() || route.liveness_config.is_none() {
+                    continue;
+                }
+                let endpoint_list = get_endpoint_list(route.clone()).await;
+
+                let health_check = route.health_check.as_ref().ok_or("Health check is none!")?;
+                let liveness_config = route
+                    .liveness_config
+                    .as_ref()
+                    .ok_or("Liveness config is none!")?;
+
+                let task_key = TaskKey::new(
+                    route.route_id.clone(),
+                    health_check.clone(),
+                    endpoint_list,
+                    liveness_config.min_liveness_count,
+                );
+
+                route_list.insert(task_key, route.clone());
+            }
+        }
         self.task_id_map.retain(|route_id, task_id| {
             if !route_list.contains_key(route_id) {
                 let res = self.delay_timer.remove_task(*task_id);
@@ -182,19 +175,16 @@ async fn do_http_health_check(
             continue;
         }
 
-        let join_option = host_option
-            .unwrap()
-            .join(http_health_check_param.path.clone().as_str());
+        let join_option = host_option?.join(http_health_check_param.path.clone().as_str());
         if join_option.is_err() {
             error!("Parse host error,the error is {}", join_option.unwrap_err());
             continue;
         }
 
         let req = Request::builder()
-            .uri(join_option.unwrap().to_string())
+            .uri(join_option?.to_string())
             .method("GET")
-            .body(Full::new(Bytes::new()).boxed())
-            .unwrap();
+            .body(Full::new(Bytes::new()).boxed())?;
         let task_with_timeout = http_client_shared
             .clone()
             .request_http(req, timeout_number as u64);
@@ -207,7 +197,7 @@ async fn do_http_health_check(
     while let Some(response_result1) = set.join_next().await {
         match response_result1 {
             Ok((res, route, base_route)) => {
-                let mut lock = shared_config.shared_data.lock().unwrap();
+                let mut lock = shared_config.shared_data.lock()?;
                 let shared_route = lock
                     .api_service_config
                     .iter_mut()

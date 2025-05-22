@@ -96,9 +96,10 @@ impl ChainTrait for CommonCheckRequest {
             let base_route = item.route_cluster.get_route(headers.clone())?;
             let endpoint = base_route.endpoint.clone();
             debug!("The endpoint is {}", endpoint);
+            let rest_path = match_result.ok_or("match_result is none")?;
+
             if endpoint.contains("http") {
                 let host = Url::parse(endpoint.as_str()).map_err(|e| AppError(e.to_string()))?;
-                let rest_path = match_result.unwrap();
 
                 let request_path = host
                     .join(rest_path.as_str())
@@ -111,7 +112,6 @@ impl ChainTrait for CommonCheckRequest {
                 }));
             } else {
                 let path = Path::new(&endpoint);
-                let rest_path = match_result.unwrap();
                 let request_path = path.join(rest_path);
                 spire_context.route = Some(item.clone());
                 return Ok(Some(CheckResult {
