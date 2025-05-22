@@ -45,10 +45,7 @@ async fn get_app_config(
 async fn get_app_config_with_error(
     shared_config: SharedConfig,
 ) -> Result<Response<String>, AppError> {
-    let app_config_res = shared_config
-        .shared_data
-        .lock()
-        .map_err(|e| AppError(e.to_string()))?;
+    let app_config_res = shared_config.shared_data.lock()?;
 
     let data = BaseResponse {
         response_code: 0,
@@ -99,11 +96,8 @@ async fn post_app_config_with_error(
     req: Request,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let (_, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|err| AppError(err.to_string()))?;
-    let api_service: ApiService =
-        serde_yaml::from_slice(&bytes).map_err(|e| AppError(e.to_string()))?;
+    let bytes = axum::body::to_bytes(body, usize::MAX).await?;
+    let api_service: ApiService = serde_yaml::from_slice(&bytes)?;
     let current_type = api_service.service_config.server_type.clone();
     let port = api_service.listen_port;
     if current_type == ServiceType::Https || current_type == ServiceType::Http2Tls {
@@ -207,10 +201,8 @@ async fn put_route_with_error(
     req: Request,
 ) -> Result<String, AppError> {
     let (_, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|err| AppError(err.to_string()))?;
-    let route: Route = serde_yaml::from_slice(&bytes).map_err(|e| AppError(e.to_string()))?;
+    let bytes = axum::body::to_bytes(body, usize::MAX).await?;
+    let route: Route = serde_yaml::from_slice(&bytes)?;
     let mut rw_global_lock = shared_config.shared_data.lock()?;
 
     let old_route = rw_global_lock
@@ -240,9 +232,9 @@ async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
     let mut data = app_config;
     let result: bool = Path::new(DEFAULT_TEMPORARY_DIR).is_dir();
     if !result {
-        let path = env::current_dir().map_err(|e| AppError(e.to_string()))?;
+        let path = env::current_dir()?;
         let absolute_path = path.join(DEFAULT_TEMPORARY_DIR);
-        std::fs::create_dir_all(absolute_path).map_err(|e| AppError(e.to_string()))?;
+        std::fs::create_dir_all(absolute_path)?;
     }
 
     let mut f = tokio::fs::OpenOptions::new()
@@ -250,8 +242,7 @@ async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
         .create(true)
         .truncate(true)
         .open("temporary/new_spire_config.yml")
-        .await
-        .map_err(|e| AppError(e.to_string()))?;
+        .await?;
     data.api_service_config
         .iter_mut()
         .for_each(|(_, api_service)| {
@@ -263,10 +254,8 @@ async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
                     route.route_id = "".to_string();
                 });
         });
-    let api_service_str = serde_yaml::to_string(&data).map_err(|e| AppError(e.to_string()))?;
-    f.write_all(api_service_str.as_bytes())
-        .await
-        .map_err(|e| AppError(e.to_string()))?;
+    let api_service_str = serde_yaml::to_string(&data)?;
+    f.write_all(api_service_str.as_bytes()).await?;
     Ok(())
 }
 pub fn validate_tls_config(

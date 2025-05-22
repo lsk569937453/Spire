@@ -158,12 +158,8 @@ impl LetsEntrypt {
             .new_order(&NewOrder {
                 identifiers: &[Identifier::Dns(domain.to_string())],
             })
-            .await
-            .map_err(|e| AppError("failed to order certificate".to_string()))?;
-        let authorizations = order
-            .authorizations()
-            .await
-            .map_err(|e| AppError("failed to retrieve order authorizations".to_string()))?;
+            .await?;
+        let authorizations = order.authorizations().await?;
 
         let authorization = authorizations
             .first()
@@ -186,7 +182,7 @@ impl LetsEntrypt {
         let acme_router = acme_router(challenges);
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap();
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await?;
         let server_handle = tokio::task::spawn(async move {
             axum::serve(listener, acme_router)
                 .with_graceful_shutdown(async {
@@ -197,17 +193,12 @@ impl LetsEntrypt {
         });
         info!("Serving ACME handler at: 0.0.0.0:80");
         let result = async {
-            order
-                .set_challenge_ready(&challenge.url)
-                .await
-                .map_err(|e| {
-                    AppError("failed to notify server that challenge is ready".to_string())
-                })?;
+            order.set_challenge_ready(&challenge.url).await?;
             let mut tries = 1u8;
             let mut delay = Duration::from_millis(250);
             loop {
                 tokio::time::sleep(delay).await;
-                let state = order.refresh().await.unwrap();
+                let state = order.refresh().await?;
                 if let OrderStatus::Ready | OrderStatus::Invalid = state.status {
                     info!("order state: {:#?}", state);
                     break;
@@ -238,26 +229,17 @@ impl LetsEntrypt {
 
             info!("challenge completed,{:?}", state);
 
-            let mut params = CertificateParams::new(vec![domain.to_owned()])
-                .map_err(|e| AppError(e.to_string()))?;
+            let mut params = CertificateParams::new(vec![domain.to_owned()])?;
             params.distinguished_name = DistinguishedName::new();
-            let private_key = KeyPair::generate().map_err(|e| AppError(e.to_string()))?;
-            let signing_request = params
-                .serialize_request(&private_key)
-                .map_err(|e| AppError(e.to_string()))?;
+            let private_key = KeyPair::generate()?;
+            let signing_request = params.serialize_request(&private_key)?;
 
-            order
-                .finalize(signing_request.der())
-                .await
-                .map_err(|e| AppError("failed to finalize order".to_string()))?;
+            order.finalize(signing_request.der()).await?;
 
             let mut cert_chain_pem: Option<String> = None;
             let mut retries = 5;
             while cert_chain_pem.is_none() && retries > 0 {
-                cert_chain_pem = order
-                    .certificate()
-                    .await
-                    .map_err(|e| AppError("failed to get the certificate for order".to_string()))?;
+                cert_chain_pem = order.certificate().await?;
                 retries -= 1;
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
@@ -325,7 +307,6 @@ async fn local_account(mail_name: String) -> Result<Account, AppError> {
         None,
         Box::new(https.clone()),
     )
-    .await
-    .map_err(|e| AppError(e.to_string()))?;
+    .await?;
     Ok(account)
 }

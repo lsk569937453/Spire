@@ -60,7 +60,7 @@ pub async fn server_upgrade(
     let upgrade_value = header_map.get(UPGRADE).ok_or("Update header is none")?;
     let sec_websocke_key = header_map
         .get(SEC_WEBSOCKET_KEY)
-        .ok_or(AppError::from("Can not get the websocket key!"))?
+        .ok_or(AppError(String::from("Can not get the websocket key!")))?
         .to_str()?
         .to_string();
 
@@ -68,7 +68,7 @@ pub async fn server_upgrade(
     let mut new_request = Request::builder()
         .method(req.method().clone())
         .uri(request_path.clone())
-        .body(Full::new(Bytes::new()).map_err(AppError::from).boxed())?;
+        .body(Full::new(Bytes::new()).boxed())?;
 
     let new_header = new_request.headers_mut();
     header_map.iter().for_each(|(key, value)| {

@@ -43,15 +43,11 @@ impl AllowDenyObject {
             let mut ip_range_vec = Vec::new();
             {
                 let s = &config_ip;
-                let parsed = s
-                    .parse()
-                    .map_err(|e: AddrParseError| AppError(e.to_string()))?;
+                let parsed = s.parse()?;
                 ip_range_vec.push(parsed);
             }
             let ip_range: IpRange<Ipv4Net> = ip_range_vec.into_iter().collect();
-            let source_ip = client_ip
-                .parse::<Ipv4Addr>()
-                .map_err(|_| "Ipv4Addr parse error")?;
+            let source_ip = client_ip.parse::<Ipv4Addr>()?;
             ip_range.contains(&source_ip)
         } else {
             self.value.clone().ok_or("self.value is none")? == client_ip

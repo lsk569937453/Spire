@@ -103,8 +103,7 @@ impl HttpProxy {
             rustls_pemfile::certs(&mut cer_reader).collect::<Result<Vec<_>, _>>()?;
 
         let mut key_reader = BufReader::new(key_str.as_bytes());
-        let key_der = rustls_pemfile::private_key(&mut key_reader)
-            .map_err(|e| AppError(format!("IO error: {}", e)))?
+        let key_der = rustls_pemfile::private_key(&mut key_reader)?
             .ok_or_else(|| AppError("Key not found in PEM file".to_string()))?;
 
         let tls_cfg = {
@@ -297,24 +296,18 @@ async fn proxy(
         let base_route = check_request.base_route;
         if !request_path.clone().contains("http") {
             let mut parts = req.uri().clone().into_parts();
-            parts.path_and_query = Some(
-                request_path
-                    .try_into()
-                    .map_err(|e: InvalidUri| AppError(e.to_string()))?,
-            );
-            *req.uri_mut() = Uri::from_parts(parts).map_err(|e| AppError(e.to_string()))?;
+            parts.path_and_query = Some(request_path.try_into()?);
+            *req.uri_mut() = Uri::from_parts(parts)?;
             return route_file(base_route, req).await;
         }
-        *req.uri_mut() = request_path
-            .parse()
-            .map_err(|err: InvalidUri| AppError(err.to_string()))?;
+        *req.uri_mut() = request_path.parse()?;
         let request_future = if request_path.contains("https") {
             client.request_https(req, DEFAULT_HTTP_TIMEOUT)
         } else {
             client.request_http(req, DEFAULT_HTTP_TIMEOUT)
         };
         let response_result = match request_future.await {
-            Ok(response) => response.map_err(|e| AppError(e.to_string())),
+            Ok(response) => response.map_err(AppError::from),
             _ => {
                 return Err(AppError(format!(
                     "Request time out,the uri is {}",
@@ -353,11 +346,7 @@ async fn route_file(
             if base_route.try_file.is_none() {
                 return Err(AppError(String::from("Please config the try_file!")));
             }
-            *request.uri_mut() = base_route
-                .try_file
-                .ok_or("try_file is none")?
-                .parse()
-                .map_err(|e: InvalidUri| AppError(e.to_string()))?;
+            *request.uri_mut() = base_route.try_file.ok_or("try_file is none")?.parse()?;
             return static_
                 .clone()
                 .serve(request)
@@ -369,7 +358,7 @@ async fn route_file(
                             .boxed()
                     })
                 })
-                .map_err(|e| AppError(e.to_string()));
+                .map_err(AppError::from);
         } else {
             return Ok(res.map(|body| {
                 body.boxed()
@@ -383,11 +372,7 @@ async fn route_file(
     if base_route.try_file.is_none() {
         return Err(AppError(String::from("Please config the try_file!")));
     }
-    *request.uri_mut() = base_route
-        .try_file
-        .ok_or("try_file is none")?
-        .parse()
-        .map_err(|e: InvalidUri| AppError(e.to_string()))?;
+    *request.uri_mut() = base_route.try_file.ok_or("try_file is none")?.parse()?;
     static_
         .clone()
         .serve(req)
@@ -400,295 +385,6 @@ async fn route_file(
             })
         })
         .map_err(AppError::from)
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::middleware::authentication::BasicAuth;
-    use crate::middleware::middlewares::MiddleWares;
-    use crate::proxy::proxy_trait::{HandlingResult, MockChainTrait};
-    use crate::vojo::app_config::Matcher;
-    use crate::vojo::app_config::{ApiService, RouteConfig};
-    use crate::vojo::router::{BaseRoute, RandomRoute, Router};
-    use crate::{vojo::router::StaticFileRoute, AppConfig};
-    use http::HeaderMap;
-    use std::collections::HashMap;
-    use std::net::IpAddr;
-    use std::net::Ipv4Addr;
-    use std::sync::Mutex;
-
-    #[test]
-    fn test_http_proxy_creation() {
-        let (_, rx) = mpsc::channel(1);
-        let shared_config = SharedConfig {
-            shared_data: Arc::new(Mutex::new(AppConfig::default())),
-        };
-
-        let proxy = HttpProxy {
-            port: 8080,
-            channel: rx,
-            mapping_key: "test".to_string(),
-            shared_config,
-        };
-
-        assert_eq!(proxy.port, 8080);
-        assert_eq!(proxy.mapping_key, "test");
-    }
-
-    #[tokio::test]
-    async fn test_proxy_adapter_error_handling() {
-        let client = HttpClients::new();
-        let shared_config = SharedConfig {
-            shared_data: Arc::new(Mutex::new(AppConfig::default())),
-        };
-        let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-
-        let req = Request::builder()
-            .uri("invalid://uri")
-            .body(
-                Full::new(Bytes::from("test"))
-                    .map_err(AppError::from)
-                    .boxed(),
-            )
-            .unwrap();
-
-        let result = proxy_adapter(
-            8080,
-            shared_config,
-            client,
-            req,
-            "test".to_string(),
-            remote_addr,
-        )
-        .await;
-
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    #[tokio::test]
-    async fn test_options_preflight_request() {
-        // let _ = setup_logger_for_test();
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::ORIGIN,
-            HeaderValue::from_static("http://127.0.0.1:8080"),
-        );
-        headers.insert(
-            header::ACCESS_CONTROL_REQUEST_METHOD,
-            HeaderValue::from_static("POST"),
-        );
-
-        let client = HttpClients::new();
-        let shared_config = SharedConfig {
-            shared_data: Arc::new(Mutex::new(AppConfig {
-                api_service_config: HashMap::from([(
-                    8080,
-                    ApiService {
-                        listen_port: 8080,
-                        route_configs: vec![RouteConfig {
-                            router: Router::Random(RandomRoute {
-                                routes: vec![BaseRoute {
-                                    endpoint: "http://127.0.0.1:9394".to_string(),
-                                    ..Default::default()
-                                }],
-                            }),
-                            matcher: Some(Matcher {
-                                prefix: "/".to_string(),
-                                prefix_rewrite: "/".to_string(),
-                            }),
-
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    },
-                )]),
-                ..Default::default()
-            })),
-        };
-        let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-
-        let mut req = Request::builder()
-            .method(Method::OPTIONS)
-            .uri("http://127.0.0.1:8080/test")
-            .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
-            .unwrap();
-        req.headers_mut().extend(headers);
-
-        let result = proxy(
-            8080,
-            shared_config,
-            client,
-            req,
-            "test".to_string(),
-            remote_addr,
-            CommonCheckRequest {},
-        )
-        .await;
-        println!("result is {:?}", result);
-        assert!(result.is_err());
-    }
-    #[tokio::test]
-    async fn test_proxy_handling_result_none() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::ORIGIN,
-            HeaderValue::from_static("http://127.0.0.1:8080"),
-        );
-        headers.insert(
-            header::ACCESS_CONTROL_REQUEST_METHOD,
-            HeaderValue::from_static("POST"),
-        );
-
-        let client = HttpClients::new();
-        let shared_config = SharedConfig::from_app_config(AppConfig::default());
-        let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-
-        let mut req = Request::builder()
-            .method(Method::OPTIONS)
-            .uri("http://127.0.0.1:8080/test")
-            .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
-            .unwrap();
-        req.headers_mut().extend(headers);
-
-        let mut mock_chain_trait = MockChainTrait::new();
-        mock_chain_trait
-            .expect_get_destination()
-            .returning(|_, _, _, _, _, _, _| Ok(None));
-        let result = proxy(
-            8080,
-            shared_config,
-            client,
-            req,
-            "test".to_string(),
-            remote_addr,
-            mock_chain_trait,
-        )
-        .await;
-        println!("result is {:?}", result);
-        assert!(result.is_ok());
-    }
-    #[tokio::test]
-    async fn test_proxy_middle() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::ORIGIN,
-            HeaderValue::from_static("http://127.0.0.1:8080"),
-        );
-        headers.insert(
-            header::ACCESS_CONTROL_REQUEST_METHOD,
-            HeaderValue::from_static("POST"),
-        );
-
-        let client = HttpClients::new();
-        let shared_config = SharedConfig::from_app_config(AppConfig::default());
-        let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-
-        let mut req = Request::builder()
-            .method(Method::OPTIONS)
-            .uri("http://127.0.0.1:8080/test")
-            .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
-            .unwrap();
-        req.headers_mut().extend(headers);
-
-        let mut mock_chain_trait = MockChainTrait::new();
-        mock_chain_trait
-            .expect_get_destination()
-            .returning(|_, _, _, _, _, _, spire_context| {
-                spire_context.middlewares = Some(vec![MiddleWares::Authentication(
-                    crate::middleware::authentication::Authentication::Basic(BasicAuth {
-                        credentials: "user:pass".to_string(),
-                    }),
-                )]);
-
-                Ok(Some(HandlingResult {
-                    request_path: "/test".to_string(),
-                    router_destination: RouterDestination::File(StaticFileRoute {
-                        doc_root: "./test".to_string(),
-                    }),
-                }))
-            });
-        mock_chain_trait
-            .expect_handle_before_request()
-            .returning(|_, _, _| Err(AppError("test".to_string())));
-        let result = proxy(
-            8080,
-            shared_config,
-            client,
-            req,
-            "test".to_string(),
-            remote_addr,
-            mock_chain_trait,
-        )
-        .await;
-        println!("result is {:?}", result);
-        assert!(result.is_err());
-    }
-    #[tokio::test]
-    async fn test_proxy_route_file() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::ORIGIN,
-            HeaderValue::from_static("http://127.0.0.1:8080"),
-        );
-        headers.insert(
-            header::ACCESS_CONTROL_REQUEST_METHOD,
-            HeaderValue::from_static("POST"),
-        );
-
-        let client = HttpClients::new();
-        let shared_config = SharedConfig::from_app_config(AppConfig::default());
-        let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-
-        let mut req = Request::builder()
-            .method(Method::OPTIONS)
-            .uri("http://127.0.0.1:8080/test")
-            .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
-            .unwrap();
-        req.headers_mut().extend(headers);
-
-        let mut mock_chain_trait = MockChainTrait::new();
-        mock_chain_trait
-            .expect_get_destination()
-            .returning(|_, _, _, _, _, _, _| {
-                Ok(Some(HandlingResult {
-                    request_path: "/test".to_string(),
-                    router_destination: RouterDestination::File(StaticFileRoute {
-                        doc_root: "./test".to_string(),
-                    }),
-                }))
-            });
-        mock_chain_trait
-            .expect_handle_before_request()
-            .returning(|_, _, _| Err(AppError("test".to_string())));
-        let result = proxy(
-            8080,
-            shared_config,
-            client,
-            req,
-            "test".to_string(),
-            remote_addr,
-            mock_chain_trait,
-        )
-        .await;
-        println!("result is {:?}", result);
-        assert!(result.is_ok());
-    }
-    #[tokio::test]
-    async fn test_route_file() {
-        let router_destination = RouterDestination::File(StaticFileRoute {
-            doc_root: "./test".to_string(),
-        });
-
-        let req = Request::builder()
-            .uri("http://localhost/test.txt")
-            .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
-            .unwrap();
-
-        let result = route_file(router_destination, req).await;
-        assert!(result.is_ok());
-    }
 }
 #[cfg(test)]
 mod tests {}

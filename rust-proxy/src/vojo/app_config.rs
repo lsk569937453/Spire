@@ -153,20 +153,19 @@ impl Route {
         if cors_config.validate_origin("")? {
             return Ok(Response::builder()
                 .status(StatusCode::FORBIDDEN)
-                .body(Full::new(Bytes::from("".to_string())).boxed())
-                .unwrap());
+                .body(Full::new(Bytes::from("".to_string())).boxed())?);
         }
         let methods_header = cors_config
             .allowed_methods
             .iter()
-            .map(|m| serde_json::to_string(m).unwrap())
-            .collect::<Vec<_>>()
+            .map(|m| serde_json::to_string(m).map_err(AppError::from)) // Convert serde_json::Error to AppError
+            .collect::<Result<Vec<String>, AppError>>()?
             .join(", ");
         let headers_header = cors_config
             .allowed_headers
             .iter()
-            .map(|h| serde_json::to_string(h).unwrap())
-            .collect::<Vec<_>>()
+            .map(|m| serde_json::to_string(m).map_err(AppError::from)) // Convert serde_json::Error to AppError
+            .collect::<Result<Vec<String>, AppError>>()?
             .join(", ");
 
         let mut builder = Response::builder()
@@ -189,7 +188,7 @@ impl Route {
 
         builder
             .body(Full::new(Bytes::from("".to_string())).boxed())
-            .map_err(|_| AppError("".to_string()))
+            .map_err(AppError::from)
     }
     pub fn cors_configed(&self) -> Result<Option<CorsConfig>, AppError> {
         if let Some(middlewares) = &self.middlewares {
@@ -208,18 +207,17 @@ impl Route {
     ) -> Result<Option<String>, AppError> {
         let matcher = self
             .matcher
-            .as_mut()
             .ok_or("The matcher counld not be none for http")?;
 
         let match_res = path.strip_prefix(matcher.prefix.as_str());
         if match_res.is_none() {
             return Ok(None);
         }
-        let final_path = [
-            matcher.prefix_rewrite.as_str(),
-            match_res.ok_or("match_res is none")?,
-        ]
-        .join("");
+        let final_path = format!(
+            "{}{}",
+            matcher.prefix_rewrite,
+            match_res.ok_or("match_res is none")?
+        );
         // info!("final_path:{}", final_path);
         if let Some(real_host_name) = &self.host_name {
             if headers_option.is_none() {
@@ -278,6 +276,20 @@ impl Route {
         Ok(true)
     }
 }
+pub fn ip_is_allowed(
+    allow_deny_list: Option<Vec<AllowDenyObject>>,
+    ip: String,
+) -> Result<bool, AppError> {
+    if allow_deny_list.is_none()
+        || allow_deny_list
+            .clone()
+            .ok_or("allow_deny_list is none")?
+            .is_empty()
+    {
+        return Ok(true);
+    }
+    let allow_deny_list = allow_deny_list.ok_or("allow_deny_list is none")?;
+    // let iter = allow_deny_list.iter();
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, strum_macros::Display)]
 pub enum ServiceType {

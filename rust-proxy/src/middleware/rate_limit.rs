@@ -109,9 +109,7 @@ fn default_time() -> SystemTime {
 }
 fn get_time_key(time_unit: TimeUnit) -> Result<String, AppError> {
     let current_time = SystemTime::now();
-    let since_the_epoch = current_time
-        .duration_since(UNIX_EPOCH)
-        .map_err(|err| AppError(err.to_string()))?;
+    let since_the_epoch = current_time.duration_since(UNIX_EPOCH)?;
     let in_ms =
         since_the_epoch.as_secs() * 1000 + since_the_epoch.subsec_nanos() as u64 / 1_000_000;
     let key_u64 = match time_unit {
@@ -135,10 +133,10 @@ fn matched(
             if !headers.contains_key(header_based_ratelimit.key.clone()) {
                 return Ok(false);
             }
-            let header_value = headers.get(header_based_ratelimit.key.clone()).unwrap();
-            let header_value_str = header_value
-                .to_str()
-                .map_err(|err| AppError(err.to_string()))?;
+            let header_value = headers
+                .get(header_based_ratelimit.key.clone())
+                .ok_or("Can not find the header_based_ratelimit key.")?;
+            let header_value_str = header_value.to_str()?;
 
             Ok(header_value_str == header_based_ratelimit.value)
         }
@@ -148,11 +146,9 @@ fn matched(
             }
             let ip_range: IpRange<Ipv4Net> = [ip_range_based_ratelimit.value]
                 .iter()
-                .map(|s| s.parse().unwrap())
-                .collect();
-            let source_ip = remote_ip
-                .parse::<Ipv4Addr>()
-                .map_err(|err| AppError(err.to_string()))?;
+                .map(|s| s.parse::<Ipv4Net>().map_err(|e| AppError(e.to_string())))
+                .collect::<Result<IpRange<Ipv4Net>, AppError>>()?;
+            let source_ip = remote_ip.parse::<Ipv4Addr>()?;
             Ok(ip_range.contains(&source_ip))
         }
     }
@@ -169,9 +165,7 @@ impl TokenBucketRateLimit {
         }
 
         let now = SystemTime::now();
-        let elapsed = now
-            .duration_since(self.last_update_time)
-            .map_err(|err| AppError(err.to_string()))?;
+        let elapsed = now.duration_since(self.last_update_time)?;
 
         let elapsed_millis = elapsed.as_millis();
         let tokens_to_add = (elapsed_millis * self.rate_per_unit) / self.unit.get_million_second();

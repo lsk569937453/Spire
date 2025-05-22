@@ -5,21 +5,19 @@ use http::HeaderValue;
 
 use serde::{Deserialize, Serialize};
 
-use crate::vojo::app_error::AppError;
+use super::app_error::AppError;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "scheme", rename_all = "PascalCase")]
+#[serde(tag = "type", rename_all = "PascalCase")]
 pub enum Authentication {
-    #[serde(rename = "basic")]
     Basic(BasicAuth),
-    #[serde(rename = "api_key")]
     ApiKey(ApiKeyAuth),
 }
 
 impl Authentication {
     pub fn check_authentication(
         &mut self,
-        headers: &HeaderMap<HeaderValue>,
+        headers: HeaderMap<HeaderValue>,
     ) -> Result<bool, AppError> {
         match self {
             Authentication::Basic(auth) => auth.check_authentication(headers),
@@ -34,7 +32,8 @@ pub struct BasicAuth {
 }
 
 impl BasicAuth {
-    fn check_authentication(&mut self, headers: &HeaderMap<HeaderValue>) -> Result<bool, AppError> {
+    fn check_authentication(&mut self, headers: HeaderMap<HeaderValue>) -> Result<bool, AppError> {
+        // 原有实现逻辑
         if headers.is_empty() || !headers.contains_key("Authorization") {
             return Ok(false);
         }
@@ -58,7 +57,8 @@ pub struct ApiKeyAuth {
 }
 
 impl ApiKeyAuth {
-    fn check_authentication(&mut self, headers: &HeaderMap<HeaderValue>) -> Result<bool, AppError> {
+    fn check_authentication(&mut self, headers: HeaderMap<HeaderValue>) -> Result<bool, AppError> {
+        // 原有实现逻辑
         if headers.is_empty() || !headers.contains_key(&self.key) {
             return Ok(false);
         }
@@ -71,6 +71,7 @@ mod tests {
     use super::*;
     use http::HeaderValue;
 
+    // BasicAuth 测试
     #[test]
     fn test_basic_auth_success() {
         let mut auth = BasicAuth {
@@ -83,7 +84,7 @@ mod tests {
             HeaderValue::from_str(&format!("Basic {}", encoded)).unwrap(),
         );
 
-        assert!(auth.check_authentication(&headers).unwrap());
+        assert!(auth.check_authentication(headers).unwrap());
     }
 
     #[test]
@@ -93,7 +94,7 @@ mod tests {
         };
         let headers = HeaderMap::new();
 
-        assert!(!auth.check_authentication(&headers).unwrap());
+        assert!(!auth.check_authentication(headers).unwrap());
     }
 
     #[test]
@@ -104,7 +105,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("Authorization", HeaderValue::from_static("Bearer token"));
 
-        assert!(!auth.check_authentication(&headers).unwrap());
+        assert!(!auth.check_authentication(headers).unwrap());
     }
 
     #[test]
@@ -119,7 +120,7 @@ mod tests {
             HeaderValue::from_str(&format!("Basic {}", encoded)).unwrap(),
         );
 
-        assert!(!auth.check_authentication(&headers).unwrap());
+        assert!(!auth.check_authentication(headers).unwrap());
     }
 
     #[test]
@@ -131,7 +132,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("X-API-KEY", HeaderValue::from_static("secret"));
 
-        assert!(auth.check_authentication(&headers).unwrap());
+        assert!(auth.check_authentication(headers).unwrap());
     }
 
     #[test]
@@ -142,7 +143,7 @@ mod tests {
         };
         let headers = HeaderMap::new();
 
-        assert!(!auth.check_authentication(&headers).unwrap());
+        assert!(!auth.check_authentication(headers).unwrap());
     }
 
     #[test]
@@ -154,7 +155,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("X-API-KEY", HeaderValue::from_static("wrong"));
 
-        assert!(!auth.check_authentication(&headers).unwrap());
+        assert!(!auth.check_authentication(headers).unwrap());
     }
 
     #[test]
@@ -166,7 +167,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("X-API-KEY", HeaderValue::from_static("secret"));
 
-        assert!(!auth.check_authentication(&headers).unwrap());
+        assert!(!auth.check_authentication(headers).unwrap());
     }
 
     #[test]
@@ -181,7 +182,7 @@ mod tests {
             HeaderValue::from_str(&format!("Basic {}", encoded)).unwrap(),
         );
 
-        assert!(auth.check_authentication(&headers).unwrap());
+        assert!(auth.check_authentication(headers).unwrap());
     }
 
     #[test]
@@ -193,7 +194,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("Authorization", HeaderValue::from_static("Bearer token"));
 
-        assert!(auth.check_authentication(&headers).unwrap());
+        assert!(auth.check_authentication(headers).unwrap());
     }
 
     #[test]
@@ -208,7 +209,7 @@ mod tests {
             HeaderValue::from_bytes(&invalid_value).unwrap(),
         );
 
-        let result = auth.check_authentication(&headers);
+        let result = auth.check_authentication(headers);
         assert!(result.is_err());
     }
 }
