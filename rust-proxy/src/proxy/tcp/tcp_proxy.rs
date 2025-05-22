@@ -84,7 +84,7 @@ async fn check(
     _mapping_key: String,
     remote_addr: SocketAddr,
 ) -> Result<bool, AppError> {
-    let app_config = shared_config.shared_data.lock().unwrap().clone();
+    let app_config = shared_config.shared_data.lock()?.clone();
     let api_service = &app_config
         .api_service_config
         .get(&port)
@@ -95,7 +95,10 @@ async fn check(
 
     let service_config_clone = api_service.service_config.clone();
 
-    let route = service_config_clone.routes.first().unwrap();
+    let route = service_config_clone
+        .routes
+        .first()
+        .ok_or("service_config_clone is empty")?;
     let is_allowed = route
         .clone()
         .is_allowed(remote_addr.ip().to_string(), None)?;
@@ -106,7 +109,7 @@ async fn get_route_cluster(
     shared_config: SharedConfig,
     port: i32,
 ) -> Result<String, AppError> {
-    let app_config = shared_config.shared_data.lock().unwrap().clone();
+    let app_config = shared_config.shared_data.lock()?.clone();
     let value = app_config
         .api_service_config
         .get(&port)
@@ -119,7 +122,11 @@ async fn get_route_cluster(
     if service_config_clone.is_empty() {
         return Err(AppError(String::from("The len of routes is 0")));
     }
-    let mut route = service_config_clone.first().unwrap().route_cluster.clone();
+    let mut route = service_config_clone
+        .first()
+        .ok_or("service_config_clone is empty")?
+        .route_cluster
+        .clone();
     route.get_route(HeaderMap::new()).map(|s| s.endpoint)
 }
 #[cfg(test)]

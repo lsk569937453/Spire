@@ -62,7 +62,7 @@ pub async fn server_upgrade(
     }
 
     let header_map = req.headers().clone();
-    let upgrade_value = header_map.get(UPGRADE).unwrap();
+    let upgrade_value = header_map.get(UPGRADE).ok_or("Update header is none")?;
     let sec_websocke_key = header_map
         .get(SEC_WEBSOCKET_KEY)
         .ok_or(AppError(String::from("Can not get the websocket key!")))?

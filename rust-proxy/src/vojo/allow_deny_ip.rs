@@ -1,4 +1,4 @@
-use ipnet::Ipv4Net;
+use ipnet::{AddrParseError, Ipv4Net};
 use iprange::IpRange;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
@@ -38,14 +38,23 @@ impl AllowDenyObject {
                 "the value counld not be none when the limit_type is not AllowAll or DenyAll!",
             )));
         }
-        let config_ip = self.value.clone().unwrap();
+        let config_ip = self.value.clone().ok_or("config_ip is none")?;
         let value_mapped_ip: bool = if config_ip.contains('/') {
-            let ip_range: IpRange<Ipv4Net> =
-                [config_ip].iter().map(|s| s.parse().unwrap()).collect();
-            let source_ip = client_ip.parse::<Ipv4Addr>().unwrap();
+            let mut ip_range_vec = Vec::new();
+            {
+                let s = &config_ip;
+                let parsed = s
+                    .parse()
+                    .map_err(|e: AddrParseError| AppError(e.to_string()))?;
+                ip_range_vec.push(parsed);
+            }
+            let ip_range: IpRange<Ipv4Net> = ip_range_vec.into_iter().collect();
+            let source_ip = client_ip
+                .parse::<Ipv4Addr>()
+                .map_err(|_| "Ipv4Addr parse error")?;
             ip_range.contains(&source_ip)
         } else {
-            self.value.clone().unwrap() == client_ip
+            self.value.clone().ok_or("self.value is none")? == client_ip
         };
         if value_mapped_ip && self.limit_type == AllowType::Allow {
             return Ok(AllowResult::Allow);

@@ -58,11 +58,8 @@ pub async fn start_task(
                     peer_addr,
                 )
                 .await;
-                if result.is_err() {
-                    error!(
-                        "Grpc request outbound error,the error is {}",
-                        result.unwrap_err()
-                    );
+                if let Err(err) = result {
+                    error!("Grpc request outbound error,the error is {}", err);
                 }
             });
         }
@@ -94,11 +91,8 @@ pub async fn start_tls_task(
                     peer_addr,
                 )
                 .await;
-                if result.is_err() {
-                    error!(
-                        "Grpc request outbound error,the error is {}",
-                        result.unwrap_err()
-                    );
+                if let Err(err) = result {
+                    error!("Grpc request outbound error,the error is {}", err);
                 }
             });
         }
@@ -129,7 +123,7 @@ impl GrpcProxy {
         let port_clone = self.port;
         let addr = SocketAddr::from(([0, 0, 0, 0], port_clone as u16));
         info!("Listening on grpc://{}", addr);
-        let listener = TcpListener::bind(addr).await.unwrap();
+        let listener = TcpListener::bind(addr).await?;
         let mapping_key = self.mapping_key.clone();
         let reveiver = &mut self.channel;
 
@@ -169,20 +163,19 @@ impl GrpcProxy {
 
         let mut key_reader = BufReader::new(key_str.as_bytes());
         let key_der = rustls_pemfile::private_key(&mut key_reader)
-            .map(|key| key.unwrap())
-            .map_err(|e| AppError(e.to_string()))?;
+            .map_err(|e| AppError(e.to_string()))?
+            .ok_or("key_der is none")?;
 
         let tls_cfg = {
             let cfg = rustls::ServerConfig::builder()
                 .with_no_client_auth()
-                .with_single_cert(certs, key_der)
-                .unwrap();
+                .with_single_cert(certs, key_der)?;
             Arc::new(cfg)
         };
         let tls_acceptor = TlsAcceptor::from(tls_cfg);
 
         info!("Listening on grpc with tls://{}", addr);
-        let listener = TcpListener::bind(addr).await.unwrap();
+        let listener = TcpListener::bind(addr).await?;
         let mapping_key = self.mapping_key.clone();
         let reveiver = &mut self.channel;
 
@@ -260,7 +253,7 @@ async fn request_outbound(
             "The request has been denied by the proxy!",
         )));
     }
-    let request_path = check_result.unwrap().request_path;
+    let request_path = check_result.ok_or("check_result is none")?.request_path;
     let url = Url::parse(&request_path).map_err(|e| AppError(e.to_string()))?;
     let cloned_url = url.clone();
     let host = cloned_url
@@ -336,8 +329,7 @@ async fn request_outbound(
         .uri(url.to_string())
         .header("content-type", "application/grpc")
         .header("te", "trailers")
-        .body(())
-        .unwrap();
+        .body(())?;
     debug!("Our bound request is {:?}", request);
     let (response, outbound_send_stream) = send_request
         .send_request(request, false)
