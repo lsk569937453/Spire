@@ -1,0 +1,47 @@
+static_config:
+  log_level: info
+services:
+  - listen_port: 4486
+    service_config:
+      server_type: Http
+      routes:
+        - matcher:
+            prefix: /
+            prefix_rewrite: /
+          route_cluster:
+            type: randomRoute
+            routes:
+              - base_route:
+                  endpoint: http://localhost:6666/
+          health_check:
+            type: HttpGet
+            base_health_check_param:
+              timeout: 10
+              interval: 10
+            path: /health
+          liveness_config:
+            min_liveness_count: 1
+  - listen_port: 9969
+    service_config:
+      server_type: Http
+      routes:
+        - matcher:
+            prefix: /
+            prefix_rewrite: /
+          route_cluster:
+            type: randomRoute
+            routes:
+              - base_route:
+                  endpoint: http://127.0.0.1:9394
+              - base_route:
+                  endpoint: http://127.0.0.1:8090
+              - base_route:
+                  endpoint: http://127.0.0.1:9396
+          health_check:
+            type: HttpGet
+            base_health_check_param:
+              timeout: 5
+              interval: 5
+            path: /health
+          liveness_config:
+            min_liveness_count: 1
