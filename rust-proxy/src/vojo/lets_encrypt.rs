@@ -1,10 +1,10 @@
 use super::app_error::AppError;
-
 use axum::extract::State;
-use axum::{body::Bytes, extract::Path, http::StatusCode, routing::any, Router};
-use http_body_util::Full;
-use hyper_rustls::HttpsConnector;
-use hyper_util::client::legacy::{connect::HttpConnector, Client};
+use axum::{extract::Path, http::StatusCode, routing::any, Router};
+use hyper_util::client::legacy::Client as HyperClient;
+use hyper_util::rt::TokioExecutor;
+use instant_acme::LetsEncrypt;
+use instant_acme::NewAccount;
 use instant_acme::{
     Account, AuthorizationStatus, ChallengeType, Identifier, NewOrder, OrderStatus,
 };
@@ -150,26 +150,21 @@ impl LetsEntrypt {
     }
 
     pub async fn start_request2(&self) -> Result<String, AppError> {
-        let account = local_account().await?;
-
+        let account = local_account(self.mail_name.clone()).await?;
         info!("account created");
         let domain_name = self.domain_name.clone();
-
         let domain = domain_name.as_str();
-
         let mut order = account
             .new_order(&NewOrder {
                 identifiers: &[Identifier::Dns(domain.to_string())],
             })
             .await
             .map_err(|e| AppError("failed to order certificate".to_string()))?;
-
         let authorizations = order
             .authorizations()
             .await
             .map_err(|e| AppError("failed to retrieve order authorizations".to_string()))?;
 
-        // There should only ever be 1 authorization as we only provided 1 domain above.
         let authorization = authorizations
             .first()
             .ok_or(AppError("there should be one authorization".to_string()))?;
@@ -177,7 +172,6 @@ impl LetsEntrypt {
         if !matches!(authorization.status, AuthorizationStatus::Pending) {
             Err(AppError("order should be pending".to_string()))?;
         }
-
         let challenge = authorization
             .challenges
             .iter()
@@ -188,98 +182,92 @@ impl LetsEntrypt {
             challenge.token.clone(),
             order.key_authorization(challenge).as_str().to_string(),
         )]);
-
         info!("challenges: {:?}", challenges);
-
         let acme_router = acme_router(challenges);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:5002").await.unwrap();
-
-        // Start the Axum server as a background task, so it's running while we complete the challenge
-        // in the next steps.
-        tokio::task::spawn(async move { axum::serve(listener, acme_router).await.unwrap() });
-
-        info!("Serving ACME handler at: 0.0.0.0:5002");
-
-        order
-            .set_challenge_ready(&challenge.url)
-            .await
-            .map_err(|e| AppError("failed to notify server that challenge is ready".to_string()))?;
-
-        // We now need to wait until the order reaches an end-state. We refresh the order in a loop,
-        // with exponential backoff, until the order is either ready or invalid (for example if our
-        // challenge server responded with the wrong key authorization).
-        let mut tries = 1u8;
-        let mut delay = Duration::from_millis(250);
-        loop {
-            tokio::time::sleep(delay).await;
-            let state = order.refresh().await.unwrap();
-            if let OrderStatus::Ready | OrderStatus::Invalid = state.status {
-                info!("order state: {:#?}", state);
-                break;
-            }
-
-            delay *= 2;
-            tries += 1;
-            if tries < 15 {
-                info!("order is not ready, waiting {delay:?},{:?}{}", state, tries);
-            } else {
-                error!(
-                    "timed out before order reached ready state: {state:#?},{}",
-                    tries,
-                );
-                Err(AppError(
-                    "timed out before order reached ready state".to_string(),
-                ))?;
-            }
-        }
-
-        let state = order.state();
-        if state.status != OrderStatus::Ready {
-            Err(AppError(format!(
-                "unexpected order status: {:?}",
-                state.status
-            )))?;
-        }
-
-        info!("challenge completed,{:?}", state);
-
-        // Create a CSR for our domain.
-        let mut params =
-            CertificateParams::new(vec![domain.to_owned()]).map_err(|e| AppError(e.to_string()))?;
-        params.distinguished_name = DistinguishedName::new();
-        let private_key = KeyPair::generate().map_err(|e| AppError(e.to_string()))?;
-        let signing_request = params
-            .serialize_request(&private_key)
-            .map_err(|e| AppError(e.to_string()))?;
-
-        // DER encode the CSR and use it to request the certificate.
-        order
-            .finalize(signing_request.der())
-            .await
-            .map_err(|e| AppError("failed to finalize order".to_string()))?;
-
-        // Poll for certificate, do this for a few rounds.
-        let mut cert_chain_pem: Option<String> = None;
-        let mut retries = 5;
-        while cert_chain_pem.is_none() && retries > 0 {
-            cert_chain_pem = order
-                .certificate()
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap();
+        let server_handle = tokio::task::spawn(async move {
+            axum::serve(listener, acme_router)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
                 .await
-                .map_err(|e| AppError("failed to get the certificate for order".to_string()))?;
-            retries -= 1;
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
+                .unwrap()
+        });
+        info!("Serving ACME handler at: 0.0.0.0:80");
+        let result = async {
+            order
+                .set_challenge_ready(&challenge.url)
+                .await
+                .map_err(|e| {
+                    AppError("failed to notify server that challenge is ready".to_string())
+                })?;
+            let mut tries = 1u8;
+            let mut delay = Duration::from_millis(250);
+            loop {
+                tokio::time::sleep(delay).await;
+                let state = order.refresh().await.unwrap();
+                if let OrderStatus::Ready | OrderStatus::Invalid = state.status {
+                    info!("order state: {:#?}", state);
+                    break;
+                }
 
-        if let Some(chain) = cert_chain_pem {
-            info!("certificate chain:\n\n{}", chain);
-            info!("private key:\n\n{}", private_key.serialize_pem());
-            Ok(chain)
-        } else {
-            Err(AppError(
-                "failed to get certificate for order before timeout".to_string(),
-            ))
+                delay *= 2;
+                tries += 1;
+                if tries < 15 {
+                    info!("order is not ready, waiting {delay:?},{:?}{}", state, tries);
+                } else {
+                    error!(
+                        "timed out before order reached ready state: {state:#?},{}",
+                        tries,
+                    );
+                    Err(AppError(
+                        "timed out before order reached ready state".to_string(),
+                    ))?;
+                }
+            }
+
+            let state = order.state();
+            if state.status != OrderStatus::Ready {
+                Err(AppError(format!(
+                    "unexpected order status: {:?}",
+                    state.status
+                )))?;
+            }
+
+            info!("challenge completed,{:?}", state);
+
+            let mut params = CertificateParams::new(vec![domain.to_owned()])
+                .map_err(|e| AppError(e.to_string()))?;
+            params.distinguished_name = DistinguishedName::new();
+            let private_key = KeyPair::generate().map_err(|e| AppError(e.to_string()))?;
+            let signing_request = params
+                .serialize_request(&private_key)
+                .map_err(|e| AppError(e.to_string()))?;
+
+            order
+                .finalize(signing_request.der())
+                .await
+                .map_err(|e| AppError("failed to finalize order".to_string()))?;
+
+            let mut cert_chain_pem: Option<String> = None;
+            let mut retries = 5;
+            while cert_chain_pem.is_none() && retries > 0 {
+                cert_chain_pem = order
+                    .certificate()
+                    .await
+                    .map_err(|e| AppError("failed to get the certificate for order".to_string()))?;
+                retries -= 1;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            cert_chain_pem.ok_or_else(|| AppError("certificate timeout".to_string()))
         }
+        .await;
+        let _ = shutdown_tx.send(());
+        server_handle.await.ok();
+
+        result
     }
 }
 pub async fn http01_challenge(
@@ -305,78 +293,39 @@ pub fn acme_router(challenges: HashMap<String, String>) -> Router {
         .route("/.well-known/acme-challenge/{*rest}", any(http01_challenge))
         .with_state(challenges)
 }
-
-async fn local_account() -> Result<Account, AppError> {
-    let http_client = client_with_custom_ca_cert()?;
-    let account = create_account(
-        http_client.clone(),
-        "fake@email.com",
-        Some("https://localhost:14000/dir".to_string()),
+use rustls::crypto::ring;
+use rustls::RootCertStore;
+async fn local_account(mail_name: String) -> Result<Account, AppError> {
+    info!("installing ring");
+    let _ = ring::default_provider().install_default();
+    info!("installing ring done");
+    let root_store = RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.into(),
+    };
+    let roots = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    info!("creating test account1");
+    let https = HyperClient::builder(TokioExecutor::new()).build(
+        hyper_rustls::HttpsConnectorBuilder::new()
+            .with_tls_config(roots)
+            .https_or_http()
+            .enable_http1()
+            .enable_http2()
+            .build(),
+    );
+    info!("creating test account2");
+    let (account, _) = Account::create_with_http(
+        &NewAccount {
+            contact: &[],
+            terms_of_service_agreed: true,
+            only_return_existing: false,
+        },
+        LetsEncrypt::Staging.url().to_owned().as_str(),
+        None,
+        Box::new(https.clone()),
     )
     .await
-    .map_err(|e| AppError("failed to create account.".to_string()))?;
-
-    Ok(account)
-}
-
-/// Only used for local run with Pebble.
-/// See <https://github.com/letsencrypt/pebble?tab=readme-ov-file#avoiding-client-https-errors> for
-/// why we need to add the pebble cert to the client root certificates.
-fn client_with_custom_ca_cert(
-) -> Result<Box<Client<HttpsConnector<HttpConnector>, Full<Bytes>>>, AppError> {
-    use hyper_util::rt::TokioExecutor;
-    use rustls::{crypto::ring, RootCertStore};
-
-    let _ = ring::default_provider()
-        .install_default()
-        .map_err(|e| AppError(format!("{:?}", e)));
-
-    let f = std::fs::File::open("pebble.minica.pem").map_err(|e| AppError(e.to_string()))?;
-    let mut ca = std::io::BufReader::new(f);
-    let certs = rustls_pemfile::certs(&mut ca)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .unwrap();
-
-    let mut roots = RootCertStore::empty();
-    roots.add_parsable_certificates(certs);
-    // TLS client config using the custom CA store for lookups
-    let tls = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-
-    // Prepare the HTTPS connector
-    let https = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_tls_config(tls)
-        .https_or_http()
-        .enable_http1()
-        .build();
-
-    let client = Client::builder(TokioExecutor::new()).build(https);
-
-    Ok(Box::new(client))
-}
-
-/// Create a new ACME account that can be restored by using the deserialization
-/// of the returned JSON into a [`instant_acme::Account`]
-async fn create_account(
-    http_client: Box<Client<HttpsConnector<HttpConnector>, Full<Bytes>>>,
-    email: &str,
-    acme_server: Option<String>,
-) -> Result<Account, AppError> {
-    use instant_acme::{LetsEncrypt, NewAccount};
-    let acme_server = acme_server.unwrap_or_else(|| LetsEncrypt::Production.url().to_string());
-
-    let account: NewAccount = NewAccount {
-        contact: &[&format!("mailto:{email}")],
-        terms_of_service_agreed: true,
-        only_return_existing: false,
-    };
-
-    // We only a custom Http client with a specific TLS setup when using Pebble
-    let account = Account::create_with_http(&account, &acme_server, None, http_client)
-        .await
-        .map_err(|e| AppError("failed to create account with custom http client.".to_string()))?
-        .0;
-
+    .map_err(|e| AppError(e.to_string()))?;
     Ok(account)
 }

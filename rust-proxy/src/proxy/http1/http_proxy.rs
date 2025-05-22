@@ -103,7 +103,8 @@ impl HttpProxy {
             rustls_pemfile::certs(&mut cer_reader).collect::<Result<Vec<_>, _>>()?;
 
         let mut key_reader = BufReader::new(key_str.as_bytes());
-        let key_der = rustls_pemfile::private_key(&mut key_reader)?
+        let key_der = rustls_pemfile::private_key(&mut key_reader)
+            .map_err(|e| AppError(format!("IO error: {}", e)))?
             .ok_or_else(|| AppError("Key not found in PEM file".to_string()))?;
 
         let tls_cfg = {
@@ -162,7 +163,7 @@ async fn proxy_adapter(
     req: Request<BoxBody<Bytes, AppError>>,
     mapping_key: String,
     remote_addr: SocketAddr,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
+) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
     let result =
         proxy_adapter_with_error(port, shared_config, client, req, mapping_key, remote_addr).await;
     match result {
@@ -173,9 +174,7 @@ async fn proxy_adapter(
                 "error": err.to_string(),
             });
             Ok(Response::builder().status(StatusCode::NOT_FOUND).body(
-                Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes()))
-                    .map_err(AppError::from)
-                    .boxed(),
+                Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes())).boxed(),
             )?)
         }
     }

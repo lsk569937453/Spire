@@ -30,23 +30,29 @@ use tower_http::cors::CorsLayer;
 async fn get_app_config(
     State(shared_config): State<SharedConfig>,
 ) -> Result<impl axum::response::IntoResponse, Infallible> {
-    let app_config_res = shared_config.shared_data.lock();
-
-    if app_config_res.is_err() {
-        // return Ok((
-        //     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-        //     format!("No route {}", INTERNAL_SERVER_ERROR),
-        // ));
-        let response = Response::builder()
-            .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(format!("No route {}", INTERNAL_SERVER_ERROR))
-            .unwrap();
-        return Ok(response);
+    match get_app_config_with_error(shared_config).await {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            let response = Response::builder()
+                .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(format!("Error is : {}", err))
+                .unwrap_or_default();
+            Ok(response)
+        }
     }
+}
+async fn get_app_config_with_error(
+    shared_config: SharedConfig,
+) -> Result<Response<String>, AppError> {
+    let app_config_res = shared_config
+        .shared_data
+        .lock()
+        .map_err(|e| AppError(e.to_string()))?;
+
     let data = BaseResponse {
         response_code: 0,
-        response_object: app_config_res.unwrap().clone(),
+        response_object: app_config_res.clone(),
     };
     let (status, body) = match serde_yaml::to_string(&data) {
         Ok(json) => (axum::http::StatusCode::OK, json),
@@ -58,9 +64,7 @@ async fn get_app_config(
     let response = Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "application/json")
-        .body(body)
-        .unwrap();
-
+        .body(body)?;
     Ok(response)
 }
 
@@ -132,13 +136,12 @@ async fn post_app_config_with_error(
         response_code: 0,
         response_object: 0,
     };
-    let json_str = serde_json::to_string(&data).unwrap();
+    let json_str = serde_json::to_string(&data)?;
 
     let response = Response::builder()
         .status(axum::http::StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
-        .body(json_str)
-        .unwrap();
+        .body(json_str)?;
 
     Ok(response)
 }
@@ -146,8 +149,14 @@ async fn post_app_config_with_error(
 async fn delete_route(
     State(shared_config): State<SharedConfig>,
     axum::extract::Path(route_id): axum::extract::Path<String>,
-) -> Result<impl axum::response::IntoResponse, AppError> {
-    delete_route_with_error(shared_config, route_id).await
+) -> Result<impl axum::response::IntoResponse, Infallible> {
+    match delete_route_with_error(shared_config, route_id).await {
+        Ok(r) => Ok((axum::http::StatusCode::OK, r)),
+        Err(err) => Ok((
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+        )),
+    }
 }
 async fn delete_route_with_error(
     shared_config: SharedConfig,
@@ -176,7 +185,7 @@ async fn delete_route_with_error(
         response_code: 0,
         response_object: 0,
     };
-    let json_str = serde_yaml::to_string(&data)?;
+    let json_str = serde_json::to_string(&data)?;
     Ok(json_str)
 }
 async fn put_routex(
@@ -202,7 +211,7 @@ async fn put_route_with_error(
         .await
         .map_err(|err| AppError(err.to_string()))?;
     let route: Route = serde_yaml::from_slice(&bytes).map_err(|e| AppError(e.to_string()))?;
-    let mut rw_global_lock = shared_config.shared_data.lock().unwrap();
+    let mut rw_global_lock = shared_config.shared_data.lock()?;
 
     let old_route = rw_global_lock
         .api_service_config
@@ -225,7 +234,7 @@ async fn put_route_with_error(
         response_code: 0,
         response_object: 0,
     };
-    Ok(serde_yaml::to_string(&data)?)
+    Ok(serde_json::to_string(&data)?)
 }
 async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
     let mut data = app_config;
@@ -267,7 +276,7 @@ pub fn validate_tls_config(
     if cert_pem_option.is_none() || key_pem_option.is_none() {
         return Err(AppError::from("Cert or key is none"));
     }
-    let cert_pem = cert_pem_option.ok_or(AppError::from("Cert is none"))?;
+    let cert_pem = cert_pem_option.ok_or(AppError(String::from("Cert is none")))?;
     let mut cer_reader = std::io::BufReader::new(cert_pem.as_bytes());
     let result_certs = rustls_pemfile::certs(&mut cer_reader).next();
     if result_certs.is_none()
@@ -275,9 +284,9 @@ pub fn validate_tls_config(
             .ok_or(AppError("result_certs is null".to_string()))?
             .is_err()
     {
-        return Err(AppError::from("Can not parse the certs pem."));
+        return Err(AppError(String::from("Can not parse the certs pem.")));
     }
-    let key_pem = key_pem_option.unwrap();
+    let key_pem = key_pem_option.ok_or(AppError(String::from("Key is none")))?;
     let key_pem_result = pkcs8::Document::from_pem(key_pem.as_str());
     if key_pem_result.is_err() {
         return Err(AppError::from("Can not parse the key pem."));
