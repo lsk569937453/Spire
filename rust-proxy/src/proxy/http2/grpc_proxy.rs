@@ -41,9 +41,7 @@ pub async fn start_task(
     mapping_key: String,
     peer_addr: SocketAddr,
 ) -> Result<(), AppError> {
-    let mut connection = server::handshake(tcp_stream)
-        .await
-        .map_err(|e| AppError(e.to_string()))?;
+    let mut connection = server::handshake(tcp_stream).await?;
     while let Some(request_result) = connection.accept().await {
         if let Ok((request, respond)) = request_result {
             let mapping_key_cloned = mapping_key.clone();
@@ -73,9 +71,7 @@ pub async fn start_tls_task(
     mapping_key: String,
     peer_addr: SocketAddr,
 ) -> Result<(), AppError> {
-    let mut connection = server::handshake(tcp_stream)
-        .await
-        .map_err(|e| AppError(e.to_string()))?;
+    let mut connection = server::handshake(tcp_stream).await?;
     while let Some(request_result) = connection.accept().await {
         if let Ok((request, respond)) = request_result {
             let mapping_key_cloned = mapping_key.clone();
@@ -157,14 +153,11 @@ impl GrpcProxy {
         //     .iter()
         //     .map(|s| rustls::Certificate((*s).clone()))
         //     .collect();
-        let certs: Vec<CertificateDer<'_>> = rustls_pemfile::certs(&mut cer_reader)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AppError(e.to_string()))?;
+        let certs: Vec<CertificateDer<'_>> =
+            rustls_pemfile::certs(&mut cer_reader).collect::<Result<Vec<_>, _>>()?;
 
         let mut key_reader = BufReader::new(key_str.as_bytes());
-        let key_der = rustls_pemfile::private_key(&mut key_reader)
-            .map_err(|e| AppError(e.to_string()))?
-            .ok_or("key_der is none")?;
+        let key_der = rustls_pemfile::private_key(&mut key_reader)?.ok_or("key_der is none")?;
 
         let tls_cfg = {
             let cfg = rustls::ServerConfig::builder()
@@ -206,19 +199,13 @@ async fn copy_io(
 ) -> Result<(), AppError> {
     let mut flow_control = recv_stream.flow_control().clone();
     while let Some(chunk_result) = recv_stream.data().await {
-        let chunk_bytes = chunk_result.map_err(|e| AppError(e.to_string()))?;
+        let chunk_bytes = chunk_result?;
         debug!("Data from outbound: {:?}", chunk_bytes.clone());
-        send_stream
-            .send_data(chunk_bytes.clone(), false)
-            .map_err(|e| AppError(e.to_string()))?;
-        flow_control
-            .release_capacity(chunk_bytes.len())
-            .map_err(|e| AppError(e.to_string()))?;
+        send_stream.send_data(chunk_bytes.clone(), false)?;
+        flow_control.release_capacity(chunk_bytes.len())?;
     }
     if let Ok(Some(header)) = recv_stream.trailers().await {
-        send_stream
-            .send_trailers(header)
-            .map_err(|e| AppError(e.to_string()))?;
+        send_stream.send_trailers(header)?;
     }
     Ok(())
 }
@@ -254,7 +241,7 @@ async fn request_outbound(
         )));
     }
     let request_path = check_result.ok_or("check_result is none")?.request_path;
-    let url = Url::parse(&request_path).map_err(|e| AppError(e.to_string()))?;
+    let url = Url::parse(&request_path)?;
     let cloned_url = url.clone();
     let host = cloned_url
         .host()
@@ -265,8 +252,7 @@ async fn request_outbound(
     debug!("The host is {}", host);
 
     let addr = format!("{}:{}", host, port)
-        .to_socket_addrs()
-        .map_err(|e| AppError(e.to_string()))?
+        .to_socket_addrs()?
         .next()
         .ok_or(AppError(String::from("Parse the domain error!")))?;
     debug!("The addr is {}", addr);
@@ -281,20 +267,11 @@ async fn request_outbound(
             .with_no_client_auth();
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
         let tls_connector = TlsConnector::from(Arc::new(config));
-        let stream = TcpStream::connect(&addr)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
-        let domain = rustls_pki_types::ServerName::try_from(host_str.as_str())
-            .map_err(|e| AppError(e.to_string()))?
-            .to_owned();
+        let stream = TcpStream::connect(&addr).await?;
+        let domain = rustls_pki_types::ServerName::try_from(host_str.as_str())?.to_owned();
         debug!("The domain name is {}", host);
-        let stream = tls_connector
-            .connect(domain, stream)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
-        let (send_request, connection) = client::handshake(stream)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
+        let stream = tls_connector.connect(domain, stream).await?;
+        let (send_request, connection) = client::handshake(stream).await?;
         tokio::spawn(async move {
             let connection_result = connection.await;
             if let Err(err) = connection_result {
@@ -305,12 +282,8 @@ async fn request_outbound(
         });
         send_request
     } else {
-        let tcpstream = TcpStream::connect(addr)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
-        let (send_request, connection) = client::handshake(tcpstream)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
+        let tcpstream = TcpStream::connect(addr).await?;
+        let (send_request, connection) = client::handshake(tcpstream).await?;
         tokio::spawn(async move {
             connection.await.unwrap();
             debug!("The connection has closed!");
@@ -319,10 +292,7 @@ async fn request_outbound(
     };
 
     debug!("request path is {}", url);
-    let mut send_request = send_request_poll
-        .ready()
-        .await
-        .map_err(|e| AppError(e.to_string()))?;
+    let mut send_request = send_request_poll.ready().await?;
     let request = Request::builder()
         .method(Method::POST)
         .version(Version::HTTP_2)
@@ -331,19 +301,14 @@ async fn request_outbound(
         .header("te", "trailers")
         .body(())?;
     debug!("Our bound request is {:?}", request);
-    let (response, outbound_send_stream) = send_request
-        .send_request(request, false)
-        .map_err(|e| AppError(e.to_string()))?;
+    let (response, outbound_send_stream) = send_request.send_request(request, false)?;
     tokio::spawn(async {
         if let Err(err) = copy_io(outbound_send_stream, inbound_body).await {
             error!("Copy from inbound to outboud error,the error is {}", err);
         }
     });
 
-    let (head, outboud_response_body) = response
-        .await
-        .map_err(|e| AppError(e.to_string()))?
-        .into_parts();
+    let (head, outboud_response_body) = response.await?.into_parts();
 
     debug!("Received response: {:?}", head);
 
@@ -354,9 +319,7 @@ async fn request_outbound(
         .unwrap_or(false);
     let inbound_response = Response::from_parts(head, ());
 
-    let send_stream = inbound_respond
-        .send_response(inbound_response, is_grpc_status_ok)
-        .map_err(|e| AppError(e.to_string()))?;
+    let send_stream = inbound_respond.send_response(inbound_response, is_grpc_status_ok)?;
 
     tokio::spawn(async {
         if let Err(err) = copy_io(send_stream, outboud_response_body).await {

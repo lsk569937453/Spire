@@ -18,9 +18,7 @@ impl TcpProxy {
         let listen_addr = format!("0.0.0.0:{}", self.port.clone());
         let mapping_key_clone = self.mapping_key.clone();
         info!("Listening on: {}", listen_addr);
-        let listener = TcpListener::bind(listen_addr)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
+        let listener = TcpListener::bind(listen_addr).await?;
         let reveiver = &mut self.channel;
         loop {
             let accept_future = listener.accept();
@@ -54,9 +52,7 @@ async fn transfer(
     port: i32,
 ) -> Result<(), AppError> {
     let proxy_addr = get_route_cluster(mapping_key, shared_config, port).await?;
-    let mut outbound = TcpStream::connect(proxy_addr)
-        .await
-        .map_err(|err| AppError(err.to_string()))?;
+    let mut outbound = TcpStream::connect(proxy_addr).await?;
 
     let (mut ri, mut wi) = inbound.split();
     let (mut ro, mut wo) = outbound.split();

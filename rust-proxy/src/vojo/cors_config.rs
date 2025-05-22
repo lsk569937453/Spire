@@ -22,7 +22,7 @@ impl CorsConfig {
             if allowed == "*" {
                 return Ok(self.allow_credentials);
             }
-            let regex = Regex::new(allowed).map_err(|e| AppError(e.to_string()))?;
+            let regex = Regex::new(allowed)?;
             if regex.is_match(origin) {
                 return Ok(true);
             }

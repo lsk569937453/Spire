@@ -154,20 +154,19 @@ impl Route {
         if cors_config.validate_origin("")? {
             return Ok(Response::builder()
                 .status(StatusCode::FORBIDDEN)
-                .body(Full::new(Bytes::from("".to_string())).boxed())
-                .unwrap());
+                .body(Full::new(Bytes::from("".to_string())).boxed())?);
         }
         let methods_header = cors_config
             .allowed_methods
             .iter()
-            .map(|m| serde_json::to_string(m).unwrap())
-            .collect::<Vec<_>>()
+            .map(|m| serde_json::to_string(m).map_err(AppError::from)) // Convert serde_json::Error to AppError
+            .collect::<Result<Vec<String>, AppError>>()?
             .join(", ");
         let headers_header = cors_config
             .allowed_headers
             .iter()
-            .map(|h| serde_json::to_string(h).unwrap())
-            .collect::<Vec<_>>()
+            .map(|m| serde_json::to_string(m).map_err(AppError::from)) // Convert serde_json::Error to AppError
+            .collect::<Result<Vec<String>, AppError>>()?
             .join(", ");
 
         let mut builder = Response::builder()
@@ -190,7 +189,7 @@ impl Route {
 
         builder
             .body(Full::new(Bytes::from("".to_string())).boxed())
-            .map_err(|_| AppError("".to_string()))
+            .map_err(AppError::from)
     }
     pub fn cors_configed(&self) -> Result<Option<CorsConfig>, AppError> {
         if let Some(middlewares) = &self.middlewares {
@@ -210,32 +209,34 @@ impl Route {
         let matcher = self
             .clone()
             .matcher
-            .ok_or("The matcher counld not be none for http")
-            .map_err(|err| AppError(err.to_string()))?;
+            .ok_or("The matcher counld not be none for http")?;
 
         let match_res = path.strip_prefix(matcher.prefix.as_str());
         if match_res.is_none() {
             return Ok(None);
         }
-        let final_path = format!("{}{}", matcher.prefix_rewrite, match_res.unwrap());
+        let final_path = format!(
+            "{}{}",
+            matcher.prefix_rewrite,
+            match_res.ok_or("match_res is none")?
+        );
         // info!("final_path:{}", final_path);
         if let Some(real_host_name) = &self.host_name {
             if headers_option.is_none() {
                 return Ok(None);
             }
-            let header_map = headers_option.unwrap();
+            let header_map = headers_option.ok_or("headers_option is none")?;
             let host_option = header_map.get("Host");
             if host_option.is_none() {
                 return Ok(None);
             }
-            let host_result = host_option.unwrap().to_str();
+            let host_result = host_option.ok_or("host_option is none")?.to_str();
             if host_result.is_err() {
                 return Ok(None);
             }
-            let host_name_regex =
-                Regex::new(real_host_name.as_str()).map_err(|e| AppError(e.to_string()))?;
+            let host_name_regex = Regex::new(real_host_name.as_str())?;
             return host_name_regex
-                .captures(host_result.unwrap())
+                .captures(host_result?)
                 .map_or(Ok(None), |_| Ok(Some(final_path)));
         }
         Ok(Some(final_path))
@@ -281,10 +282,15 @@ pub fn ip_is_allowed(
     allow_deny_list: Option<Vec<AllowDenyObject>>,
     ip: String,
 ) -> Result<bool, AppError> {
-    if allow_deny_list.is_none() || allow_deny_list.clone().unwrap().is_empty() {
+    if allow_deny_list.is_none()
+        || allow_deny_list
+            .clone()
+            .ok_or("allow_deny_list is none")?
+            .is_empty()
+    {
         return Ok(true);
     }
-    let allow_deny_list = allow_deny_list.unwrap();
+    let allow_deny_list = allow_deny_list.ok_or("allow_deny_list is none")?;
     // let iter = allow_deny_list.iter();
 
     for item in allow_deny_list {

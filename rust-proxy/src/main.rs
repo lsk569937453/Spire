@@ -47,16 +47,13 @@ fn main() -> Result<(), AppError> {
     Ok(())
 }
 async fn start() -> Result<(), AppError> {
-    let reload_handle = setup_logger().map_err(|e| AppError(e.to_string())).unwrap();
+    let reload_handle = setup_logger()?;
 
     let cli = Cli::parse();
     info!("cli: {:?}", cli);
     println!("cli: {:?}", cli);
-    let config_str = tokio::fs::read_to_string(cli.config_path)
-        .await
-        .map_err(|e| AppError(e.to_string()))?;
-    let config: AppConfig =
-        serde_yaml::from_str(&config_str).map_err(|e| AppError(e.to_string()))?;
+    let config_str = tokio::fs::read_to_string(cli.config_path).await?;
+    let config: AppConfig = serde_yaml::from_str(&config_str)?;
     info!("config is {:?}", config);
     println!("config is {:?}", config);
     let mut targets = vec![

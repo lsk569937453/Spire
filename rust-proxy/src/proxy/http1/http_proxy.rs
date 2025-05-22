@@ -52,9 +52,7 @@ impl HttpProxy {
         let mapping_key_clone1 = self.mapping_key.clone();
         let reveiver = &mut self.channel;
 
-        let listener = TcpListener::bind(addr)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
+        let listener = TcpListener::bind(addr).await?;
         info!("Listening on http://{}", addr);
         loop {
             tokio::select! {
@@ -104,13 +102,11 @@ impl HttpProxy {
         let mapping_key_clone1 = self.mapping_key.clone();
 
         let mut cer_reader = BufReader::new(pem_str.as_bytes());
-        let certs: Vec<CertificateDer<'_>> = rustls_pemfile::certs(&mut cer_reader)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AppError(e.to_string()))?;
+        let certs: Vec<CertificateDer<'_>> =
+            rustls_pemfile::certs(&mut cer_reader).collect::<Result<Vec<_>, _>>()?;
 
         let mut key_reader = BufReader::new(key_str.as_bytes());
-        let key_der = rustls_pemfile::private_key(&mut key_reader)
-            .map_err(|e| AppError(format!("IO error: {}", e)))?
+        let key_der = rustls_pemfile::private_key(&mut key_reader)?
             .ok_or_else(|| AppError("Key not found in PEM file".to_string()))?;
 
         let tls_cfg = {
@@ -122,9 +118,7 @@ impl HttpProxy {
         let tls_acceptor = TlsAcceptor::from(tls_cfg);
         let reveiver = &mut self.channel;
 
-        let listener = TcpListener::bind(addr)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
+        let listener = TcpListener::bind(addr).await?;
         info!("Listening on http://{}", addr);
         loop {
             tokio::select! {
@@ -307,24 +301,18 @@ async fn proxy(
         let base_route = check_request.base_route;
         if !request_path.clone().contains("http") {
             let mut parts = req.uri().clone().into_parts();
-            parts.path_and_query = Some(
-                request_path
-                    .try_into()
-                    .map_err(|e: InvalidUri| AppError(e.to_string()))?,
-            );
-            *req.uri_mut() = Uri::from_parts(parts).map_err(|e| AppError(e.to_string()))?;
+            parts.path_and_query = Some(request_path.try_into()?);
+            *req.uri_mut() = Uri::from_parts(parts)?;
             return route_file(base_route, req).await;
         }
-        *req.uri_mut() = request_path
-            .parse()
-            .map_err(|err: InvalidUri| AppError(err.to_string()))?;
+        *req.uri_mut() = request_path.parse()?;
         let request_future = if request_path.contains("https") {
             client.request_https(req, DEFAULT_HTTP_TIMEOUT)
         } else {
             client.request_http(req, DEFAULT_HTTP_TIMEOUT)
         };
         let response_result = match request_future.await {
-            Ok(response) => response.map_err(|e| AppError(e.to_string())),
+            Ok(response) => response.map_err(AppError::from),
             _ => {
                 return Err(AppError(format!(
                     "Request time out,the uri is {}",
@@ -359,11 +347,7 @@ async fn route_file(
             if base_route.try_file.is_none() {
                 return Err(AppError(String::from("Please config the try_file!")));
             }
-            *request.uri_mut() = base_route
-                .try_file
-                .ok_or("try_file is none")?
-                .parse()
-                .map_err(|e: InvalidUri| AppError(e.to_string()))?;
+            *request.uri_mut() = base_route.try_file.ok_or("try_file is none")?.parse()?;
             return static_
                 .clone()
                 .serve(request)
@@ -375,7 +359,7 @@ async fn route_file(
                             .boxed()
                     })
                 })
-                .map_err(|e| AppError(e.to_string()));
+                .map_err(AppError::from);
         } else {
             return Ok(res.map(|body| {
                 body.boxed()
@@ -389,11 +373,7 @@ async fn route_file(
     if base_route.try_file.is_none() {
         return Err(AppError(String::from("Please config the try_file!")));
     }
-    *request.uri_mut() = base_route
-        .try_file
-        .ok_or("try_file is none")?
-        .parse()
-        .map_err(|e: InvalidUri| AppError(e.to_string()))?;
+    *request.uri_mut() = base_route.try_file.ok_or("try_file is none")?.parse()?;
     static_
         .clone()
         .serve(request)
@@ -405,7 +385,7 @@ async fn route_file(
                     .boxed()
             })
         })
-        .map_err(|e| AppError(e.to_string()))
+        .map_err(AppError::from)
 }
 #[cfg(test)]
 mod tests {}

@@ -14,10 +14,7 @@ pub async fn init(shared_config: SharedConfig) -> Result<(), AppError> {
         let mut health_check = HealthCheck::from_shared_config(cloned_config);
         health_check.start_health_check_loop().await;
     });
-    let mut app_config = shared_config
-        .shared_data
-        .lock()
-        .map_err(|e| AppError(e.to_string()))?;
+    let mut app_config = shared_config.shared_data.lock()?;
     for (_, item) in app_config.api_service_config.iter_mut() {
         let port = item.listen_port;
         let server_type = item.service_config.server_type.clone();

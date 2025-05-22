@@ -39,9 +39,8 @@ impl BasicAuth {
         }
         let value = headers
             .get("Authorization")
-            .unwrap()
-            .to_str()
-            .map_err(|err| AppError(err.to_string()))?;
+            .ok_or("Can not find Authorization")?
+            .to_str()?;
         let split_list: Vec<_> = value.split(' ').collect();
         if split_list.len() != 2 || split_list[0] != "Basic" {
             return Ok(false);
@@ -63,11 +62,7 @@ impl ApiKeyAuth {
         if headers.is_empty() || !headers.contains_key(&self.key) {
             return Ok(false);
         }
-        let header_value = headers
-            .get(&self.key)
-            .unwrap()
-            .to_str()
-            .map_err(|err| AppError(err.to_string()))?;
+        let header_value = headers.get(&self.key).ok_or("Can not find key")?.to_str()?;
         Ok(header_value == self.value)
     }
 }

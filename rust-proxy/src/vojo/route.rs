@@ -153,11 +153,13 @@ impl HeaderBasedRoute {
             if !headers_contais_key {
                 continue;
             }
-            let header_value = headers.get(item.header_key.clone()).unwrap();
-            let header_value_str = header_value.to_str().unwrap();
+            let header_value = headers
+                .get(item.header_key.clone())
+                .ok_or("Can not find the headervalue")?;
+            let header_value_str = header_value.to_str()?;
             match item.clone().header_value_mapping_type {
                 HeaderValueMappingType::Regex(regex_str) => {
-                    let re = Regex::new(&regex_str.value).unwrap();
+                    let re = Regex::new(&regex_str.value)?;
                     let capture_option = re.captures(header_value_str);
                     if capture_option.is_none() {
                         continue;
@@ -193,7 +195,12 @@ impl HeaderBasedRoute {
         }
         error!("Can not find the route!And Spire has selected the first route!");
 
-        let first = self.routes.first().unwrap().base_route.clone();
+        let first = self
+            .routes
+            .first()
+            .ok_or("The first item not found.")?
+            .base_route
+            .clone();
         Ok(first)
     }
     fn update_route_alive(

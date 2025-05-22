@@ -71,10 +71,7 @@ impl ChainTrait for CommonCheckRequest {
             .path_and_query()
             .ok_or(AppError(String::from("")))?
             .to_string();
-        let mut app_config = shared_config
-            .shared_data
-            .lock()
-            .map_err(|e| AppError(e.to_string()))?;
+        let mut app_config = shared_config.shared_data.lock()?;
         let api_service = app_config
             .api_service_config
             .get_mut(&port)
@@ -99,12 +96,9 @@ impl ChainTrait for CommonCheckRequest {
             let rest_path = match_result.ok_or("match_result is none")?;
 
             if endpoint.contains("http") {
-                let host = Url::parse(endpoint.as_str()).map_err(|e| AppError(e.to_string()))?;
+                let host = Url::parse(endpoint.as_str())?;
 
-                let request_path = host
-                    .join(rest_path.as_str())
-                    .map_err(|e| AppError(e.to_string()))?
-                    .to_string();
+                let request_path = host.join(rest_path.as_str())?.to_string();
                 spire_context.route = Some(item.clone());
                 return Ok(Some(CheckResult {
                     request_path,
