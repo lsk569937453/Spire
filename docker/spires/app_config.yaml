@@ -1,129 +1,47 @@
 static_config:
   log_level: info
 services:
-  - listen_port: 8081
+  - listen_port: 4486
     service_config:
       server_type: Http
       routes:
-        - route_id: test_route
+        - matcher:
+            prefix: /
+            prefix_rewrite: /
           route_cluster:
-            type: WeightBased
+            type: randomRoute
             routes:
               - base_route:
-                  endpoint: http://127.0.0.1:9394
-                weight: 1
-              - base_route:
-                  endpoint: http://127.0.0.1:9396
-                weight: 2
-              - base_route:
-                  endpoint: http://127.0.0.1:9395
-                weight: 3
-  - listen_port: 8082
-    service_config:
-      server_type: Http
-      routes:
-        - route_id: test_route
-          route_cluster:
-            type: HeaderBased
-            routes:
-              - base_route:
-                  endpoint: http://127.0.0.1:9395
-                header_key: test
-                header_value_mapping_type:
-                  type: Text
-                  value: test
-              - base_route:
-                  endpoint: http://127.0.0.1:9396
-                header_key: test
-                header_value_mapping_type:
-                  type: Text
-                  value: test
-              - base_route:
-                  endpoint: http://127.0.0.1:9397
-                header_key: test
-                header_value_mapping_type:
-                  type: Text
-                  value: test
-  - listen_port: 8083
-    service_config:
-      server_type: Http
-      routes:
-        - route_id: test_route
-          route_cluster:
-            type: Poll
-            routes:
-              - base_route:
-                  endpoint: http://127.0.0.1:9394
-              - base_route:
-                  endpoint: http://127.0.0.1:9395
-              - base_route:
-                  endpoint: http://127.0.0.1:9396
-  - listen_port: 8084
-    service_config:
-      server_type: Http
-      routes:
-        - route_id: test_route
-          liveness_config:
-            min_liveness_count: 1
+                  endpoint: http://localhost:6666/
           health_check:
             type: HttpGet
             base_health_check_param:
-              timeout: 5
-              interval: 5
+              timeout: 10
+              interval: 10
             path: /health
-          route_cluster:
-            type: WeightBased
-            routes:
-              - base_route:
-                  endpoint: http://127.0.0.1:9393
-                weight: 1
-          middlewares:
-            - type: authentication
-              content:
-                type: ApiKey
-                key: test
-                value: test
-            - type: rate_limit
-              content:
-                type: TokenBucket
-                rate_per_unit: 10
-                unit:
-                  type: Second
-                capacity: 10
-                limit_location:
-                  type: IP
-                  value: 192.168.0.1
-            - type: allow_deny_list
-              content:
-                - limit_type: AllowAll
-                  value: 192.168.0.2
-            - type: cors
-              content:
-                allowed_origins:
-                  - http://127.0.0.1
-                allowed_methods:
-                  - Get
-                  - Post
-                allowed_headers:
-                  - AcessControlAllowOrigin
-                  - AccessControlAllowMethods
-                  - AccessControlAllowHeaders
-                  - AccessControlMaxAge
-                  - AccessControlAllowCredentials
-                allow_credentials: true
-                max_age: 3600
-                options_passthrough: true
-  - listen_port: 8085
+          liveness_config:
+            min_liveness_count: 1
+  - listen_port: 9969
     service_config:
       server_type: Http
       routes:
-        - route_id: test_route
+        - matcher:
+            prefix: /
+            prefix_rewrite: /
           route_cluster:
             type: randomRoute
             routes:
               - base_route:
                   endpoint: http://127.0.0.1:9394
               - base_route:
-                  endpoint: http://127.0.0.1:9395
+                  endpoint: http://127.0.0.1:8090
               - base_route:
                   endpoint: http://127.0.0.1:9396
+          health_check:
+            type: HttpGet
+            base_health_check_param:
+              timeout: 5
+              interval: 5
+            path: /health
+          liveness_config:
+            min_liveness_count: 1
