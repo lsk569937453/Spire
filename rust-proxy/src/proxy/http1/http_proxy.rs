@@ -319,9 +319,11 @@ async fn proxy(
         let mut res = response_result?
             .map(|b| b.boxed())
             .map(|item| item.map_err(|_| -> Infallible { unreachable!() }).boxed());
-        chain_trait
-            .handle_after_request(spire_context, &mut res)
-            .await?;
+        if let Some(cors_config) = route.cors_configed()? {
+            chain_trait
+                .handle_after_request(cors_config, &mut res)
+                .await?;
+        }
         return Ok(res);
     }
     Ok(Response::builder()

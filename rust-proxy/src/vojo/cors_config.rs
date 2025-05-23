@@ -39,6 +39,18 @@ pub enum Method {
     Head,
     Options,
 }
+impl Method {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Method::Get => "GET",
+            Method::Post => "POST",
+            Method::Put => "PUT",
+            Method::Delete => "DELETE",
+            Method::Head => "HEAD",
+            Method::Options => "OPTIONS",
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum HeaderName {
     AcessControlAllowOrigin,
@@ -46,4 +58,15 @@ pub enum HeaderName {
     AccessControlAllowHeaders,
     AccessControlMaxAge,
     AccessControlAllowCredentials,
+}
+impl HeaderName {
+    pub fn as_str(&self) -> &str {
+        match self {
+            HeaderName::AcessControlAllowOrigin => "Access-Control-Allow-Origin",
+            HeaderName::AccessControlAllowMethods => "Access-Control-Allow-Methods",
+            HeaderName::AccessControlAllowHeaders => "Access-Control-Allow-Headers",
+            HeaderName::AccessControlMaxAge => "Access-Control-Max-Age",
+            HeaderName::AccessControlAllowCredentials => "Access-Control-Allow-Credentials",
+        }
+    }
 }

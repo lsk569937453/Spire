@@ -1,10 +1,12 @@
 use crate::vojo::app_config::Route;
 use crate::vojo::app_error::AppError;
-use crate::vojo::router::BaseRoute;
-use crate::vojo::router::StaticFileRoute;
+use crate::vojo::cors_config::CorsConfig;
+use crate::vojo::route::BaseRoute;
 use crate::SharedConfig;
 use bytes::Bytes;
+use http::header;
 use http::header::HeaderMap;
+use http::HeaderValue;
 use http_body_util::combinators::BoxBody;
 use hyper::Response;
 use hyper::Uri;
@@ -37,7 +39,7 @@ pub trait ChainTrait {
     ) -> Result<Option<CheckResult>, AppError>;
     async fn handle_after_request(
         &self,
-        spire_context: SpireContext,
+        cores_config: CorsConfig,
         response: &mut Response<BoxBody<Bytes, Infallible>>,
     ) -> Result<(), AppError>;
 }
@@ -52,10 +54,67 @@ pub struct CheckResult {
 impl ChainTrait for CommonCheckRequest {
     async fn handle_after_request(
         &self,
-        spire_context: SpireContext,
+        cors_config: CorsConfig,
 
         response: &mut Response<BoxBody<Bytes, Infallible>>,
     ) -> Result<(), AppError> {
+        let headers = response.headers_mut();
+
+        // 1. Access-Control-Allow-Origin
+        let origin = if cors_config.allowed_origins.is_empty() {
+            return Err("No allowed origins specified".into());
+        } else if cors_config.allowed_origins.contains(&"*".to_string()) {
+            // 通配符处理
+            "*"
+        } else {
+            // 取第一个origin（实际生产环境需要动态验证Origin头）
+            &cors_config.allowed_origins[0]
+        };
+
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_str(origin).map_err(|_| "HeaderValue is none")?,
+        );
+
+        let methods: Vec<&str> = cors_config
+            .allowed_methods
+            .iter()
+            .map(|m| m.as_str())
+            .collect();
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_str(&methods.join(", ")).map_err(|_| "Invalid header")?,
+        );
+        let header_names: Vec<&str> = cors_config
+            .allowed_headers
+            .iter()
+            .map(|h| h.as_str())
+            .collect();
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_str(&header_names.join(", ")).map_err(|_| "Invalid header")?,
+        );
+
+        if cors_config.allow_credentials {
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                HeaderValue::from_static("true"),
+            );
+        }
+
+        // 5. Access-Control-Max-Age
+        if cors_config.max_age > 0 {
+            headers.insert(
+                header::ACCESS_CONTROL_MAX_AGE,
+                HeaderValue::from_str(&cors_config.max_age.to_string())
+                    .map_err(|_| "Invalid header")?,
+            );
+        }
+
+        if !cors_config.allowed_origins.contains(&"*".to_string()) {
+            headers.append(header::VARY, HeaderValue::from_static("Origin"));
+        }
+
         Ok(())
     }
     async fn handle_before_request(
