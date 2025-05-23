@@ -159,32 +159,33 @@ impl Route {
         let methods_header = cors_config
             .allowed_methods
             .iter()
-            .map(|m| serde_json::to_string(m).map_err(AppError::from)) // Convert serde_json::Error to AppError
-            .collect::<Result<Vec<String>, AppError>>()?
+            .map(|m| m.as_str()) // Convert serde_json::Error to AppError
+            .collect::<Vec<&str>>()
             .join(", ");
         let headers_header = cors_config
             .allowed_headers
             .iter()
-            .map(|m| serde_json::to_string(m).map_err(AppError::from)) // Convert serde_json::Error to AppError
-            .collect::<Result<Vec<String>, AppError>>()?
+            .map(|m| m.to_string()) // Convert serde_json::Error to AppError
+            .collect::<Vec<String>>()
             .join(", ");
 
         let mut builder = Response::builder()
             .status(StatusCode::NO_CONTENT)
             .header(header::ACCESS_CONTROL_ALLOW_METHODS, methods_header)
             .header(header::ACCESS_CONTROL_ALLOW_HEADERS, headers_header)
-            .header(
-                header::ACCESS_CONTROL_MAX_AGE,
-                cors_config.max_age.to_string(),
-            )
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin)
             .header(header::VARY, "Origin");
 
-        if cors_config.allow_credentials {
-            builder = builder.header(
-                header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                HeaderValue::from_static("true"),
-            );
+        if let Some(s) = cors_config.allow_credentials {
+            if s {
+                builder = builder.header(
+                    header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                    HeaderValue::from_static("true"),
+                );
+            }
+        }
+        if let Some(s) = cors_config.max_age {
+            builder = builder.header(header::ACCESS_CONTROL_MAX_AGE, s.to_string());
         }
 
         builder
@@ -434,9 +435,10 @@ mod tests {
     use super::*;
     use crate::vojo::authentication::ApiKeyAuth;
 
+    use crate::vojo::cors_config::CorsAllowedOrigins;
+
     use crate::vojo::health_check::BaseHealthCheckParam;
     use crate::vojo::health_check::HttpHealthCheckParam;
-
     use crate::vojo::rate_limit::IPBasedRatelimit;
     use crate::vojo::rate_limit::TimeUnit;
     use crate::vojo::rate_limit::TokenBucketRateLimit;
@@ -446,6 +448,9 @@ mod tests {
     use crate::vojo::route::HeaderRoute;
     use crate::vojo::route::LoadbalancerStrategy::WeightBased;
 
+    use crate::vojo::allow_deny_ip::AllowDenyObject;
+    use crate::vojo::authentication::Authentication;
+    use crate::vojo::cors_config::Method;
     use crate::vojo::rate_limit::LimitLocation;
     use crate::vojo::route::PollBaseRoute;
     use crate::vojo::route::PollRoute;
@@ -454,9 +459,10 @@ mod tests {
     use crate::vojo::route::TextMatch;
     use crate::vojo::route::WeightBasedRoute;
     use crate::vojo::route::WeightRoute;
+    use http::HeaderValue;
     fn create_api_service1() -> ApiService {
         let mut api_service = ApiService {
-            listen_port: 8080,
+            listen_port: 8081,
             ..Default::default()
         };
 
@@ -503,7 +509,7 @@ mod tests {
     }
     fn create_api_service2() -> ApiService {
         let mut api_service = ApiService {
-            listen_port: 8080,
+            listen_port: 8082,
             ..Default::default()
         };
 
@@ -545,7 +551,7 @@ mod tests {
     }
     fn create_api_service3() -> ApiService {
         let mut api_service = ApiService {
-            listen_port: 8080,
+            listen_port: 8083,
             ..Default::default()
         };
 
@@ -586,7 +592,7 @@ mod tests {
     }
     fn create_api_service4() -> ApiService {
         let mut api_service = ApiService {
-            listen_port: 8080,
+            listen_port: 8084,
             ..Default::default()
         };
 
@@ -652,7 +658,7 @@ mod tests {
         };
         app_config.static_config = static_config;
         let mut api_service = ApiService {
-            listen_port: 8080,
+            listen_port: 8085,
             ..Default::default()
         };
 
@@ -699,6 +705,15 @@ mod tests {
                     value: Some("192.168.0.2".to_string()),
                     limit_type: crate::vojo::allow_deny_ip::AllowType::AllowAll,
                 }]),
+                MiddleWares::Cors(CorsConfig {
+                    allow_credentials: Some(true),
+                    allowed_origins: CorsAllowedOrigins::All,
+                    allowed_methods: vec![Method::Get, Method::Post],
+                    allowed_headers: Some(crate::vojo::cors_config::CorsAllowHeader::All),
+
+                    max_age: Some(3600),
+                    options_passthrough: Some(true),
+                }),
             ]),
             ..Default::default()
         };
@@ -727,14 +742,9 @@ mod tests {
     #[test]
     fn test_app_config_serialize_with_static_config() {
         let app_config = create_default_app_config();
-        // 序列化为JSON
         let json_str = serde_yaml::to_string(&app_config).unwrap();
         println!("{}", json_str);
     }
-
-    use crate::vojo::allow_deny_ip::AllowDenyObject;
-    use crate::vojo::authentication::Authentication;
-    use http::HeaderValue;
 
     #[test]
     fn test_static_config_default() {

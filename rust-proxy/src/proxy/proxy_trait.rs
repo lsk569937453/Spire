@@ -59,52 +59,47 @@ impl ChainTrait for CommonCheckRequest {
         response: &mut Response<BoxBody<Bytes, Infallible>>,
     ) -> Result<(), AppError> {
         let headers = response.headers_mut();
-        let origin = if cors_config.allowed_origins.is_empty() {
-            return Err("No allowed origins specified".into());
-        } else if cors_config.allowed_origins.contains(&"*".to_string()) {
-            "*"
-        } else {
-            &cors_config.allowed_origins[0]
-        };
+        let origin = cors_config.allowed_origins.to_string();
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
-            HeaderValue::from_str(origin).map_err(|_| "HeaderValue is none")?,
+            HeaderValue::from_str(origin.as_str()).map_err(|_| "HeaderValue is none")?,
         );
 
-        let methods: Vec<&str> = cors_config
+        let methods = cors_config
             .allowed_methods
             .iter()
-            .map(|m| m.as_str())
-            .collect();
+            .map(|m| m.as_str().to_uppercase())
+            .collect::<Vec<String>>()
+            .join(", ");
+        info!("methods: {}", methods);
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_METHODS,
-            HeaderValue::from_str(&methods.join(", ")).map_err(|_| "Invalid header")?,
+            HeaderValue::from_str(&methods).map_err(|_| "Invalid header")?,
         );
-        let header_names: Vec<&str> = cors_config
-            .allowed_headers
-            .iter()
-            .map(|h| h.as_str())
-            .collect();
-        headers.insert(
-            header::ACCESS_CONTROL_ALLOW_HEADERS,
-            HeaderValue::from_str(&header_names.join(", ")).map_err(|_| "Invalid header")?,
-        );
-
-        if cors_config.allow_credentials {
+        if let Some(cors_headers) = cors_config.allowed_headers {
             headers.insert(
-                header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                HeaderValue::from_static("true"),
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                HeaderValue::from_str(&cors_headers.to_string()).map_err(|_| "Invalid header")?,
             );
         }
-        if cors_config.max_age > 0 {
-            headers.insert(
-                header::ACCESS_CONTROL_MAX_AGE,
-                HeaderValue::from_str(&cors_config.max_age.to_string())
-                    .map_err(|_| "Invalid header")?,
-            );
+        if let Some(allow_credentials) = cors_config.allow_credentials {
+            if allow_credentials {
+                headers.insert(
+                    header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                    HeaderValue::from_static("true"),
+                );
+            }
+        }
+        if let Some(max_age) = cors_config.max_age {
+            if max_age > 0 {
+                headers.insert(
+                    header::ACCESS_CONTROL_MAX_AGE,
+                    HeaderValue::from_str(&max_age.to_string()).map_err(|_| "Invalid header")?,
+                );
+            }
         }
 
-        if !cors_config.allowed_origins.contains(&"*".to_string()) {
+        if !cors_config.allowed_origins.is_all() {
             headers.append(header::VARY, HeaderValue::from_static("Origin"));
         }
 
