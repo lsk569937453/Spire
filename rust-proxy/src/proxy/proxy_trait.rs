@@ -59,18 +59,13 @@ impl ChainTrait for CommonCheckRequest {
         response: &mut Response<BoxBody<Bytes, Infallible>>,
     ) -> Result<(), AppError> {
         let headers = response.headers_mut();
-
-        // 1. Access-Control-Allow-Origin
         let origin = if cors_config.allowed_origins.is_empty() {
             return Err("No allowed origins specified".into());
         } else if cors_config.allowed_origins.contains(&"*".to_string()) {
-            // 通配符处理
             "*"
         } else {
-            // 取第一个origin（实际生产环境需要动态验证Origin头）
             &cors_config.allowed_origins[0]
         };
-
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
             HeaderValue::from_str(origin).map_err(|_| "HeaderValue is none")?,
@@ -101,8 +96,6 @@ impl ChainTrait for CommonCheckRequest {
                 HeaderValue::from_static("true"),
             );
         }
-
-        // 5. Access-Control-Max-Age
         if cors_config.max_age > 0 {
             headers.insert(
                 header::ACCESS_CONTROL_MAX_AGE,
