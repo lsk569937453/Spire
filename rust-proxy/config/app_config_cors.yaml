@@ -1,0 +1,33 @@
+services:
+  - listen_port: 8084
+    service_config:
+      server_type: Http
+      routes:
+        - route_id: test_route
+          matcher:
+            prefix: /
+            prefix_rewrite: /
+          route_cluster:
+            type: WeightBased
+            routes:
+              - base_route:
+                  endpoint: https://httpbin.org/get
+                weight: 1
+          middlewares:
+            - type: cors
+              content:
+                allowed_origins:
+                  - http://127.0.0.5
+                allowed_methods:
+                  - PUT
+                  - GET
+                allowed_headers:
+                  - ContentType
+                  - Authorization
+                  - Accepts
+                  - SetCookie
+                  - Cookie
+                  - Range
+                allow_credentials: true
+                max_age: 3600
+                options_passthrough: true

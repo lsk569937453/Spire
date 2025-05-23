@@ -94,7 +94,7 @@ impl TimeUnit {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TokenBucketRateLimit {
-    pub rate_per_unit: u128,
+    pub rate_per_unit: i32,
     pub unit: TimeUnit,
     pub capacity: i32,
     pub limit_location: LimitLocation,
@@ -168,7 +168,8 @@ impl TokenBucketRateLimit {
         let elapsed = now.duration_since(self.last_update_time)?;
 
         let elapsed_millis = elapsed.as_millis();
-        let tokens_to_add = (elapsed_millis * self.rate_per_unit) / self.unit.get_million_second();
+        let tokens_to_add =
+            (elapsed_millis * self.rate_per_unit as u128) / self.unit.get_million_second();
 
         if tokens_to_add > 0 {
             self.current_count = (self.current_count + tokens_to_add as i32).min(self.capacity);
