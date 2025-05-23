@@ -6,7 +6,7 @@ use crate::proxy::http1::http_client::HttpClients;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
 use bytes::Bytes;
-use http::{HeaderValue, Uri};
+use http::Uri;
 use hyper::body::Incoming;
 use hyper::header;
 use hyper::header::{CONNECTION, SEC_WEBSOCKET_KEY};

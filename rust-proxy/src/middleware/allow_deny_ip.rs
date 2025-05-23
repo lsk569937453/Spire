@@ -1,4 +1,4 @@
-use ipnet::{AddrParseError, Ipv4Net};
+use ipnet::Ipv4Net;
 use iprange::IpRange;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
