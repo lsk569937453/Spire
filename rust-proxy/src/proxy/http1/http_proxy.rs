@@ -7,7 +7,6 @@ use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
 use crate::vojo::route::BaseRoute;
 use bytes::Bytes;
-use http::uri::InvalidUri;
 use http::Uri;
 use hyper::body::Incoming;
 use hyper::header;

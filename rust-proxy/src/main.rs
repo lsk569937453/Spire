@@ -35,8 +35,7 @@ fn main() -> Result<(), AppError> {
     let rt = runtime::Builder::new_multi_thread()
         .worker_threads(num * 2)
         .enable_all()
-        .build()
-        .unwrap();
+        .build()?;
 
     rt.block_on(async {
         if let Err(e) = start().await {
