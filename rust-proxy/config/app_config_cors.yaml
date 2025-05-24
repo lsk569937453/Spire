@@ -17,17 +17,11 @@ services:
             - type: cors
               content:
                 allowed_origins:
-                  - http://127.0.0.5
+                  - http://127.0.0.1
                 allowed_methods:
                   - PUT
                   - GET
-                allowed_headers:
-                  - ContentType
-                  - Authorization
-                  - Accepts
-                  - SetCookie
-                  - Cookie
-                  - Range
+                allowed_headers: "*"
                 allow_credentials: true
                 max_age: 3600
                 options_passthrough: true

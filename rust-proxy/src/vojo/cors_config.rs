@@ -202,14 +202,11 @@ impl CorsAllowHeader {
     pub fn to_string(&self) -> String {
         match self {
             CorsAllowHeader::All => "*".to_string(),
-            CorsAllowHeader::Headers(headers) => {
-                let mut header_str = String::new();
-                for header in headers {
-                    header_str.push_str(header.as_str());
-                    header_str.push_str(", ");
-                }
-                header_str.to_string()
-            }
+            CorsAllowHeader::Headers(headers) => headers
+                .iter()
+                .map(|item| item.as_str())
+                .collect::<Vec<&str>>()
+                .join(", "),
         }
     }
 }
