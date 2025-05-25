@@ -677,6 +677,10 @@ mod tests {
         };
         let route = Route {
             route_id: "test_route".to_string(),
+            matcher: Some(Matcher {
+                prefix: "/".to_string(),
+                prefix_rewrite: "/".to_string(),
+            }),
             route_cluster: LoadbalancerStrategy::WeightBased(header_based),
             health_check: Some(HealthCheckType::HttpGet(HttpHealthCheckParam {
                 path: "/health".to_string(),
