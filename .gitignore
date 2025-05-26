@@ -43,3 +43,6 @@ Temporary Items
 .apdisk
 logs
 spire
+*.data
+*.old
+*.svg

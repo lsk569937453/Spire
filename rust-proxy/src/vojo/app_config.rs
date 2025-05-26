@@ -403,7 +403,7 @@ impl Default for StaticConifg {
             database_url: Some("".to_string()),
             admin_port: Some(DEFAULT_ADMIN_PORT),
             config_file_path: Some("".to_string()),
-            log_level: Some(DEFAULT_LOG_LEVEL),
+            log_level: None,
         }
     }
 }
@@ -414,7 +414,7 @@ impl StaticConifg {
             Some(LogLevel::Info) => LevelFilter::INFO,
             Some(LogLevel::Error) => LevelFilter::ERROR,
             Some(LogLevel::Warn) => LevelFilter::WARN,
-            None => LevelFilter::INFO,
+            None => LevelFilter::OFF,
         }
     }
 }
