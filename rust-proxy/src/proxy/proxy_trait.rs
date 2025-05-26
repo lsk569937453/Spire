@@ -15,7 +15,6 @@ use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Path;
-use url::Url;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpireContext {
     pub port: i32,
@@ -32,7 +31,7 @@ pub trait ChainTrait {
         shared_config: SharedConfig,
         port: i32,
         mapping_key: String,
-        headers: HeaderMap,
+        headers: &HeaderMap,
         uri: Uri,
         peer_addr: SocketAddr,
         spire_context: &mut SpireContext,
@@ -110,7 +109,7 @@ impl ChainTrait for CommonCheckRequest {
         shared_config: SharedConfig,
         port: i32,
         _mapping_key: String,
-        headers: HeaderMap,
+        headers: &HeaderMap,
         uri: Uri,
         peer_addr: SocketAddr,
         spire_context: &mut SpireContext,
@@ -118,23 +117,20 @@ impl ChainTrait for CommonCheckRequest {
         let backend_path = uri
             .path_and_query()
             .ok_or(AppError(String::from("")))?
-            .to_string();
+            .as_str();
         let mut app_config = shared_config.shared_data.lock()?;
         let api_service = app_config
             .api_service_config
             .get_mut(&port)
             .ok_or(AppError(String::from("")))?;
 
-        let addr_string = peer_addr.ip().to_string();
         for item in api_service.service_config.routes.iter_mut() {
-            let back_path_clone = backend_path.clone();
-            let match_result = item.is_matched(back_path_clone, Some(headers.clone()))?;
+            let match_result = item.is_matched(backend_path, Some(headers.clone()))?;
             if match_result.clone().is_none() {
                 continue;
             }
             let headers1 = headers.clone();
-            let addr_string1 = addr_string.clone();
-            let is_allowed = item.is_allowed(addr_string1, Some(headers1))?;
+            let is_allowed = item.is_allowed(&peer_addr, Some(headers1))?;
             if !is_allowed {
                 return Ok(None);
             }
@@ -144,9 +140,11 @@ impl ChainTrait for CommonCheckRequest {
             let rest_path = match_result.ok_or("match_result is none")?;
 
             if endpoint.contains("http") {
-                let host = Url::parse(endpoint.as_str())?;
+                // let host = Url::parse(endpoint.as_str())?;
 
-                let request_path = host.join(rest_path.as_str())?.to_string();
+                // let request_path = host.join(rest_path.as_str())?.to_string();
+
+                let request_path = format!("{}/{}", endpoint, rest_path);
                 spire_context.route = Some(item.clone());
                 return Ok(Some(CheckResult {
                     request_path,
@@ -403,7 +401,7 @@ mod tests {
                 shared_config,
                 8080,
                 "test".into(),
-                headers,
+                &headers,
                 uri,
                 peer_addr,
                 &mut SpireContext::new(8080, None),
@@ -450,7 +448,7 @@ mod tests {
                 shared_config,
                 8080,
                 "test".into(),
-                headers,
+                &headers,
                 uri,
                 peer_addr,
                 &mut SpireContext::new(8080, None),
@@ -482,7 +480,7 @@ mod tests {
                 shared_config,
                 8080,
                 "test".into(),
-                headers,
+                &headers,
                 uri,
                 peer_addr,
                 &mut SpireContext::new(8080, None),

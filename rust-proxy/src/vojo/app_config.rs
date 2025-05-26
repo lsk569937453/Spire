@@ -25,6 +25,7 @@ use serde::Serializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tracing_subscriber::filter::LevelFilter;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -202,9 +203,9 @@ impl Route {
         Ok(None)
     }
     pub fn is_matched(
-        &mut self,
+        &self,
         path: &str,
-        headers_option: Option<&HeaderMap<HeaderValue>>,
+        headers_option: Option<HeaderMap<HeaderValue>>,
     ) -> Result<Option<String>, AppError> {
         let matcher = self
             .matcher
@@ -242,7 +243,7 @@ impl Route {
     }
     pub fn is_allowed(
         &mut self,
-        ip: String,
+        peer_addr: &SocketAddr,
         headers_option: Option<HeaderMap<HeaderValue>>,
     ) -> Result<bool, AppError> {
         if let Some(middlewares) = &mut self.middlewares {
@@ -250,7 +251,7 @@ impl Route {
                 match middleware {
                     MiddleWares::RateLimit(ratelimit) => {
                         if let Some(header_map) = headers_option.clone() {
-                            let is_allowed = !ratelimit.should_limit(header_map, ip.clone())?;
+                            let is_allowed = !ratelimit.should_limit(header_map, peer_addr)?;
                             if !is_allowed {
                                 return Ok(is_allowed);
                             }
@@ -265,7 +266,7 @@ impl Route {
                         }
                     }
                     MiddleWares::AllowDenyList(allow_deny_list) => {
-                        let is_allowed = ip_is_allowed(Some(allow_deny_list.clone()), ip.clone())?;
+                        let is_allowed = ip_is_allowed(Some(allow_deny_list.clone()), peer_addr)?;
                         if !is_allowed {
                             return Ok(is_allowed);
                         }
@@ -279,7 +280,7 @@ impl Route {
 }
 pub fn ip_is_allowed(
     allow_deny_list: Option<Vec<AllowDenyObject>>,
-    ip: String,
+    peer_addr: &SocketAddr,
 ) -> Result<bool, AppError> {
     if allow_deny_list.is_none()
         || allow_deny_list
@@ -291,7 +292,27 @@ pub fn ip_is_allowed(
     }
     let allow_deny_list = allow_deny_list.ok_or("allow_deny_list is none")?;
     // let iter = allow_deny_list.iter();
+    let ip = peer_addr.ip().to_string();
+    for item in allow_deny_list {
+        let is_allow = item.is_allow(ip.clone());
+        match is_allow {
+            Ok(AllowResult::Allow) => {
+                return Ok(true);
+            }
+            Ok(AllowResult::Deny) => {
+                return Ok(false);
+            }
+            Ok(AllowResult::Notmapping) => {
+                continue;
+            }
+            Err(err) => {
+                return Err(AppError(err.to_string()));
+            }
+        }
+    }
 
+    Ok(true)
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, strum_macros::Display)]
 pub enum ServiceType {
     #[default]
@@ -773,10 +794,10 @@ mod tests {
             ..Default::default()
         };
 
-        let result = route.is_matched("/api/test".to_string(), None).unwrap();
+        let result = route.is_matched("/api/test", None).unwrap();
         assert_eq!(result, Some("/v1/test".to_string()));
 
-        let result = route.is_matched("/other/test".to_string(), None).unwrap();
+        let result = route.is_matched("/other/test", None).unwrap();
         assert_eq!(result, None);
     }
 
@@ -795,14 +816,12 @@ mod tests {
         headers.insert("Host", HeaderValue::from_static("example.com"));
 
         let result = route
-            .is_matched("/api/test".to_string(), Some(headers.clone()))
+            .is_matched("/api/test", Some(headers.clone()))
             .unwrap();
         assert_eq!(result, Some("/v1/test".to_string()));
 
         headers.insert("Host", HeaderValue::from_static("wrong.com"));
-        let result = route
-            .is_matched("/api/test".to_string(), Some(headers))
-            .unwrap();
+        let result = route.is_matched("/api/test", Some(headers)).unwrap();
         assert_eq!(result, None);
     }
 

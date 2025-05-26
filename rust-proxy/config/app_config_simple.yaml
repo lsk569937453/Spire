@@ -11,5 +11,5 @@ services:
             type: WeightBased
             routes:
               - base_route:
-                  endpoint: https://127.0.0.1:8090
+                  endpoint: http://127.0.0.1:8090
                 weight: 1

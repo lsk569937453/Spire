@@ -231,8 +231,8 @@ async fn proxy_adapter_with_error(
     inc(mapping_key.clone(), path.clone(), status);
 
     info!(
-        "{} - -  \"{} {} HTTP/1.1\" {}  \"-\" \"-\" {} {}ms",
-        remote_addr, method, path, status, json_value, elapsed_time
+        "{} - -  \"{} {} HTTP/1.1\" {}  \"-\" \"-\"  {}ms",
+        remote_addr, method, path, status, elapsed_time
     );
     Ok(res)
 }
@@ -248,7 +248,7 @@ async fn proxy(
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
     debug!("req: {:?}", req);
 
-    let inbound_headers = req.headers().clone();
+    let inbound_headers = req.headers();
     let uri = req.uri().clone();
     let mut spire_context = SpireContext::new(port, None);
     let check_result = chain_trait
