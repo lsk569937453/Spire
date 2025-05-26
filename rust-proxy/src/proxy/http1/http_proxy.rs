@@ -7,7 +7,7 @@ use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
 use crate::vojo::route::BaseRoute;
 use bytes::Bytes;
-use http::Uri;
+use http::{HeaderValue, Uri};
 use hyper::body::Incoming;
 use hyper::header;
 use hyper::header::{CONNECTION, SEC_WEBSOCKET_KEY};
@@ -305,6 +305,14 @@ async fn proxy(
             return route_file(base_route, req).await;
         }
         *req.uri_mut() = request_path.parse()?;
+        let host = req
+            .uri()
+            .host()
+            .ok_or("Uri to host cause error")?
+            .to_string();
+        req.headers_mut()
+            .insert(http::header::HOST, HeaderValue::from_str(&host)?);
+
         let request_future = if request_path.contains("https") {
             client.request_https(req, DEFAULT_HTTP_TIMEOUT)
         } else {
