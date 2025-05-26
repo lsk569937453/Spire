@@ -1,0 +1,15 @@
+services:
+  - listen_port: 8084
+    service_config:
+      server_type: Http
+      routes:
+        - route_id: test_route
+          matcher:
+            prefix: /
+            prefix_rewrite: /
+          route_cluster:
+            type: WeightBased
+            routes:
+              - base_route:
+                  endpoint: https://httpbin.org/get
+                weight: 1
