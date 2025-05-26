@@ -221,7 +221,7 @@ async fn request_outbound(
     debug!("{:?}", inbount_request);
     let (inbound_parts, inbound_body) = inbount_request.into_parts();
 
-    let inbound_headers = inbound_parts.headers.clone();
+    let inbound_headers = inbound_parts.headers;
     let uri = inbound_parts.uri.clone();
     let mut spire_context = SpireContext::new(port, None);
     let check_result = check_trait
@@ -229,7 +229,7 @@ async fn request_outbound(
             shared_config,
             port,
             mapping_key.clone(),
-            inbound_headers,
+            &inbound_headers,
             uri,
             peer_addr,
             &mut spire_context,

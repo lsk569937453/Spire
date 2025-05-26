@@ -194,7 +194,6 @@ async fn proxy_adapter_with_error(
         .path_and_query()
         .unwrap_or(&PathAndQuery::from_static("/hello?world"))
         .to_string();
-    let headers = req.headers().clone();
     let current_time = SystemTime::now();
     let monitor_timer_list = get_timer_list(mapping_key.clone(), path.clone())
         .iter()
@@ -228,15 +227,14 @@ async fn proxy_adapter_with_error(
     }
 
     let status = res.status().as_u16();
-    let json_value: serde_json::Value = format!("{:?}", headers).into();
     monitor_timer_list
         .into_iter()
         .for_each(|item| item.observe_duration());
     inc(mapping_key.clone(), path.clone(), status);
 
     info!(
-        "{} - -  \"{} {} HTTP/1.1\" {}  \"-\" \"-\" {} {}ms",
-        remote_addr, method, path, status, json_value, elapsed_time
+        "{} - -  \"{} {} HTTP/1.1\" {}  \"-\" \"-\"  {}ms",
+        remote_addr, method, path, status, elapsed_time
     );
     Ok(res)
 }
@@ -252,7 +250,7 @@ async fn proxy(
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
     debug!("req: {:?}", req);
 
-    let inbound_headers = req.headers().clone();
+    let inbound_headers = req.headers();
     let uri = req.uri().clone();
     let mut spire_context = SpireContext::new(port, None);
     let check_result = chain_trait
@@ -260,7 +258,7 @@ async fn proxy(
             shared_config.clone(),
             port,
             mapping_key.clone(),
-            inbound_headers.clone(),
+            inbound_headers,
             uri,
             remote_addr,
             &mut spire_context,

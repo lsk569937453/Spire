@@ -95,9 +95,7 @@ async fn check(
         .routes
         .first()
         .ok_or("service_config_clone is empty")?;
-    let is_allowed = route
-        .clone()
-        .is_allowed(remote_addr.ip().to_string(), None)?;
+    let is_allowed = route.clone().is_allowed(&remote_addr, None)?;
     Ok(is_allowed)
 }
 async fn get_route_cluster(
