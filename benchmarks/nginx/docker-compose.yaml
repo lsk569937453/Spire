@@ -20,7 +20,7 @@ services:
           memory: 8192M
   nginx:
     image: nginx:1.23.3
-    container_name: webserver
+    container_name: nginx
     restart: unless-stopped
     ports:
       - 80:80

@@ -22,7 +22,7 @@ impl Default for LoadbalancerStrategy {
     }
 }
 impl LoadbalancerStrategy {
-    pub fn get_route(&mut self, headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
+    pub fn get_route(&mut self, headers: &HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         match self {
             LoadbalancerStrategy::Poll(poll_route) => poll_route.get_route(headers),
 
@@ -136,7 +136,7 @@ impl HeaderBasedRoute {
             .collect::<Vec<BaseRoute>>())
     }
 
-    fn get_route(&mut self, headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
+    fn get_route(&mut self, headers: &HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         let has_unconfigured = self.routes.iter().any(|r| r.base_route.is_alive.is_none());
         debug!("has_unconfigured:{}", has_unconfigured);
         let routes = if has_unconfigured {
@@ -234,7 +234,7 @@ impl RandomRoute {
             .collect::<Vec<BaseRoute>>())
     }
 
-    fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
+    fn get_route(&mut self, _headers: &HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         let has_unconfigured = self.routes.iter().any(|r| r.base_route.is_alive.is_none());
 
         if has_unconfigured {
@@ -296,7 +296,7 @@ impl PollRoute {
             .collect::<Vec<BaseRoute>>())
     }
 
-    fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
+    fn get_route(&mut self, _headers: &HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         let has_unconfigured = self.routes.iter().any(|r| r.base_route.is_alive.is_none());
         if has_unconfigured {
             self.current_index += 1;
@@ -361,7 +361,7 @@ impl WeightBasedRoute {
             .collect::<Vec<BaseRoute>>())
     }
 
-    fn get_route(&mut self, _headers: HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
+    fn get_route(&mut self, _headers: &HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         if self.routes.is_empty() {
             return Err(AppError(String::from("No routes available")));
         }
@@ -452,15 +452,15 @@ mod tests {
         };
 
         assert_eq!(
-            poll_route.get_route(HeaderMap::new()).unwrap().endpoint,
+            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
             "server2"
         );
         assert_eq!(
-            poll_route.get_route(HeaderMap::new()).unwrap().endpoint,
+            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
             "server1"
         );
         assert_eq!(
-            poll_route.get_route(HeaderMap::new()).unwrap().endpoint,
+            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
             "server2"
         );
     }
@@ -496,13 +496,13 @@ mod tests {
 
         let mut headers = HeaderMap::new();
         headers.insert("x-version", HeaderValue::from_static("v1"));
-        assert_eq!(strategy.get_route(headers).unwrap().endpoint, "server_v1");
+        assert_eq!(strategy.get_route(&headers).unwrap().endpoint, "server_v1");
 
         // 测试正则匹配
         let mut headers = HeaderMap::new();
         headers.insert("x-debug", HeaderValue::from_static("true"));
         assert_eq!(
-            strategy.get_route(headers).unwrap().endpoint,
+            strategy.get_route(&headers).unwrap().endpoint,
             "debug_server"
         );
     }
@@ -528,7 +528,7 @@ mod tests {
 
         let mut results = vec![];
         for _ in 0..100 {
-            let route = strategy.get_route(HeaderMap::new()).unwrap();
+            let route = strategy.get_route(&HeaderMap::new()).unwrap();
             results.push(route.endpoint);
         }
         assert!(results.contains(&"server_a".to_string()));
@@ -560,7 +560,7 @@ mod tests {
 
         let mut results = vec![];
         for _ in 0..4 {
-            let route = strategy.get_route(HeaderMap::new()).unwrap();
+            let route = strategy.get_route(&HeaderMap::new()).unwrap();
             results.push(route.endpoint);
         }
         assert_eq!(results[0..3], vec!["server_heavy"; 3]);
@@ -596,6 +596,6 @@ mod tests {
     #[tokio::test]
     async fn test_empty_routes() {
         let mut strategy = LoadbalancerStrategy::WeightBased(WeightBasedRoute { routes: vec![] });
-        assert!(strategy.get_route(HeaderMap::new()).is_err());
+        assert!(strategy.get_route(&HeaderMap::new()).is_err());
     }
 }

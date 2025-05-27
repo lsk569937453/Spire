@@ -121,7 +121,7 @@ async fn get_route_cluster(
         .ok_or("service_config_clone is empty")?
         .route_cluster
         .clone();
-    route.get_route(HeaderMap::new()).map(|s| s.endpoint)
+    route.get_route(&HeaderMap::new()).map(|s| s.endpoint)
 }
 #[cfg(test)]
 mod tests {

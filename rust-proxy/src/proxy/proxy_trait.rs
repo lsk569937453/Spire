@@ -125,26 +125,21 @@ impl ChainTrait for CommonCheckRequest {
             .ok_or(AppError(String::from("")))?;
 
         for item in api_service.service_config.routes.iter_mut() {
-            let match_result = item.is_matched(backend_path, Some(headers.clone()))?;
+            let match_result = item.is_matched(backend_path, Some(headers))?;
             if match_result.clone().is_none() {
                 continue;
             }
-            let headers1 = headers.clone();
-            let is_allowed = item.is_allowed(&peer_addr, Some(headers1))?;
+            let is_allowed = item.is_allowed(&peer_addr, Some(headers))?;
             if !is_allowed {
                 return Ok(None);
             }
-            let base_route = item.route_cluster.get_route(headers.clone())?;
+            let base_route = item.route_cluster.get_route(headers)?;
             let endpoint = base_route.endpoint.clone();
             debug!("The endpoint is {}", endpoint);
             let rest_path = match_result.ok_or("match_result is none")?;
 
             if endpoint.contains("http") {
-                // let host = Url::parse(endpoint.as_str())?;
-
-                // let request_path = host.join(rest_path.as_str())?.to_string();
-
-                let request_path = format!("{}/{}", endpoint, rest_path);
+                let request_path = [endpoint.as_str(), rest_path.as_str()].join("/");
                 spire_context.route = Some(item.clone());
                 return Ok(Some(CheckResult {
                     request_path,

@@ -204,24 +204,24 @@ impl Route {
         Ok(None)
     }
     pub fn is_matched(
-        &self,
+        &mut self,
         path: &str,
-        headers_option: Option<HeaderMap<HeaderValue>>,
+        headers_option: Option<&HeaderMap<HeaderValue>>,
     ) -> Result<Option<String>, AppError> {
         let matcher = self
-            .clone()
             .matcher
+            .as_mut()
             .ok_or("The matcher counld not be none for http")?;
 
         let match_res = path.strip_prefix(matcher.prefix.as_str());
         if match_res.is_none() {
             return Ok(None);
         }
-        let final_path = format!(
-            "{}{}",
-            matcher.prefix_rewrite,
-            match_res.ok_or("match_res is none")?
-        );
+        let final_path = [
+            matcher.prefix_rewrite.as_str(),
+            match_res.ok_or("match_res is none")?,
+        ]
+        .join("");
         // info!("final_path:{}", final_path);
         if let Some(real_host_name) = &self.host_name {
             if headers_option.is_none() {
@@ -246,13 +246,13 @@ impl Route {
     pub fn is_allowed(
         &mut self,
         peer_addr: &SocketAddr,
-        headers_option: Option<HeaderMap<HeaderValue>>,
+        headers_option: Option<&HeaderMap<HeaderValue>>,
     ) -> Result<bool, AppError> {
         if let Some(middlewares) = &mut self.middlewares {
             for middleware in middlewares.iter_mut() {
                 match middleware {
                     MiddleWares::RateLimit(ratelimit) => {
-                        if let Some(header_map) = headers_option.clone() {
+                        if let Some(header_map) = headers_option {
                             let is_allowed = !ratelimit.should_limit(header_map, peer_addr)?;
                             if !is_allowed {
                                 return Ok(is_allowed);
@@ -260,7 +260,7 @@ impl Route {
                         }
                     }
                     MiddleWares::Authentication(authentication) => {
-                        if let Some(header_map) = headers_option.clone() {
+                        if let Some(header_map) = headers_option {
                             let is_allowed = authentication.check_authentication(header_map)?;
                             if !is_allowed {
                                 return Ok(is_allowed);
@@ -763,7 +763,7 @@ mod tests {
 
     #[test]
     fn test_route_matching() {
-        let route = Route {
+        let mut route = Route {
             matcher: Some(Matcher {
                 prefix: "/api".to_string(),
                 prefix_rewrite: "/v1".to_string(),
@@ -780,7 +780,7 @@ mod tests {
 
     #[test]
     fn test_route_host_matching() {
-        let route = Route {
+        let mut route = Route {
             host_name: Some("example.com".to_string()),
             matcher: Some(Matcher {
                 prefix: "/api".to_string(),
@@ -792,13 +792,11 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("Host", HeaderValue::from_static("example.com"));
 
-        let result = route
-            .is_matched("/api/test", Some(headers.clone()))
-            .unwrap();
+        let result = route.is_matched("/api/test", Some(&headers)).unwrap();
         assert_eq!(result, Some("/v1/test".to_string()));
 
         headers.insert("Host", HeaderValue::from_static("wrong.com"));
-        let result = route.is_matched("/api/test", Some(headers)).unwrap();
+        let result = route.is_matched("/api/test", Some(&headers)).unwrap();
         assert_eq!(result, None);
     }
 
