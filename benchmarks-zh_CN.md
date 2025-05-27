@@ -108,7 +108,7 @@ Status code distribution:
 
 ```
 hey -n 100000 -c 250 -m GET http://spire:6667
-
+hey -n 100000 -c 250 -m GET http://hyper:8084/get
 Summary:
   Total:	1.5067 secs
   Slowest:	0.0199 secs

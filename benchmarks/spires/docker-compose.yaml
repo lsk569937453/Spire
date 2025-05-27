@@ -39,3 +39,13 @@ services:
         limits:
           cpus: "4.0"
           memory: 8192M
+  hyper-test:
+    # image: ghcr.io/lsk569937453/spire:0.0.20
+    image: lsk569937453/hyper-test:0.0.1
+    container_name: hyper
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8192M
