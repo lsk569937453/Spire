@@ -10,21 +10,14 @@ use crate::vojo::app_error::AppError;
 use crate::vojo::health_check::HealthCheckType;
 use crate::vojo::rate_limit::Ratelimit;
 use crate::vojo::route::LoadbalancerStrategy;
-use bytes::Bytes;
 use http::HeaderMap;
 use http::HeaderValue;
-use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
-use http_body_util::Full;
-use hyper::header;
-use hyper::Response;
-use hyper::StatusCode;
 use regex::Regex;
 use serde::Deserializer;
 use serde::Serializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tracing_subscriber::filter::LevelFilter;
@@ -146,62 +139,6 @@ fn default_route_id() -> String {
 }
 
 impl Route {
-    pub fn handle_preflight(
-        &self,
-        cors_config: CorsConfig,
-        origin: &str,
-    ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
-        if cors_config.validate_origin("")? {
-            return Ok(Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .body(Full::new(Bytes::from("".to_string())).boxed())?);
-        }
-        let methods_header = cors_config
-            .allowed_methods
-            .iter()
-            .map(|m| m.as_str()) // Convert serde_json::Error to AppError
-            .collect::<Vec<&str>>()
-            .join(", ");
-        let headers_header = cors_config
-            .allowed_headers
-            .iter()
-            .map(|m| m.to_string()) // Convert serde_json::Error to AppError
-            .collect::<Vec<String>>()
-            .join(", ");
-
-        let mut builder = Response::builder()
-            .status(StatusCode::NO_CONTENT)
-            .header(header::ACCESS_CONTROL_ALLOW_METHODS, methods_header)
-            .header(header::ACCESS_CONTROL_ALLOW_HEADERS, headers_header)
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin)
-            .header(header::VARY, "Origin");
-
-        if let Some(s) = cors_config.allow_credentials {
-            if s {
-                builder = builder.header(
-                    header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                    HeaderValue::from_static("true"),
-                );
-            }
-        }
-        if let Some(s) = cors_config.max_age {
-            builder = builder.header(header::ACCESS_CONTROL_MAX_AGE, s.to_string());
-        }
-
-        builder
-            .body(Full::new(Bytes::from("".to_string())).boxed())
-            .map_err(AppError::from)
-    }
-    pub fn cors_configed(&self) -> Result<Option<CorsConfig>, AppError> {
-        if let Some(middlewares) = &self.middlewares {
-            for middleware in middlewares.iter() {
-                if let MiddleWares::Cors(s) = middleware {
-                    return Ok(Some(s.clone()));
-                }
-            }
-        }
-        Ok(None)
-    }
     pub fn is_matched(
         &mut self,
         path: &str,
