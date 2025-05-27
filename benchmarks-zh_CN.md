@@ -104,7 +104,7 @@ Status code distribution:
 波谷内存:81MB
 ```
 
-### SilverWind
+### Spire
 
 ```
 hey -n 100000 -c 250 -m GET http://spire:6667

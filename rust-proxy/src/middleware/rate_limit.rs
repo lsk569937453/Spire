@@ -21,7 +21,7 @@ pub enum Ratelimit {
 impl Ratelimit {
     pub fn should_limit(
         &mut self,
-        headers: HeaderMap<HeaderValue>,
+        headers: &HeaderMap<HeaderValue>,
         peer_addr: &SocketAddr,
     ) -> Result<bool, AppError> {
         match self {
@@ -124,7 +124,7 @@ fn get_time_key(time_unit: TimeUnit) -> Result<String, AppError> {
 
 fn matched(
     limit_location: LimitLocation,
-    headers: HeaderMap<HeaderValue>,
+    headers: &HeaderMap<HeaderValue>,
     peer_addr: &SocketAddr,
 ) -> Result<bool, AppError> {
     let remote_ip = peer_addr.ip().to_string();
@@ -158,7 +158,7 @@ fn matched(
 impl TokenBucketRateLimit {
     fn should_limit(
         &mut self,
-        headers: HeaderMap<HeaderValue>,
+        headers: &HeaderMap<HeaderValue>,
         peer_addr: &SocketAddr,
     ) -> Result<bool, AppError> {
         if !matched(self.limit_location.clone(), headers, peer_addr)? {
@@ -197,7 +197,7 @@ pub struct FixedWindowRateLimit {
 impl FixedWindowRateLimit {
     fn should_limit(
         &mut self,
-        headers: HeaderMap<HeaderValue>,
+        headers: &HeaderMap<HeaderValue>,
         peer_addr: &SocketAddr,
     ) -> Result<bool, AppError> {
         if !matched(self.limit_location.clone(), headers, peer_addr)? {
