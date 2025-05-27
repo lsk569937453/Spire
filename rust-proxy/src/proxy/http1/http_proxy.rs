@@ -269,18 +269,15 @@ async fn proxy(
             .status(StatusCode::FORBIDDEN)
             .body(Full::new(Bytes::from(common_constants::DENY_RESPONSE)).boxed())?);
     }
-    let route = spire_context
-        .clone()
-        .route
-        .ok_or(AppError(String::from("Not found route!")))?;
+
     if req.method() == Method::OPTIONS
         && req.headers().contains_key(header::ORIGIN)
         && req
             .headers()
             .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD)
     {
-        if let Some(cors_config) = route.cors_configed()? {
-            return route.handle_preflight(cors_config, "");
+        if let Some(cors_config) = spire_context.cors_configed()? {
+            return chain_trait.handle_preflight(cors_config, "");
         }
     }
     if inbound_headers.clone().contains_key(CONNECTION)
@@ -329,7 +326,7 @@ async fn proxy(
         let mut res = response_result?
             .map(|b| b.boxed())
             .map(|item| item.map_err(|_| -> Infallible { unreachable!() }).boxed());
-        if let Some(cors_config) = route.cors_configed()? {
+        if let Some(cors_config) = spire_context.cors_configed()? {
             chain_trait
                 .handle_after_request(cors_config, &mut res)
                 .await?;

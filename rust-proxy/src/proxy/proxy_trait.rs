@@ -1,4 +1,4 @@
-use crate::vojo::app_config::Route;
+use crate::vojo::app_config::MiddleWares;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cors_config::CorsConfig;
 use crate::vojo::route::BaseRoute;
@@ -7,7 +7,10 @@ use bytes::Bytes;
 use http::header;
 use http::header::HeaderMap;
 use http::HeaderValue;
+use http::StatusCode;
 use http_body_util::combinators::BoxBody;
+use http_body_util::BodyExt;
+use http_body_util::Full;
 use hyper::Response;
 use hyper::Uri;
 use serde::Deserialize;
@@ -18,11 +21,21 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpireContext {
     pub port: i32,
-    pub route: Option<Route>,
+    pub middlewares: Option<Vec<MiddleWares>>,
 }
 impl SpireContext {
-    pub fn new(port: i32, route: Option<Route>) -> Self {
-        Self { port, route }
+    pub fn new(port: i32, middlewares: Option<Vec<MiddleWares>>) -> Self {
+        Self { port, middlewares }
+    }
+    pub fn cors_configed(&self) -> Result<Option<CorsConfig>, AppError> {
+        if let Some(middlewares) = &self.middlewares {
+            for middleware in middlewares.iter() {
+                if let MiddleWares::Cors(s) = middleware {
+                    return Ok(Some(s.clone()));
+                }
+            }
+        }
+        Ok(None)
     }
 }
 pub trait ChainTrait {
@@ -41,6 +54,11 @@ pub trait ChainTrait {
         cores_config: CorsConfig,
         response: &mut Response<BoxBody<Bytes, Infallible>>,
     ) -> Result<(), AppError>;
+    fn handle_preflight(
+        &self,
+        cors_config: CorsConfig,
+        origin: &str,
+    ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError>;
 }
 pub struct CommonCheckRequest;
 
@@ -126,7 +144,7 @@ impl ChainTrait for CommonCheckRequest {
 
         for item in api_service.service_config.routes.iter_mut() {
             let match_result = item.is_matched(backend_path, Some(headers))?;
-            if match_result.clone().is_none() {
+            if match_result.is_none() {
                 continue;
             }
             let is_allowed = item.is_allowed(&peer_addr, Some(headers))?;
@@ -134,13 +152,13 @@ impl ChainTrait for CommonCheckRequest {
                 return Ok(None);
             }
             let base_route = item.route_cluster.get_route(headers)?;
-            let endpoint = base_route.endpoint.clone();
+            let endpoint = base_route.endpoint.as_str();
             debug!("The endpoint is {}", endpoint);
             let rest_path = match_result.ok_or("match_result is none")?;
 
             if endpoint.contains("http") {
-                let request_path = [endpoint.as_str(), rest_path.as_str()].join("/");
-                spire_context.route = Some(item.clone());
+                let request_path = [endpoint, rest_path.as_str()].join("/");
+                spire_context.middlewares = item.middlewares.clone();
                 return Ok(Some(CheckResult {
                     request_path,
                     base_route,
@@ -148,7 +166,7 @@ impl ChainTrait for CommonCheckRequest {
             } else {
                 let path = Path::new(&endpoint);
                 let request_path = path.join(rest_path);
-                spire_context.route = Some(item.clone());
+                spire_context.middlewares = item.middlewares.clone();
                 return Ok(Some(CheckResult {
                     request_path: String::from(request_path.to_str().unwrap_or_default()),
                     base_route,
@@ -156,6 +174,52 @@ impl ChainTrait for CommonCheckRequest {
             }
         }
         Ok(None)
+    }
+    fn handle_preflight(
+        &self,
+        cors_config: CorsConfig,
+        origin: &str,
+    ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
+        if cors_config.validate_origin("")? {
+            return Ok(Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Full::new(Bytes::from("".to_string())).boxed())?);
+        }
+        let methods_header = cors_config
+            .allowed_methods
+            .iter()
+            .map(|m| m.as_str()) // Convert serde_json::Error to AppError
+            .collect::<Vec<&str>>()
+            .join(", ");
+        let headers_header = cors_config
+            .allowed_headers
+            .iter()
+            .map(|m| m.to_string()) // Convert serde_json::Error to AppError
+            .collect::<Vec<String>>()
+            .join(", ");
+
+        let mut builder = Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .header(header::ACCESS_CONTROL_ALLOW_METHODS, methods_header)
+            .header(header::ACCESS_CONTROL_ALLOW_HEADERS, headers_header)
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin)
+            .header(header::VARY, "Origin");
+
+        if let Some(s) = cors_config.allow_credentials {
+            if s {
+                builder = builder.header(
+                    header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                    HeaderValue::from_static("true"),
+                );
+            }
+        }
+        if let Some(s) = cors_config.max_age {
+            builder = builder.header(header::ACCESS_CONTROL_MAX_AGE, s.to_string());
+        }
+
+        builder
+            .body(Full::new(Bytes::from("".to_string())).boxed())
+            .map_err(AppError::from)
     }
 }
 #[cfg(test)]
