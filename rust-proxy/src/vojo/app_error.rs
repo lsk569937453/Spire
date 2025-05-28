@@ -14,6 +14,14 @@ impl From<&str> for AppError {
         AppError(s.to_string())
     }
 }
+impl From<tracing_appender::rolling::InitError> for AppError {
+    fn from(error: tracing_appender::rolling::InitError) -> Self {
+        AppError(format!(
+            "Rolling file appender initialization error: {}",
+            error
+        ))
+    }
+}
 impl From<InvalidHeaderValue> for AppError {
     fn from(error: InvalidHeaderValue) -> Self {
         AppError(format!("Invalid header value: {}", error))

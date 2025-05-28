@@ -1,21 +1,80 @@
 use super::app_error::AppError;
-
 use core::fmt::Debug;
 use http::HeaderMap;
 use http::HeaderValue;
 use rand::prelude::*;
 use regex::Regex;
+use serde::de;
+use serde::de::Visitor;
+use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::fmt;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum LoadbalancerStrategy {
+    #[serde(rename = "Poll")]
     Poll(PollRoute),
+    #[serde(rename = "HeaderBased")]
     HeaderBased(HeaderBasedRoute),
-    #[serde(rename = "randomRoute")]
+    #[serde(rename = "Random")]
     Random(RandomRoute),
+    #[serde(rename = "WeightBased")]
     WeightBased(WeightBasedRoute),
 }
+pub fn deserialize_loadbalancer<'de, D>(deserializer: D) -> Result<LoadbalancerStrategy, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    // 实现混合模式解析器
+    struct StrategyVisitor;
+
+    impl<'de> Visitor<'de> for StrategyVisitor {
+        type Value = LoadbalancerStrategy;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("string, array or object")
+        }
+
+        // 处理字符串输入
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(LoadbalancerStrategy::Random(RandomRoute {
+                routes: vec![RandomBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: v.to_string(),
+                        try_file: None,
+                        is_alive: None,
+                        anomaly_detection_status: AnomalyDetectionStatus::default(),
+                    },
+                }],
+            }))
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let mut backends = Vec::new();
+            while let Some(s) = seq.next_element::<String>()? {
+                backends.push(s);
+            }
+            Ok(LoadbalancerStrategy::Random(RandomRoute::new(backends)))
+        }
+
+        fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::MapAccess<'de>,
+        {
+            Deserialize::deserialize(de::value::MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_any(StrategyVisitor)
+}
+
 impl Default for LoadbalancerStrategy {
     fn default() -> Self {
         LoadbalancerStrategy::Poll(PollRoute::default())
@@ -226,6 +285,21 @@ pub struct RandomRoute {
 }
 
 impl RandomRoute {
+    pub fn new(backends: Vec<String>) -> Self {
+        Self {
+            routes: backends
+                .iter()
+                .map(|item| RandomBaseRoute {
+                    base_route: BaseRoute {
+                        endpoint: item.clone(),
+                        try_file: None,
+                        is_alive: None,
+                        anomaly_detection_status: AnomalyDetectionStatus::default(),
+                    },
+                })
+                .collect::<Vec<RandomBaseRoute>>(),
+        }
+    }
     async fn get_all_route(&mut self) -> Result<Vec<BaseRoute>, AppError> {
         Ok(self
             .routes

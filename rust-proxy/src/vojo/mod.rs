@@ -9,6 +9,5 @@ pub mod cli;
 pub mod cors_config;
 pub mod health_check;
 pub mod lets_encrypt;
-pub mod lets_encrypt2;
 pub mod rate_limit;
 pub mod route;
