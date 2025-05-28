@@ -9,7 +9,7 @@ services:
             prefix: /
             prefix_rewrite: /
           route_cluster:
-            type: randomRoute
+            type: Random
             routes:
               - base_route:
                   endpoint: http://localhost:6666/
@@ -29,7 +29,7 @@ services:
             prefix: /
             prefix_rewrite: /
           route_cluster:
-            type: randomRoute
+            type: Random
             routes:
               - base_route:
                   endpoint: http://127.0.0.1:9394

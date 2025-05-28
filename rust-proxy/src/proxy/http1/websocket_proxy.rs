@@ -45,7 +45,7 @@ async fn server_upgraded_io(
     Ok(())
 }
 pub async fn server_upgrade(
-    req: Request<BoxBody<Bytes, AppError>>,
+    req: Request<BoxBody<Bytes, Infallible>>,
     check_result: Option<HandlingResult>,
     http_client: HttpClients,
 ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
