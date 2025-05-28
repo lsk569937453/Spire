@@ -7,9 +7,4 @@ services:
           matcher:
             prefix: /
             prefix_rewrite: /
-          route_cluster:
-            type: WeightBased
-            routes:
-              - base_route:
-                  endpoint: http://127.0.0.1:8090
-                weight: 1
+          route_cluster: http://127.0.0.1:8090

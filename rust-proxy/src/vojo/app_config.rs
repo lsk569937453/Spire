@@ -9,10 +9,10 @@ use crate::vojo::anomaly_detection::AnomalyDetectionType;
 use crate::vojo::app_error::AppError;
 use crate::vojo::health_check::HealthCheckType;
 use crate::vojo::rate_limit::Ratelimit;
+use crate::vojo::route::deserialize_loadbalancer;
 use crate::vojo::route::LoadbalancerStrategy;
 use http::HeaderMap;
 use http::HeaderValue;
-use http_body_util::BodyExt;
 use regex::Regex;
 use serde::Deserializer;
 use serde::Serializer;
@@ -117,6 +117,7 @@ pub struct Route {
     pub liveness_config: Option<LivenessConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_check: Option<HealthCheckType>,
+    #[serde(deserialize_with = "deserialize_loadbalancer")]
     pub route_cluster: LoadbalancerStrategy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub middlewares: Option<Vec<MiddleWares>>,

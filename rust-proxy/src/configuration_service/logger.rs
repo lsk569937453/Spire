@@ -3,6 +3,7 @@ use chrono::Local;
 
 use tracing::level_filters::LevelFilter;
 use tracing_appender::rolling;
+use tracing_appender::rolling::RollingFileAppender;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
@@ -27,7 +28,12 @@ pub fn setup_logger() -> Result<Handle<Targets, Registry>, AppError> {
     let (file_layer, reload_handle) = setup_logger_with_path(Path::new("./logs"))?;
 
 pub fn setup_logger() -> Result<Handle<Targets, Registry>, AppError> {
-    let app_file = rolling::daily("./logs", "spire.log");
+    let rolling_file_builder = RollingFileAppender::builder()
+        .rotation(rolling::Rotation::MINUTELY)
+        .filename_prefix("spire")
+        .filename_suffix("log")
+        .max_log_files(10)
+        .build("./logs")?;
     let filter = filter::Targets::new()
         .with_targets(vec![
             ("delay_timer", LevelFilter::OFF),
@@ -41,7 +47,7 @@ pub fn setup_logger() -> Result<Handle<Targets, Registry>, AppError> {
         .with_ansi(false)
         .with_line_number(true)
         .with_timer(LocalTime)
-        .with_writer(app_file)
+        .with_writer(rolling_file_builder)
         .with_filter(filter);
     // let console_layer = tracing_subscriber::fmt::Layer::new()
     //     .with_target(true)
