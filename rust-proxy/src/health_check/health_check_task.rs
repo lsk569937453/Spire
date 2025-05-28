@@ -55,7 +55,7 @@ impl TaskKey {
 }
 async fn get_endpoint_list(mut route: Route) -> Vec<String> {
     let mut result = vec![];
-    let base_route_list = route.route_cluster.get_all_route().await.unwrap_or(vec![]);
+    let base_route_list = route.router.get_all_route().await.unwrap_or(vec![]);
     for item in base_route_list {
         result.push(item.endpoint);
     }
@@ -164,7 +164,7 @@ async fn do_http_health_check(
     shared_config: SharedConfig,
 ) -> Result<(), AppError> {
     info!("Do http health check,the route is {:?}!", route);
-    let route_list = route.route_cluster.get_all_route().await?;
+    let route_list = route.router.get_all_route().await?;
     let http_client = http_health_check_client.http_clients.clone();
     let mut set = JoinSet::new();
     for item in route_list {
@@ -215,7 +215,7 @@ async fn do_http_health_check(
                         Ok(o) => {
                             if o.status() == StatusCode::OK {
                                 let _ = new_route
-                                    .route_cluster
+                                    .router
                                     .update_route_alive(base_route.clone(), true);
                             }
                         }
@@ -224,16 +224,12 @@ async fn do_http_health_check(
                                 "Request error,url:{}, the error is {}",
                                 base_route.endpoint, e
                             );
-                            let _ = new_route
-                                .route_cluster
-                                .update_route_alive(base_route, false);
+                            let _ = new_route.router.update_route_alive(base_route, false);
                         }
                     }
                 } else {
                     error!("Request time out, the url is {}", base_route.endpoint);
-                    let _ = new_route
-                        .route_cluster
-                        .update_route_alive(base_route, false);
+                    let _ = new_route.router.update_route_alive(base_route, false);
                 }
             }
             Err(e) => {

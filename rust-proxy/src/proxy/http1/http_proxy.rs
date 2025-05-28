@@ -5,7 +5,6 @@ use crate::proxy::http1::http_client::HttpClients;
 
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
-use crate::vojo::route::BaseRoute;
 use bytes::Bytes;
 use http::{HeaderValue, Uri};
 use hyper::body::Incoming;
@@ -15,8 +14,8 @@ use hyper::Method;
 use hyper::StatusCode;
 
 use crate::proxy::http1::websocket_proxy::server_upgrade;
-use crate::proxy::proxy_trait::CommonCheckRequest;
 use crate::proxy::proxy_trait::{ChainTrait, SpireContext};
+use crate::proxy::proxy_trait::{CommonCheckRequest, RouterDestination};
 use http::uri::PathAndQuery;
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::server::conn::http1;
@@ -292,12 +291,12 @@ async fn proxy(
 
     if let Some(check_request) = check_result {
         let request_path = check_request.request_path;
-        let base_route = check_request.base_route;
-        if !request_path.clone().contains("http") {
+        let router_destination = check_request.router_destination;
+        if router_destination.is_file() {
             let mut parts = req.uri().clone().into_parts();
             parts.path_and_query = Some(request_path.try_into()?);
             *req.uri_mut() = Uri::from_parts(parts)?;
-            return route_file(base_route, req).await;
+            return route_file(router_destination, req).await;
         }
         *req.uri_mut() = request_path.parse()?;
         let host = req
@@ -340,18 +339,15 @@ async fn proxy(
 }
 
 async fn route_file(
-    base_route: BaseRoute,
+    router_destination: RouterDestination,
     req: Request<BoxBody<Bytes, Infallible>>,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
-    let static_ = Static::new(Path::new(base_route.endpoint.as_str()));
+    let static_ = Static::new(Path::new(router_destination.get_endpoint().as_str()));
     let current_res = static_.clone().serve(req).await;
     if let Ok(res) = current_res {
         if res.status() == StatusCode::NOT_FOUND {
-            let mut request: Request<()> = Request::default();
-            if base_route.try_file.is_none() {
-                return Err(AppError(String::from("Please config the try_file!")));
-            }
-            *request.uri_mut() = base_route.try_file.ok_or("try_file is none")?.parse()?;
+            let request: Request<()> = Request::default();
+
             return static_
                 .clone()
                 .serve(request)
@@ -373,11 +369,8 @@ async fn route_file(
         }
     }
 
-    let mut request: Request<()> = Request::default();
-    if base_route.try_file.is_none() {
-        return Err(AppError(String::from("Please config the try_file!")));
-    }
-    *request.uri_mut() = base_route.try_file.ok_or("try_file is none")?.parse()?;
+    let request: Request<()> = Request::default();
+
     static_
         .clone()
         .serve(request)

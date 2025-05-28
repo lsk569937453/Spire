@@ -1,3 +1,5 @@
+use crate::proxy::proxy_trait::RouterDestination;
+
 use super::app_error::AppError;
 use core::fmt::Debug;
 use http::HeaderMap;
@@ -10,6 +12,60 @@ use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum Router {
+    StaticFile(StaticFileRoute),
+    #[serde(deserialize_with = "deserialize_loadbalancer")]
+    Loadbalancer(LoadbalancerStrategy),
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+
+pub struct StaticFileRoute {
+    pub doc_root: String,
+}
+impl Default for Router {
+    fn default() -> Self {
+        Self::Loadbalancer(LoadbalancerStrategy::Poll(PollRoute::default()))
+    }
+}
+impl Router {
+    pub fn get_route(
+        &mut self,
+        headers: &HeaderMap<HeaderValue>,
+    ) -> Result<RouterDestination, AppError> {
+        match self {
+            Router::StaticFile(s) => Ok(RouterDestination::File(s.clone())),
+            Router::Loadbalancer(loadbalancer_strategy) => loadbalancer_strategy
+                .get_route(headers)
+                .map(RouterDestination::Http),
+        }
+    }
+    pub async fn get_all_route(&mut self) -> Result<Vec<BaseRoute>, AppError> {
+        match self {
+            Router::StaticFile(_) => {
+                Err(AppError("StaticFile router can not get route".to_string()))
+            }
+            Router::Loadbalancer(loadbalancer_strategy) => {
+                loadbalancer_strategy.get_all_route().await
+            }
+        }
+    }
+    pub fn update_route_alive(
+        &mut self,
+        base_route: BaseRoute,
+        is_alive: bool,
+    ) -> Result<(), AppError> {
+        match self {
+            Router::StaticFile(_) => {
+                Err(AppError("StaticFile router can not get route".to_string()))
+            }
+            Router::Loadbalancer(loadbalancer_strategy) => {
+                loadbalancer_strategy.update_route_alive(base_route, is_alive)
+            }
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum LoadbalancerStrategy {
@@ -45,7 +101,6 @@ where
                 routes: vec![RandomBaseRoute {
                     base_route: BaseRoute {
                         endpoint: v.to_string(),
-                        try_file: None,
                         is_alive: None,
                         anomaly_detection_status: AnomalyDetectionStatus::default(),
                     },
@@ -132,8 +187,6 @@ pub struct AnomalyDetectionStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct BaseRoute {
     pub endpoint: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub try_file: Option<String>,
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub is_alive: Option<bool>,
     #[serde(skip_serializing, skip_deserializing)]
@@ -292,7 +345,6 @@ impl RandomRoute {
                 .map(|item| RandomBaseRoute {
                     base_route: BaseRoute {
                         endpoint: item.clone(),
-                        try_file: None,
                         is_alive: None,
                         anomaly_detection_status: AnomalyDetectionStatus::default(),
                     },

@@ -119,9 +119,9 @@ async fn get_route_cluster(
     let mut route = service_config_clone
         .first()
         .ok_or("service_config_clone is empty")?
-        .route_cluster
+        .router
         .clone();
-    route.get_route(&HeaderMap::new()).map(|s| s.endpoint)
+    route.get_route(&HeaderMap::new()).map(|s| s.get_endpoint())
 }
 #[cfg(test)]
 mod tests {
@@ -155,7 +155,9 @@ mod tests {
         };
         let route = Route {
             route_id: "test_route".to_string(),
-            route_cluster: LoadbalancerStrategy::WeightBased(header_based),
+            router: crate::vojo::route::Router::Loadbalancer(LoadbalancerStrategy::WeightBased(
+                header_based,
+            )),
             ..Default::default()
         };
         let api_service = ApiService {

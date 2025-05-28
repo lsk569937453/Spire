@@ -10,8 +10,7 @@ use crate::vojo::app_error::AppError;
 use crate::vojo::authentication::Authentication;
 use crate::vojo::health_check::HealthCheckType;
 use crate::vojo::rate_limit::Ratelimit;
-use crate::vojo::route::deserialize_loadbalancer;
-use crate::vojo::route::LoadbalancerStrategy;
+use crate::vojo::route::Router;
 use http::HeaderMap;
 use http::HeaderValue;
 use regex::Regex;
@@ -118,8 +117,7 @@ pub struct Route {
     pub liveness_config: Option<LivenessConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_check: Option<HealthCheckType>,
-    #[serde(deserialize_with = "deserialize_loadbalancer")]
-    pub route_cluster: LoadbalancerStrategy,
+    pub router: Router,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub middlewares: Option<Vec<MiddleWares>>,
 }
@@ -391,6 +389,7 @@ mod tests {
     use crate::vojo::authentication::Authentication;
     use crate::vojo::cors_config::Method;
     use crate::vojo::rate_limit::LimitLocation;
+    use crate::vojo::route::LoadbalancerStrategy;
     use crate::vojo::route::PollBaseRoute;
     use crate::vojo::route::PollRoute;
     use crate::vojo::route::RandomBaseRoute;
@@ -435,7 +434,7 @@ mod tests {
         };
         let route = Route {
             route_id: "test_route".to_string(),
-            route_cluster: LoadbalancerStrategy::WeightBased(header_based),
+            router: Router::Loadbalancer(LoadbalancerStrategy::WeightBased(header_based)),
             ..Default::default()
         };
         let service_config = ServiceConfig {
@@ -477,7 +476,8 @@ mod tests {
         };
         let route = Route {
             route_id: "test_route".to_string(),
-            route_cluster: LoadbalancerStrategy::Poll(poll_route),
+            router: Router::Loadbalancer(LoadbalancerStrategy::Poll(poll_route)),
+
             ..Default::default()
         };
         let service_config = ServiceConfig {
@@ -518,7 +518,8 @@ mod tests {
         };
         let route = Route {
             route_id: "test_route".to_string(),
-            route_cluster: LoadbalancerStrategy::Random(poll_route),
+            router: Router::Loadbalancer(LoadbalancerStrategy::Random(poll_route)),
+
             ..Default::default()
         };
         let service_config = ServiceConfig {
@@ -577,7 +578,7 @@ mod tests {
         };
         let route = Route {
             route_id: "test_route".to_string(),
-            route_cluster: LoadbalancerStrategy::HeaderBased(poll_route),
+            router: Router::Loadbalancer(LoadbalancerStrategy::HeaderBased(poll_route)),
             ..Default::default()
         };
         let service_config = ServiceConfig {
@@ -617,7 +618,8 @@ mod tests {
                 prefix: "/".to_string(),
                 prefix_rewrite: "/".to_string(),
             }),
-            route_cluster: LoadbalancerStrategy::WeightBased(header_based),
+            router: Router::Loadbalancer(LoadbalancerStrategy::WeightBased(header_based)),
+
             health_check: Some(HealthCheckType::HttpGet(HttpHealthCheckParam {
                 path: "/health".to_string(),
                 base_health_check_param: BaseHealthCheckParam {
@@ -765,7 +767,7 @@ mod tests {
     #[test]
     fn test_service_config_serialization() {
         let route = Route {
-            route_cluster: WeightBased(WeightBasedRoute {
+            router: Router::Loadbalancer(WeightBased(WeightBasedRoute {
                 routes: vec![WeightRoute {
                     weight: 1,
                     index: 0,
@@ -774,7 +776,7 @@ mod tests {
                         ..Default::default()
                     },
                 }],
-            }),
+            })),
             ..Default::default()
         };
 

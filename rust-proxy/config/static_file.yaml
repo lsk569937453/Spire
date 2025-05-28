@@ -1,0 +1,23 @@
+# Nginx
+
+# server {
+#     listen 80;
+#     server_name your_domain.com; # 替换为你的域名或IP
+
+#     root /var/www/html; # 替换为你的网站根目录
+#     index index.html index.htm;
+
+#     location / {
+#         try_files $uri $uri/ =404;
+#     }
+# }
+services:
+  - listen_port: 8084
+    service_config:
+      server_type: Http
+      routes:
+        - route_id: test_route
+          matcher:
+            prefix: /
+            prefix_rewrite: /
+          route_cluster: http://127.0.0.1:8090

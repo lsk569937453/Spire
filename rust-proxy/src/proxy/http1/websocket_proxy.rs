@@ -14,7 +14,7 @@ use sha1::{Digest, Sha1};
 use std::convert::Infallible;
 use tokio::io::AsyncWriteExt;
 
-use crate::proxy::proxy_trait::CheckResult;
+use crate::proxy::proxy_trait::HandlingResult;
 async fn server_upgraded_io(
     inbound_req: Request<BoxBody<Bytes, Infallible>>,
     outbound_res: Response<Incoming>,
@@ -47,7 +47,7 @@ async fn server_upgraded_io(
 }
 pub async fn server_upgrade(
     req: Request<BoxBody<Bytes, Infallible>>,
-    check_result: Option<CheckResult>,
+    check_result: Option<HandlingResult>,
     http_client: HttpClients,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
     debug!("The source request:{:?}.", req);

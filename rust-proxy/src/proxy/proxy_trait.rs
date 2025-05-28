@@ -2,6 +2,7 @@ use crate::vojo::app_config::MiddleWares;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cors_config::CorsConfig;
 use crate::vojo::route::BaseRoute;
+use crate::vojo::route::StaticFileRoute;
 use crate::SharedConfig;
 use bytes::Bytes;
 use http::header;
@@ -48,7 +49,7 @@ pub trait ChainTrait {
         uri: Uri,
         peer_addr: SocketAddr,
         spire_context: &mut SpireContext,
-    ) -> Result<Option<CheckResult>, AppError>;
+    ) -> Result<Option<HandlingResult>, AppError>;
     async fn handle_after_request(
         &self,
         cores_config: CorsConfig,
@@ -63,11 +64,36 @@ pub trait ChainTrait {
 pub struct CommonCheckRequest;
 
 #[derive(Debug, Clone)]
-pub struct CheckResult {
+pub struct HandlingResult {
     pub request_path: String,
-    pub base_route: BaseRoute,
+    pub router_destination: RouterDestination,
 }
+#[derive(Debug, Clone)]
 
+pub enum RouterDestination {
+    Http(BaseRoute),
+    File(StaticFileRoute),
+}
+impl RouterDestination {
+    pub fn get_endpoint(&self) -> String {
+        match self {
+            RouterDestination::Http(base_route) => base_route.endpoint.clone(),
+            RouterDestination::File(static_file_route) => static_file_route.doc_root.clone(),
+        }
+    }
+    pub fn is_http(&self) -> bool {
+        match self {
+            RouterDestination::Http(_) => true,
+            RouterDestination::File(_) => false,
+        }
+    }
+    pub fn is_file(&self) -> bool {
+        match self {
+            RouterDestination::Http(_) => false,
+            RouterDestination::File(_) => true,
+        }
+    }
+}
 impl ChainTrait for CommonCheckRequest {
     async fn handle_after_request(
         &self,
@@ -131,7 +157,7 @@ impl ChainTrait for CommonCheckRequest {
         uri: Uri,
         peer_addr: SocketAddr,
         spire_context: &mut SpireContext,
-    ) -> Result<Option<CheckResult>, AppError> {
+    ) -> Result<Option<HandlingResult>, AppError> {
         let backend_path = uri
             .path_and_query()
             .ok_or(AppError(String::from("")))?
@@ -151,26 +177,27 @@ impl ChainTrait for CommonCheckRequest {
             if !is_allowed {
                 return Ok(None);
             }
-            let base_route = item.route_cluster.get_route(headers)?;
-            let endpoint = base_route.endpoint.as_str();
-            debug!("The endpoint is {}", endpoint);
+            let router_destination = item.router.get_route(headers)?;
             let rest_path = match_result.ok_or("match_result is none")?;
 
-            if endpoint.contains("http") {
-                let request_path = [endpoint, rest_path.as_str()].join("/");
-                spire_context.middlewares = item.middlewares.clone();
-                return Ok(Some(CheckResult {
-                    request_path,
-                    base_route,
-                }));
-            } else {
-                let path = Path::new(&endpoint);
-                let request_path = path.join(rest_path);
-                spire_context.middlewares = item.middlewares.clone();
-                return Ok(Some(CheckResult {
-                    request_path: String::from(request_path.to_str().unwrap_or_default()),
-                    base_route,
-                }));
+            match router_destination {
+                RouterDestination::File(file_route) => {
+                    let path = Path::new(&file_route.doc_root);
+                    let request_path = path.join(rest_path);
+                    spire_context.middlewares = item.middlewares.clone();
+                    return Ok(Some(HandlingResult {
+                        request_path: String::from(request_path.to_str().unwrap_or_default()),
+                        router_destination: RouterDestination::File(file_route),
+                    }));
+                }
+                RouterDestination::Http(base_route) => {
+                    let request_path = [base_route.endpoint.as_str(), rest_path.as_str()].join("/");
+                    spire_context.middlewares = item.middlewares.clone();
+                    return Ok(Some(HandlingResult {
+                        request_path,
+                        router_destination: RouterDestination::Http(base_route.clone()),
+                    }));
+                }
             }
         }
         Ok(None)
