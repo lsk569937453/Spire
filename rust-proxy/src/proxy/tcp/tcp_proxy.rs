@@ -240,7 +240,6 @@ mod tests {
     use super::*;
     use crate::vojo::app_config::{ApiService, AppConfig, Route, ServiceConfig};
     use crate::vojo::route::BaseRoute;
-    use crate::vojo::route::LoadbalancerStrategy;
 
     use crate::vojo::route::WeightBasedRoute;
     use crate::vojo::route::WeightRoute;
@@ -267,9 +266,7 @@ mod tests {
         };
         let route = Route {
             route_id: "test_route".to_string(),
-            router: crate::vojo::route::Router::Loadbalancer(LoadbalancerStrategy::WeightBased(
-                header_based,
-            )),
+            router: crate::vojo::route::Router::WeightBased(header_based),
             ..Default::default()
         };
         let api_service = ApiService {

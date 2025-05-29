@@ -7,7 +7,7 @@ services:
           matcher:
             prefix: /
             prefix_rewrite: /
-          route_cluster:
+          router:
             type: WeightBased
             routes:
               - base_route:
