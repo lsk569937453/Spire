@@ -291,48 +291,47 @@ async fn proxy(
     }
 
     if let Some(check_request) = handling_result {
-        let request_path = check_request.request_path;
+        let request_path = check_request.request_path.as_str();
         let router_destination = check_request.router_destination;
-        if router_destination.is_file() {
+        let mut res = if router_destination.is_file() {
             let mut parts = req.uri().clone().into_parts();
             parts.path_and_query = Some(request_path.try_into()?);
             *req.uri_mut() = Uri::from_parts(parts)?;
-            return route_file(router_destination, req).await;
-        }
-        *req.uri_mut() = request_path.parse()?;
-        let host = req
-            .uri()
-            .host()
-            .ok_or("Uri to host cause error")?
-            .to_string();
-        req.headers_mut()
-            .insert(http::header::HOST, HeaderValue::from_str(&host)?);
-
-        let request_future = if request_path.contains("https") {
-            client.request_https(req, DEFAULT_HTTP_TIMEOUT)
+            route_file(router_destination, req).await?
         } else {
-            client.request_http(req, DEFAULT_HTTP_TIMEOUT)
-        };
-        let response_result = match request_future.await {
-            Ok(response) => response.map_err(AppError::from),
-            _ => {
-                return Err(AppError(format!(
-                    "Request time out,the uri is {}",
-                    request_path
-                )))
-            }
-        };
+            *req.uri_mut() = request_path.parse()?;
+            let host = req
+                .uri()
+                .host()
+                .ok_or("Uri to host cause error")?
+                .to_string();
+            req.headers_mut()
+                .insert(http::header::HOST, HeaderValue::from_str(&host)?);
 
-        let mut res =
+            let request_future = if request_path.contains("https") {
+                client.request_https(req, DEFAULT_HTTP_TIMEOUT)
+            } else {
+                client.request_http(req, DEFAULT_HTTP_TIMEOUT)
+            };
+            let response_result = match request_future.await {
+                Ok(response) => response.map_err(AppError::from),
+                _ => {
+                    return Err(AppError(format!(
+                        "Request time out,the uri is {}",
+                        request_path
+                    )))
+                }
+            };
             response_result?
                 .map(|b| b.boxed())
                 .map(|item: BoxBody<Bytes, hyper::Error>| {
                     item.map_err(|_| -> Infallible { unreachable!() }).boxed()
-                });
+                })
+        };
         if let Some(middlewares) = spire_context.middlewares {
-            if middlewares.is_empty() {
+            if !middlewares.is_empty() {
                 chain_trait
-                    .handle_before_response(middlewares, &mut res)
+                    .handle_before_response(middlewares, request_path, &mut res)
                     .await?;
             }
         }

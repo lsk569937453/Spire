@@ -57,14 +57,14 @@ impl MiddleWares {
                     return Ok(is_allowed);
                 }
             }
-            _ => {
-                Err(AppError("not allowed".to_string()))?;
-            }
+            _ => {}
         }
         Ok(true)
     }
     pub fn handle_before_response(
         &self,
+        req_path: &str,
+
         response: &mut Response<BoxBody<Bytes, Infallible>>,
     ) -> Result<(), AppError> {
         match self {
@@ -72,11 +72,9 @@ impl MiddleWares {
                 cors_config.handle_before_response(response)?;
             }
             MiddleWares::Headers(headers) => {
-                headers.handle_before_response(response)?;
+                headers.handle_before_response(req_path, response)?;
             }
-            _ => {
-                Err(AppError("not allowed".to_string()))?;
-            }
+            _ => {}
         }
         Ok(())
     }
