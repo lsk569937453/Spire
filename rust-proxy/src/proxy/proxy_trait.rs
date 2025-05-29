@@ -53,6 +53,7 @@ pub trait ChainTrait {
     async fn handle_before_response(
         &self,
         middlewares: Vec<MiddleWares>,
+        req_path: &str,
         response: &mut Response<BoxBody<Bytes, Infallible>>,
     ) -> Result<(), AppError>;
     fn handle_preflight(
@@ -98,11 +99,12 @@ impl ChainTrait for CommonCheckRequest {
     async fn handle_before_response(
         &self,
         middlewares: Vec<MiddleWares>,
+        req_path: &str,
 
         response: &mut Response<BoxBody<Bytes, Infallible>>,
     ) -> Result<(), AppError> {
         for item in middlewares.iter() {
-            item.handle_before_response(response)?;
+            item.handle_before_response(req_path, response)?;
         }
 
         Ok(())

@@ -24,4 +24,10 @@ services:
             prefix_rewrite: /
           router:
             type: file
-            doc_root: D:\code\github\Spire\rust-proxy
+            doc_root: D:\code\github\gitstats\kvrocks
+          middlewares:
+            - type: headers
+              content:
+                type: file
+                expires: 24h
+                extensions: [js, css, html, png, jpg, gif]
