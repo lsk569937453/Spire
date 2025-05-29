@@ -242,8 +242,7 @@ mod tests {
     use crate::vojo::route::BaseRoute;
 
     use crate::vojo::route::WeightBasedRoute;
-    use crate::vojo::route::WeightRoute;
-
+    use crate::vojo::route::WeightedRouteItem;
     use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr};
 
@@ -255,7 +254,7 @@ mod tests {
         _endpoint: &str,
     ) -> SharedConfig {
         let header_based = WeightBasedRoute {
-            routes: vec![WeightRoute {
+            routes: vec![WeightedRouteItem {
                 weight: 1,
                 index: 0,
                 base_route: BaseRoute {
