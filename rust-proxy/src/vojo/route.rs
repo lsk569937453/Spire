@@ -110,12 +110,9 @@ where
             E: de::Error,
         {
             Ok(Router::Random(RandomRoute {
-                routes: vec![RandomBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: v.to_string(),
-                        is_alive: None,
-                        anomaly_detection_status: AnomalyDetectionStatus::default(),
-                    },
+                routes: vec![BaseRoute {
+                    endpoint: v.to_string(),
+                    is_alive: None,
                 }],
             }))
         }
@@ -150,12 +147,10 @@ pub struct BaseRoute {
     pub endpoint: String,
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub is_alive: Option<bool>,
-    #[serde(skip_serializing, skip_deserializing)]
-    pub anomaly_detection_status: AnomalyDetectionStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WeightRoute {
+pub struct WeightedRouteItem {
     pub base_route: BaseRoute,
     pub weight: i32,
     #[serde(skip_deserializing, skip_serializing, default)]
@@ -189,7 +184,7 @@ pub enum HeaderValueMappingType {
     Split(SplitSegment),
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HeaderRoute {
+pub struct HeaderRoutingRule {
     pub base_route: BaseRoute,
     pub header_key: String,
     pub header_value_mapping_type: HeaderValueMappingType,
@@ -197,7 +192,7 @@ pub struct HeaderRoute {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeaderBasedRoute {
-    pub routes: Vec<HeaderRoute>,
+    pub routes: Vec<HeaderRoutingRule>,
 }
 
 impl HeaderBasedRoute {
@@ -289,13 +284,10 @@ impl HeaderBasedRoute {
         Ok(())
     }
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RandomBaseRoute {
-    pub base_route: BaseRoute,
-}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RandomRoute {
-    pub routes: Vec<RandomBaseRoute>,
+    pub routes: Vec<BaseRoute>,
 }
 
 impl RandomRoute {
@@ -303,48 +295,41 @@ impl RandomRoute {
         Self {
             routes: backends
                 .iter()
-                .map(|item| RandomBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: item.clone(),
-                        is_alive: None,
-                        anomaly_detection_status: AnomalyDetectionStatus::default(),
-                    },
+                .map(|item| BaseRoute {
+                    endpoint: item.clone(),
+                    is_alive: None,
                 })
-                .collect::<Vec<RandomBaseRoute>>(),
+                .collect::<Vec<BaseRoute>>(),
         }
     }
     async fn get_all_route(&mut self) -> Result<Vec<BaseRoute>, AppError> {
-        Ok(self
-            .routes
-            .iter()
-            .map(|item| item.base_route.clone())
-            .collect::<Vec<BaseRoute>>())
+        Ok(self.routes.to_vec())
     }
 
     fn get_route(&mut self, _headers: &HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-        let has_unconfigured = self.routes.iter().any(|r| r.base_route.is_alive.is_none());
+        let has_unconfigured = self.routes.iter().any(|r| r.is_alive.is_none());
 
         if has_unconfigured {
             let mut rng = rand::rng();
             let random_index = rng.random_range(0..self.routes.len());
-            Ok(self.routes[random_index].base_route.clone())
+            Ok(self.routes[random_index].clone())
         } else {
             let alive_indices: Vec<usize> = self
                 .routes
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| r.base_route.is_alive == Some(true))
+                .filter(|(_, r)| r.is_alive == Some(true))
                 .map(|(i, _)| i)
                 .collect();
             if alive_indices.is_empty() {
                 debug!("All routes are dead, selecting a random route");
                 let mut rng = rand::rng();
                 let random_index = rng.random_range(0..self.routes.len());
-                Ok(self.routes[random_index].base_route.clone())
+                Ok(self.routes[random_index].clone())
             } else {
                 let mut rng = rand::rng();
                 let random_index = rng.random_range(0..alive_indices.len());
-                Ok(self.routes[alive_indices[random_index]].base_route.clone())
+                Ok(self.routes[alive_indices[random_index]].clone())
             }
         }
     }
@@ -354,58 +339,49 @@ impl RandomRoute {
         is_alive: bool,
     ) -> Result<(), AppError> {
         for item in self.routes.iter_mut() {
-            if item.base_route.endpoint == base_route.endpoint {
-                item.base_route.is_alive = Some(is_alive);
+            if item.endpoint == base_route.endpoint {
+                item.is_alive = Some(is_alive);
             }
         }
         Ok(())
     }
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct PollBaseRoute {
-    pub base_route: BaseRoute,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct PollRoute {
     #[serde(skip_deserializing, skip_serializing)]
     pub current_index: i128,
-    pub routes: Vec<PollBaseRoute>,
+    pub routes: Vec<BaseRoute>,
 }
-impl PollRoute {}
 
 impl PollRoute {
     async fn get_all_route(&mut self) -> Result<Vec<BaseRoute>, AppError> {
-        Ok(self
-            .routes
-            .iter_mut()
-            .map(|item| item.base_route.clone())
-            .collect::<Vec<BaseRoute>>())
+        Ok(self.routes.clone())
     }
 
     fn get_route(&mut self, _headers: &HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-        let has_unconfigured = self.routes.iter().any(|r| r.base_route.is_alive.is_none());
+        let has_unconfigured = self.routes.iter().any(|r| r.is_alive.is_none());
         if has_unconfigured {
             self.current_index += 1;
             if self.current_index >= self.routes.len() as i128 {
                 self.current_index = 0;
             }
             debug!("current_index:{}", self.current_index);
-            let route = self.routes[self.current_index as usize].base_route.clone();
+            let route = self.routes[self.current_index as usize].clone();
             Ok(route)
         } else {
             let alive_indices: Vec<usize> = self
                 .routes
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| r.base_route.is_alive == Some(true))
+                .filter(|(_, r)| r.is_alive == Some(true))
                 .map(|(i, _)| i)
                 .collect();
             if alive_indices.is_empty() {
                 debug!("All routes are dead, selecting a random route");
                 let mut rng = rand::rng();
                 let random_index = rng.random_range(0..self.routes.len());
-                Ok(self.routes[random_index].base_route.clone())
+                Ok(self.routes[random_index].clone())
             } else {
                 self.current_index += 1;
                 if self.current_index >= alive_indices.len() as i128 {
@@ -416,7 +392,7 @@ impl PollRoute {
                     "current_index:{} (alive index), selected_index: {}",
                     self.current_index, selected_index
                 );
-                let route = self.routes[selected_index].base_route.clone();
+                let route = self.routes[selected_index].clone();
                 Ok(route)
             }
         }
@@ -427,8 +403,8 @@ impl PollRoute {
         is_alive: bool,
     ) -> Result<(), AppError> {
         for item in self.routes.iter_mut() {
-            if item.base_route.endpoint == base_route.endpoint {
-                item.base_route.is_alive = Some(is_alive);
+            if item.endpoint == base_route.endpoint {
+                item.is_alive = Some(is_alive);
             }
         }
         Ok(())
@@ -436,7 +412,7 @@ impl PollRoute {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WeightBasedRoute {
-    pub routes: Vec<WeightRoute>,
+    pub routes: Vec<WeightedRouteItem>,
 }
 
 impl WeightBasedRoute {
@@ -522,17 +498,13 @@ mod tests {
     async fn test_poll_route() {
         let mut poll_route = PollRoute {
             routes: vec![
-                PollBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: "server1".to_string(),
-                        ..Default::default()
-                    },
+                BaseRoute {
+                    endpoint: "server1".to_string(),
+                    ..Default::default()
                 },
-                PollBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: "server2".to_string(),
-                        ..Default::default()
-                    },
+                BaseRoute {
+                    endpoint: "server2".to_string(),
+                    ..Default::default()
                 },
             ],
             ..Default::default()
@@ -556,7 +528,7 @@ mod tests {
     async fn test_header_based_route() {
         let header_route = HeaderBasedRoute {
             routes: vec![
-                HeaderRoute {
+                HeaderRoutingRule {
                     header_key: "x-version".to_string(),
                     header_value_mapping_type: HeaderValueMappingType::Text(TextMatch {
                         value: "v1".to_string(),
@@ -566,7 +538,7 @@ mod tests {
                         ..Default::default()
                     },
                 },
-                HeaderRoute {
+                HeaderRoutingRule {
                     header_key: "x-debug".to_string(),
                     header_value_mapping_type: HeaderValueMappingType::Regex(RegexMatch {
                         value: r"true|1".to_string(),
@@ -601,17 +573,13 @@ mod tests {
     async fn test_random_route() {
         let mut strategy = Router::Random(RandomRoute {
             routes: vec![
-                RandomBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: "server_a".to_string(),
-                        ..Default::default()
-                    },
+                BaseRoute {
+                    endpoint: "server_a".to_string(),
+                    ..Default::default()
                 },
-                RandomBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: "server_b".to_string(),
-                        ..Default::default()
-                    },
+                BaseRoute {
+                    endpoint: "server_b".to_string(),
+                    ..Default::default()
                 },
             ],
         });
@@ -629,7 +597,7 @@ mod tests {
     async fn test_weight_based_route() {
         let mut strategy = Router::WeightBased(WeightBasedRoute {
             routes: vec![
-                WeightRoute {
+                WeightedRouteItem {
                     weight: 3,
                     base_route: BaseRoute {
                         endpoint: "server_heavy".to_string(),
@@ -637,7 +605,7 @@ mod tests {
                     },
                     index: 0,
                 },
-                WeightRoute {
+                WeightedRouteItem {
                     weight: 1,
                     base_route: BaseRoute {
                         endpoint: "server_light".to_string(),
@@ -661,17 +629,13 @@ mod tests {
     async fn test_get_all_routes() {
         let mut poll_strategy = Router::Poll(PollRoute {
             routes: vec![
-                PollBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: "s1".to_string(),
-                        ..Default::default()
-                    },
+                BaseRoute {
+                    endpoint: "s1".to_string(),
+                    ..Default::default()
                 },
-                PollBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: "s2".to_string(),
-                        ..Default::default()
-                    },
+                BaseRoute {
+                    endpoint: "s2".to_string(),
+                    ..Default::default()
                 },
             ],
             ..Default::default()

@@ -382,21 +382,19 @@ mod tests {
     use crate::vojo::rate_limit::TimeUnit;
     use crate::vojo::rate_limit::TokenBucketRateLimit;
     use crate::vojo::route::BaseRoute;
+    use crate::vojo::route::WeightedRouteItem;
 
     use crate::vojo::route::HeaderBasedRoute;
-    use crate::vojo::route::HeaderRoute;
+    use crate::vojo::route::HeaderRoutingRule;
 
     use crate::vojo::allow_deny_ip::AllowDenyObject;
     use crate::vojo::authentication::Authentication;
     use crate::vojo::cors_config::Method;
     use crate::vojo::rate_limit::LimitLocation;
-    use crate::vojo::route::PollBaseRoute;
     use crate::vojo::route::PollRoute;
-    use crate::vojo::route::RandomBaseRoute;
     use crate::vojo::route::RandomRoute;
     use crate::vojo::route::TextMatch;
     use crate::vojo::route::WeightBasedRoute;
-    use crate::vojo::route::WeightRoute;
     use http::HeaderValue;
     fn create_api_service1() -> ApiService {
         let mut api_service = ApiService {
@@ -406,7 +404,7 @@ mod tests {
 
         let header_based = WeightBasedRoute {
             routes: vec![
-                WeightRoute {
+                WeightedRouteItem {
                     weight: 1,
                     index: 0,
                     base_route: BaseRoute {
@@ -414,7 +412,7 @@ mod tests {
                         ..Default::default()
                     },
                 },
-                WeightRoute {
+                WeightedRouteItem {
                     weight: 2,
                     index: 0,
                     base_route: BaseRoute {
@@ -422,7 +420,7 @@ mod tests {
                         ..Default::default()
                     },
                 },
-                WeightRoute {
+                WeightedRouteItem {
                     weight: 3,
                     index: 0,
                     base_route: BaseRoute {
@@ -453,23 +451,17 @@ mod tests {
 
         let poll_route = PollRoute {
             routes: vec![
-                PollBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: "http://127.0.0.1:9394".to_string(),
-                        ..Default::default()
-                    },
+                BaseRoute {
+                    endpoint: "http://127.0.0.1:9394".to_string(),
+                    ..Default::default()
                 },
-                PollBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: "http://127.0.0.1:9395".to_string(),
-                        ..Default::default()
-                    },
+                BaseRoute {
+                    endpoint: "http://127.0.0.1:9395".to_string(),
+                    ..Default::default()
                 },
-                PollBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: "http://127.0.0.1:9396".to_string(),
-                        ..Default::default()
-                    },
+                BaseRoute {
+                    endpoint: "http://127.0.0.1:9396".to_string(),
+                    ..Default::default()
                 },
             ],
             current_index: 0,
@@ -496,23 +488,17 @@ mod tests {
 
         let poll_route = RandomRoute {
             routes: vec![
-                RandomBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: "http://127.0.0.1:9394".to_string(),
-                        ..Default::default()
-                    },
+                BaseRoute {
+                    endpoint: "http://127.0.0.1:9394".to_string(),
+                    ..Default::default()
                 },
-                RandomBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: "http://127.0.0.1:9395".to_string(),
-                        ..Default::default()
-                    },
+                BaseRoute {
+                    endpoint: "http://127.0.0.1:9395".to_string(),
+                    ..Default::default()
                 },
-                RandomBaseRoute {
-                    base_route: BaseRoute {
-                        endpoint: "http://127.0.0.1:9396".to_string(),
-                        ..Default::default()
-                    },
+                BaseRoute {
+                    endpoint: "http://127.0.0.1:9396".to_string(),
+                    ..Default::default()
                 },
             ],
         };
@@ -538,7 +524,7 @@ mod tests {
 
         let poll_route = HeaderBasedRoute {
             routes: vec![
-                HeaderRoute {
+                HeaderRoutingRule {
                     base_route: BaseRoute {
                         endpoint: "http://127.0.0.1:9395".to_string(),
                         ..Default::default()
@@ -550,7 +536,7 @@ mod tests {
                         },
                     ),
                 },
-                HeaderRoute {
+                HeaderRoutingRule {
                     base_route: BaseRoute {
                         endpoint: "http://127.0.0.1:9396".to_string(),
                         ..Default::default()
@@ -562,7 +548,7 @@ mod tests {
                         },
                     ),
                 },
-                HeaderRoute {
+                HeaderRoutingRule {
                     base_route: BaseRoute {
                         endpoint: "http://127.0.0.1:9397".to_string(),
                         ..Default::default()
@@ -603,7 +589,7 @@ mod tests {
         };
 
         let header_based = WeightBasedRoute {
-            routes: vec![WeightRoute {
+            routes: vec![WeightedRouteItem {
                 weight: 1,
                 index: 0,
                 base_route: BaseRoute {
@@ -768,7 +754,7 @@ mod tests {
     fn test_service_config_serialization() {
         let route = Route {
             router: Router::WeightBased(WeightBasedRoute {
-                routes: vec![WeightRoute {
+                routes: vec![WeightedRouteItem {
                     weight: 1,
                     index: 0,
                     base_route: BaseRoute {
