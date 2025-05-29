@@ -150,14 +150,6 @@ pub struct BaseRoute {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WeightedRouteItem {
-    pub base_route: BaseRoute,
-    pub weight: i32,
-    #[serde(skip_deserializing, skip_serializing, default)]
-    pub index: i32,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SplitSegment {
     pub split_by: String,
     pub split_list: Vec<String>,
@@ -414,7 +406,13 @@ impl PollRoute {
 pub struct WeightBasedRoute {
     pub routes: Vec<WeightedRouteItem>,
 }
-
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeightedRouteItem {
+    pub base_route: BaseRoute,
+    pub weight: i32,
+    #[serde(skip_deserializing, skip_serializing, default)]
+    pub index: i32,
+}
 impl WeightBasedRoute {
     async fn get_all_route(&mut self) -> Result<Vec<BaseRoute>, AppError> {
         Ok(self

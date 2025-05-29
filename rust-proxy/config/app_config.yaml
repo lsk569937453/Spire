@@ -11,8 +11,7 @@ services:
           router:
             type: Random
             routes:
-              - base_route:
-                  endpoint: http://localhost:6666/
+              - endpoint: http://localhost:6666/
           health_check:
             type: HttpGet
             base_health_check_param:
@@ -31,12 +30,9 @@ services:
           router:
             type: Random
             routes:
-              - base_route:
-                  endpoint: http://127.0.0.1:9394
-              - base_route:
-                  endpoint: http://127.0.0.1:8090
-              - base_route:
-                  endpoint: http://127.0.0.1:9396
+              - endpoint: http://127.0.0.1:9394
+              - endpoint: http://127.0.0.1:8090
+              - endpoint: http://127.0.0.1:9396
           health_check:
             type: HttpGet
             base_health_check_param:
