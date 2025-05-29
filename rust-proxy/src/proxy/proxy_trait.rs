@@ -1,6 +1,6 @@
-use crate::vojo::app_config::MiddleWares;
+use crate::middleware::cors_config::CorsConfig;
+use crate::middleware::middlewares::MiddleWares;
 use crate::vojo::app_error::AppError;
-use crate::vojo::cors_config::CorsConfig;
 use crate::vojo::route::BaseRoute;
 use crate::vojo::route::StaticFileRoute;
 use crate::SharedConfig;
@@ -50,9 +50,9 @@ pub trait ChainTrait {
         peer_addr: SocketAddr,
         spire_context: &mut SpireContext,
     ) -> Result<Option<HandlingResult>, AppError>;
-    async fn handle_after_request(
+    async fn handle_before_response(
         &self,
-        cores_config: CorsConfig,
+        middlewares: Vec<MiddleWares>,
         response: &mut Response<BoxBody<Bytes, Infallible>>,
     ) -> Result<(), AppError>;
     fn handle_preflight(
@@ -95,55 +95,14 @@ impl RouterDestination {
     }
 }
 impl ChainTrait for CommonCheckRequest {
-    async fn handle_after_request(
+    async fn handle_before_response(
         &self,
-        cors_config: CorsConfig,
+        middlewares: Vec<MiddleWares>,
 
         response: &mut Response<BoxBody<Bytes, Infallible>>,
     ) -> Result<(), AppError> {
-        let headers = response.headers_mut();
-        let origin = cors_config.allowed_origins.to_string();
-        headers.insert(
-            header::ACCESS_CONTROL_ALLOW_ORIGIN,
-            HeaderValue::from_str(origin.as_str()).map_err(|_| "HeaderValue is none")?,
-        );
-
-        let methods = cors_config
-            .allowed_methods
-            .iter()
-            .map(|m| m.as_str().to_uppercase())
-            .collect::<Vec<String>>()
-            .join(", ");
-        info!("methods: {}", methods);
-        headers.insert(
-            header::ACCESS_CONTROL_ALLOW_METHODS,
-            HeaderValue::from_str(&methods).map_err(|_| "Invalid header")?,
-        );
-        if let Some(cors_headers) = cors_config.allowed_headers {
-            headers.insert(
-                header::ACCESS_CONTROL_ALLOW_HEADERS,
-                HeaderValue::from_str(&cors_headers.to_string()).map_err(|_| "Invalid header")?,
-            );
-        }
-        if let Some(allow_credentials) = cors_config.allow_credentials {
-            if allow_credentials {
-                headers.insert(
-                    header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                    HeaderValue::from_static("true"),
-                );
-            }
-        }
-        if let Some(max_age) = cors_config.max_age {
-            if max_age > 0 {
-                headers.insert(
-                    header::ACCESS_CONTROL_MAX_AGE,
-                    HeaderValue::from_str(&max_age.to_string()).map_err(|_| "Invalid header")?,
-                );
-            }
-        }
-
-        if !cors_config.allowed_origins.is_all() {
-            headers.append(header::VARY, HeaderValue::from_static("Origin"));
+        for item in middlewares.iter() {
+            item.handle_before_response(response)?;
         }
 
         Ok(())

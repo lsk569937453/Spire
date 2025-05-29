@@ -3,7 +3,7 @@ use iprange::IpRange;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 
-use super::app_error::AppError;
+use crate::vojo::app_error::AppError;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AllowDenyObject {

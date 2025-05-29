@@ -5,7 +5,7 @@ use http::HeaderValue;
 
 use serde::{Deserialize, Serialize};
 
-use super::app_error::AppError;
+use crate::vojo::app_error::AppError;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "PascalCase")]

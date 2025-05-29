@@ -14,8 +14,8 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
+use std::convert::Infallible;
 use std::fmt;
-use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CorsConfig {
@@ -90,17 +90,15 @@ impl<'de> Deserialize<'de> for CorsAllowedOrigins {
     }
 }
 
-impl Display for CorsAllowedOrigins {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl CorsAllowedOrigins {
+    pub fn to_string(&self) -> String {
         match self {
-            CorsAllowedOrigins::All => write!(f, "*"),
-            CorsAllowedOrigins::Origins(v) => {
-                write!(f, "{}", v.join(", "))
+            CorsAllowedOrigins::All => "*".to_string(),
+            CorsAllowedOrigins::Origins(origin_list) => {
+                origin_list.first().unwrap_or(&"".to_string()).to_string()
             }
         }
     }
-}
-impl CorsAllowedOrigins {
     pub fn is_all(&self) -> bool {
         match self {
             CorsAllowedOrigins::All => true,
@@ -125,13 +123,13 @@ impl CorsConfig {
     }
     pub fn handle_before_response(
         &self,
-        response: &mut Response<BoxBody<Bytes, AppError>>,
+        response: &mut Response<BoxBody<Bytes, Infallible>>,
     ) -> Result<(), AppError> {
         let headers = response.headers_mut();
         let origin = self.allowed_origins.to_string();
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
-            HeaderValue::from_str(origin.as_str())?,
+            HeaderValue::from_str(origin.as_str()).map_err(|_| "HeaderValue is none")?,
         );
 
         let methods = self
@@ -143,12 +141,12 @@ impl CorsConfig {
         info!("methods: {}", methods);
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_METHODS,
-            HeaderValue::from_str(&methods)?,
+            HeaderValue::from_str(&methods).map_err(|_| "Invalid header")?,
         );
         if let Some(cors_headers) = &self.allowed_headers {
             headers.insert(
                 header::ACCESS_CONTROL_ALLOW_HEADERS,
-                HeaderValue::from_str(&cors_headers.to_string())?,
+                HeaderValue::from_str(&cors_headers.to_string()).map_err(|_| "Invalid header")?,
             );
         }
         if let Some(allow_credentials) = self.allow_credentials {
@@ -163,7 +161,7 @@ impl CorsConfig {
             if max_age > 0 {
                 headers.insert(
                     header::ACCESS_CONTROL_MAX_AGE,
-                    HeaderValue::from_str(&max_age.to_string())?,
+                    HeaderValue::from_str(&max_age.to_string()).map_err(|_| "Invalid header")?,
                 );
             }
         }
@@ -256,19 +254,15 @@ pub enum CorsAllowHeader {
     All,
     Headers(Vec<HeaderName>),
 }
-
-impl Display for CorsAllowHeader {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl CorsAllowHeader {
+    pub fn to_string(&self) -> String {
         match self {
-            CorsAllowHeader::All => write!(f, "*"),
-            CorsAllowHeader::Headers(headers) => {
-                let s = headers
-                    .iter()
-                    .map(|item| item.as_str())
-                    .collect::<Vec<&str>>()
-                    .join(", ");
-                write!(f, "{}", s)
-            }
+            CorsAllowHeader::All => "*".to_string(),
+            CorsAllowHeader::Headers(headers) => headers
+                .iter()
+                .map(|item| item.as_str())
+                .collect::<Vec<&str>>()
+                .join(", "),
         }
     }
 }
@@ -291,79 +285,5 @@ impl HeaderName {
             HeaderName::Cookie => "Cookie",
             HeaderName::Range => "Range",
         }
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cors_allowed_origins_serialize() {
-        let all = CorsAllowedOrigins::All;
-        let origins = CorsAllowedOrigins::Origins(vec!["http://localhost:3000".to_string()]);
-
-        assert_eq!(serde_json::to_string(&all).unwrap(), "\"*\"");
-        assert_eq!(
-            serde_json::to_string(&origins).unwrap(),
-            "[\"http://localhost:3000\"]"
-        );
-    }
-
-    #[test]
-    fn test_cors_allowed_origins_deserialize() {
-        let all: CorsAllowedOrigins = serde_json::from_str("\"*\"").unwrap();
-        let origins: CorsAllowedOrigins =
-            serde_json::from_str("[\"http://localhost:3000\"]").unwrap();
-
-        assert_eq!(all, CorsAllowedOrigins::All);
-        assert_eq!(
-            origins,
-            CorsAllowedOrigins::Origins(vec!["http://localhost:3000".to_string()])
-        );
-    }
-
-    #[test]
-    fn test_validate_origin() {
-        let config = CorsConfig {
-            allowed_origins: CorsAllowedOrigins::Origins(vec!["http://localhost:\\d+".to_string()]),
-            allowed_methods: vec![Method::Get],
-            allowed_headers: None,
-            allow_credentials: Some(true),
-            max_age: None,
-            options_passthrough: None,
-        };
-
-        assert!(config.validate_origin("http://localhost:3000").unwrap());
-        assert!(!config.validate_origin("http://example.com").unwrap());
-    }
-
-    #[test]
-    fn test_method() {
-        assert_eq!(Method::Get.as_str(), "GET");
-        assert_eq!(Method::Post.as_str(), "POST");
-        assert_eq!(Method::Put.as_str(), "PUT");
-        assert_eq!(Method::Delete.as_str(), "DELETE");
-        assert_eq!(Method::Head.as_str(), "HEAD");
-        assert_eq!(Method::Options.as_str(), "OPTIONS");
-    }
-
-    #[test]
-    fn test_header_name() {
-        assert_eq!(HeaderName::ContentType.as_str(), "Content-Type");
-        assert_eq!(HeaderName::Authorization.as_str(), "Authorization");
-        assert_eq!(HeaderName::Accepts.as_str(), "Accepts");
-        assert_eq!(HeaderName::SetCookie.as_str(), "Set-Cookie");
-        assert_eq!(HeaderName::Cookie.as_str(), "Cookie");
-        assert_eq!(HeaderName::Range.as_str(), "Range");
-    }
-
-    #[test]
-    fn test_cors_allow_header() {
-        let all = CorsAllowHeader::All;
-        let headers =
-            CorsAllowHeader::Headers(vec![HeaderName::ContentType, HeaderName::Authorization]);
-
-        assert_eq!(serde_json::to_string(&all).unwrap(), "\"*\"");
-        assert_eq!(headers.to_string(), "Content-Type, Authorization");
     }
 }

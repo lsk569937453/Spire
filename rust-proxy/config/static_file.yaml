@@ -11,6 +11,8 @@
 #         try_files $uri $uri/ =404;
 #     }
 # }
+static_config:
+  log_level: debug
 services:
   - listen_port: 8084
     service_config:
@@ -20,4 +22,6 @@ services:
           matcher:
             prefix: /
             prefix_rewrite: /
-          route_cluster: http://127.0.0.1:8090
+          router:
+            type: file
+            doc_root: D:\code\github\Spire\rust-proxy

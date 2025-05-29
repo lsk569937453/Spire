@@ -1,14 +1,10 @@
-use super::allow_deny_ip::AllowResult;
-use super::cors_config::CorsConfig;
-
 use crate::constants::common_constants::DEFAULT_ADMIN_PORT;
 use crate::constants::common_constants::DEFAULT_LOG_LEVEL;
+use crate::middleware::middlewares::MiddleWares;
 use crate::utils::uuid::get_uuid;
-use crate::vojo::allow_deny_ip::AllowDenyObject;
 use crate::vojo::anomaly_detection::AnomalyDetectionType;
 use crate::vojo::app_error::AppError;
 use crate::vojo::health_check::HealthCheckType;
-use crate::vojo::rate_limit::Ratelimit;
 use crate::vojo::route::deserialize_router;
 use crate::vojo::route::Router;
 use http::HeaderMap;
@@ -123,18 +119,6 @@ pub struct Route {
     pub middlewares: Option<Vec<MiddleWares>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "PascalCase", content = "content")]
-pub enum MiddleWares {
-    #[serde(rename = "rate_limit")]
-    RateLimit(Ratelimit),
-    #[serde(rename = "authentication")]
-    Authentication(Authentication),
-    #[serde(rename = "allow_deny_list")]
-    AllowDenyList(Vec<AllowDenyObject>),
-    #[serde(rename = "cors")]
-    Cors(CorsConfig),
-}
 fn default_route_id() -> String {
     get_uuid()
 }
@@ -187,71 +171,16 @@ impl Route {
     ) -> Result<bool, AppError> {
         if let Some(middlewares) = &mut self.middlewares {
             for middleware in middlewares.iter_mut() {
-                match middleware {
-                    MiddleWares::RateLimit(ratelimit) => {
-                        if let Some(header_map) = headers_option {
-                            let is_allowed = !ratelimit.should_limit(header_map, peer_addr)?;
-                            if !is_allowed {
-                                return Ok(is_allowed);
-                            }
-                        }
-                    }
-                    MiddleWares::Authentication(authentication) => {
-                        if let Some(header_map) = headers_option {
-                            let is_allowed = authentication.check_authentication(header_map)?;
-                            if !is_allowed {
-                                return Ok(is_allowed);
-                            }
-                        }
-                    }
-                    MiddleWares::AllowDenyList(allow_deny_list) => {
-                        let is_allowed = ip_is_allowed(Some(allow_deny_list.clone()), peer_addr)?;
-                        if !is_allowed {
-                            return Ok(is_allowed);
-                        }
-                    }
-                    _ => {}
+                let is_allowed = middleware.is_allowed(peer_addr, headers_option)?;
+                if !is_allowed {
+                    return Ok(is_allowed);
                 }
             }
         }
         Ok(true)
     }
 }
-pub fn ip_is_allowed(
-    allow_deny_list: Option<Vec<AllowDenyObject>>,
-    peer_addr: &SocketAddr,
-) -> Result<bool, AppError> {
-    if allow_deny_list.is_none()
-        || allow_deny_list
-            .clone()
-            .ok_or("allow_deny_list is none")?
-            .is_empty()
-    {
-        return Ok(true);
-    }
-    let allow_deny_list = allow_deny_list.ok_or("allow_deny_list is none")?;
-    // let iter = allow_deny_list.iter();
-    let ip = peer_addr.ip().to_string();
-    for item in allow_deny_list {
-        let is_allow = item.is_allow(ip.clone());
-        match is_allow {
-            Ok(AllowResult::Allow) => {
-                return Ok(true);
-            }
-            Ok(AllowResult::Deny) => {
-                return Ok(false);
-            }
-            Ok(AllowResult::Notmapping) => {
-                continue;
-            }
-            Err(err) => {
-                return Err(AppError(err.to_string()));
-            }
-        }
-    }
 
-    Ok(true)
-}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, strum_macros::Display)]
 pub enum ServiceType {
     #[default]
@@ -396,25 +325,29 @@ mod tests {
     use std::time::SystemTime;
 
     use super::*;
-    use crate::vojo::authentication::ApiKeyAuth;
+    use crate::middleware::authentication::ApiKeyAuth;
 
-    use crate::vojo::cors_config::CorsAllowedOrigins;
+    use crate::middleware::cors_config::CorsAllowedOrigins;
 
+    use crate::middleware::rate_limit::IPBasedRatelimit;
+    use crate::middleware::rate_limit::TimeUnit;
+    use crate::middleware::rate_limit::TokenBucketRateLimit;
     use crate::vojo::health_check::BaseHealthCheckParam;
     use crate::vojo::health_check::HttpHealthCheckParam;
-    use crate::vojo::rate_limit::IPBasedRatelimit;
-    use crate::vojo::rate_limit::TimeUnit;
-    use crate::vojo::rate_limit::TokenBucketRateLimit;
     use crate::vojo::route::BaseRoute;
     use crate::vojo::route::WeightedRouteItem;
 
+    use crate::middleware::cors_config::CorsAllowHeader;
     use crate::vojo::route::HeaderBasedRoute;
     use crate::vojo::route::HeaderRoutingRule;
 
-    use crate::vojo::allow_deny_ip::AllowDenyObject;
-    use crate::vojo::authentication::Authentication;
-    use crate::vojo::cors_config::Method;
-    use crate::vojo::rate_limit::LimitLocation;
+    use crate::middleware::allow_deny_ip::AllowDenyObject;
+    use crate::middleware::allow_deny_ip::AllowType;
+    use crate::middleware::authentication::Authentication;
+    use crate::middleware::cors_config::CorsConfig;
+    use crate::middleware::cors_config::Method;
+    use crate::middleware::rate_limit::LimitLocation;
+    use crate::middleware::rate_limit::Ratelimit;
     use crate::vojo::route::PollRoute;
     use crate::vojo::route::RandomRoute;
     use crate::vojo::route::TextMatch;
@@ -658,13 +591,13 @@ mod tests {
                 })),
                 MiddleWares::AllowDenyList(vec![AllowDenyObject {
                     value: Some("192.168.0.2".to_string()),
-                    limit_type: crate::vojo::allow_deny_ip::AllowType::AllowAll,
+                    limit_type: AllowType::AllowAll,
                 }]),
                 MiddleWares::Cors(CorsConfig {
                     allow_credentials: Some(true),
                     allowed_origins: CorsAllowedOrigins::All,
                     allowed_methods: vec![Method::Get, Method::Post],
-                    allowed_headers: Some(crate::vojo::cors_config::CorsAllowHeader::All),
+                    allowed_headers: Some(CorsAllowHeader::All),
 
                     max_age: Some(3600),
                     options_passthrough: Some(true),
