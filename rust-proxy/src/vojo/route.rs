@@ -7,8 +7,10 @@ use http::HeaderValue;
 use rand::prelude::*;
 use regex::Regex;
 use serde::de;
+
 use serde::de::Visitor;
 use serde::Deserializer;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
@@ -16,8 +18,14 @@ use std::fmt;
 #[serde(tag = "type")]
 pub enum Router {
     StaticFile(StaticFileRoute),
-    #[serde(deserialize_with = "deserialize_loadbalancer")]
-    Loadbalancer(LoadbalancerStrategy),
+    #[serde(rename = "Poll")]
+    Poll(PollRoute),
+    #[serde(rename = "HeaderBased")]
+    HeaderBased(HeaderBasedRoute),
+    #[serde(rename = "Random")]
+    Random(RandomRoute),
+    #[serde(rename = "WeightBased")]
+    WeightBased(WeightBasedRoute),
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 
@@ -26,7 +34,7 @@ pub struct StaticFileRoute {
 }
 impl Default for Router {
     fn default() -> Self {
-        Self::Loadbalancer(LoadbalancerStrategy::Poll(PollRoute::default()))
+        Self::Poll(PollRoute::default())
     }
 }
 impl Router {
@@ -36,9 +44,19 @@ impl Router {
     ) -> Result<RouterDestination, AppError> {
         match self {
             Router::StaticFile(s) => Ok(RouterDestination::File(s.clone())),
-            Router::Loadbalancer(loadbalancer_strategy) => loadbalancer_strategy
-                .get_route(headers)
-                .map(RouterDestination::Http),
+            Router::Poll(poll_route) => Ok(RouterDestination::Http(poll_route.get_route(headers)?)),
+
+            Router::HeaderBased(poll_route) => {
+                Ok(RouterDestination::Http(poll_route.get_route(headers)?))
+            }
+
+            Router::Random(poll_route) => {
+                Ok(RouterDestination::Http(poll_route.get_route(headers)?))
+            }
+
+            Router::WeightBased(poll_route) => {
+                Ok(RouterDestination::Http(poll_route.get_route(headers)?))
+            }
         }
     }
     pub async fn get_all_route(&mut self) -> Result<Vec<BaseRoute>, AppError> {
@@ -46,9 +64,12 @@ impl Router {
             Router::StaticFile(_) => {
                 Err(AppError("StaticFile router can not get route".to_string()))
             }
-            Router::Loadbalancer(loadbalancer_strategy) => {
-                loadbalancer_strategy.get_all_route().await
-            }
+            Router::Poll(poll_route) => poll_route.get_all_route().await,
+            Router::HeaderBased(poll_route) => poll_route.get_all_route().await,
+
+            Router::Random(poll_route) => poll_route.get_all_route().await,
+
+            Router::WeightBased(poll_route) => poll_route.get_all_route().await,
         }
     }
     pub fn update_route_alive(
@@ -60,25 +81,16 @@ impl Router {
             Router::StaticFile(_) => {
                 Err(AppError("StaticFile router can not get route".to_string()))
             }
-            Router::Loadbalancer(loadbalancer_strategy) => {
-                loadbalancer_strategy.update_route_alive(base_route, is_alive)
-            }
+            Router::Poll(poll_route) => poll_route.update_route_alive(base_route, is_alive),
+            Router::HeaderBased(poll_route) => poll_route.update_route_alive(base_route, is_alive),
+
+            Router::Random(poll_route) => poll_route.update_route_alive(base_route, is_alive),
+
+            Router::WeightBased(poll_route) => poll_route.update_route_alive(base_route, is_alive),
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum LoadbalancerStrategy {
-    #[serde(rename = "Poll")]
-    Poll(PollRoute),
-    #[serde(rename = "HeaderBased")]
-    HeaderBased(HeaderBasedRoute),
-    #[serde(rename = "Random")]
-    Random(RandomRoute),
-    #[serde(rename = "WeightBased")]
-    WeightBased(WeightBasedRoute),
-}
-pub fn deserialize_loadbalancer<'de, D>(deserializer: D) -> Result<LoadbalancerStrategy, D::Error>
+pub fn deserialize_router<'de, D>(deserializer: D) -> Result<Router, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -86,7 +98,7 @@ where
     struct StrategyVisitor;
 
     impl<'de> Visitor<'de> for StrategyVisitor {
-        type Value = LoadbalancerStrategy;
+        type Value = Router;
 
         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
             formatter.write_str("string, array or object")
@@ -97,7 +109,7 @@ where
         where
             E: de::Error,
         {
-            Ok(LoadbalancerStrategy::Random(RandomRoute {
+            Ok(Router::Random(RandomRoute {
                 routes: vec![RandomBaseRoute {
                     base_route: BaseRoute {
                         endpoint: v.to_string(),
@@ -116,7 +128,7 @@ where
             while let Some(s) = seq.next_element::<String>()? {
                 backends.push(s);
             }
-            Ok(LoadbalancerStrategy::Random(RandomRoute::new(backends)))
+            Ok(Router::Random(RandomRoute::new(backends)))
         }
 
         fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
@@ -128,57 +140,6 @@ where
     }
 
     deserializer.deserialize_any(StrategyVisitor)
-}
-
-impl Default for LoadbalancerStrategy {
-    fn default() -> Self {
-        LoadbalancerStrategy::Poll(PollRoute::default())
-    }
-}
-impl LoadbalancerStrategy {
-    pub fn get_route(&mut self, headers: &HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-        match self {
-            LoadbalancerStrategy::Poll(poll_route) => poll_route.get_route(headers),
-
-            LoadbalancerStrategy::HeaderBased(poll_route) => poll_route.get_route(headers),
-
-            LoadbalancerStrategy::Random(poll_route) => poll_route.get_route(headers),
-
-            LoadbalancerStrategy::WeightBased(poll_route) => poll_route.get_route(headers),
-        }
-    }
-    pub async fn get_all_route(&mut self) -> Result<Vec<BaseRoute>, AppError> {
-        match self {
-            LoadbalancerStrategy::Poll(poll_route) => poll_route.get_all_route().await,
-            LoadbalancerStrategy::HeaderBased(poll_route) => poll_route.get_all_route().await,
-
-            LoadbalancerStrategy::Random(poll_route) => poll_route.get_all_route().await,
-
-            LoadbalancerStrategy::WeightBased(poll_route) => poll_route.get_all_route().await,
-        }
-    }
-    pub fn update_route_alive(
-        &mut self,
-        base_route: BaseRoute,
-        is_alive: bool,
-    ) -> Result<(), AppError> {
-        match self {
-            LoadbalancerStrategy::Poll(poll_route) => {
-                poll_route.update_route_alive(base_route, is_alive)
-            }
-            LoadbalancerStrategy::HeaderBased(poll_route) => {
-                poll_route.update_route_alive(base_route, is_alive)
-            }
-
-            LoadbalancerStrategy::Random(poll_route) => {
-                poll_route.update_route_alive(base_route, is_alive)
-            }
-
-            LoadbalancerStrategy::WeightBased(poll_route) => {
-                poll_route.update_route_alive(base_route, is_alive)
-            }
-        }
-    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct AnomalyDetectionStatus {
@@ -618,24 +579,27 @@ mod tests {
             ],
         };
 
-        let mut strategy = LoadbalancerStrategy::HeaderBased(header_route);
+        let mut strategy = Router::HeaderBased(header_route);
 
         let mut headers = HeaderMap::new();
         headers.insert("x-version", HeaderValue::from_static("v1"));
-        assert_eq!(strategy.get_route(&headers).unwrap().endpoint, "server_v1");
+        assert_eq!(
+            strategy.get_route(&headers).unwrap().get_endpoint(),
+            "server_v1"
+        );
 
         // 测试正则匹配
         let mut headers = HeaderMap::new();
         headers.insert("x-debug", HeaderValue::from_static("true"));
         assert_eq!(
-            strategy.get_route(&headers).unwrap().endpoint,
+            strategy.get_route(&headers).unwrap().get_endpoint(),
             "debug_server"
         );
     }
 
     #[tokio::test]
     async fn test_random_route() {
-        let mut strategy = LoadbalancerStrategy::Random(RandomRoute {
+        let mut strategy = Router::Random(RandomRoute {
             routes: vec![
                 RandomBaseRoute {
                     base_route: BaseRoute {
@@ -655,7 +619,7 @@ mod tests {
         let mut results = vec![];
         for _ in 0..100 {
             let route = strategy.get_route(&HeaderMap::new()).unwrap();
-            results.push(route.endpoint);
+            results.push(route.get_endpoint());
         }
         assert!(results.contains(&"server_a".to_string()));
         assert!(results.contains(&"server_b".to_string()));
@@ -663,7 +627,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_weight_based_route() {
-        let mut strategy = LoadbalancerStrategy::WeightBased(WeightBasedRoute {
+        let mut strategy = Router::WeightBased(WeightBasedRoute {
             routes: vec![
                 WeightRoute {
                     weight: 3,
@@ -687,7 +651,7 @@ mod tests {
         let mut results = vec![];
         for _ in 0..4 {
             let route = strategy.get_route(&HeaderMap::new()).unwrap();
-            results.push(route.endpoint);
+            results.push(route.get_endpoint());
         }
         assert_eq!(results[0..3], vec!["server_heavy"; 3]);
         assert_eq!(results[3], "server_light");
@@ -695,7 +659,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_all_routes() {
-        let mut poll_strategy = LoadbalancerStrategy::Poll(PollRoute {
+        let mut poll_strategy = Router::Poll(PollRoute {
             routes: vec![
                 PollBaseRoute {
                     base_route: BaseRoute {
@@ -721,7 +685,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_routes() {
-        let mut strategy = LoadbalancerStrategy::WeightBased(WeightBasedRoute { routes: vec![] });
+        let mut strategy = Router::WeightBased(WeightBasedRoute { routes: vec![] });
         assert!(strategy.get_route(&HeaderMap::new()).is_err());
     }
 }
