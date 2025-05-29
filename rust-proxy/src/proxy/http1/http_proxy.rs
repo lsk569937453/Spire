@@ -252,7 +252,7 @@ async fn proxy(
     let inbound_headers = req.headers();
     let uri = req.uri().clone();
     let mut spire_context = SpireContext::new(port, None);
-    let check_result = chain_trait
+    let handling_result = chain_trait
         .handle_before_request(
             shared_config.clone(),
             port,
@@ -263,7 +263,8 @@ async fn proxy(
             &mut spire_context,
         )
         .await?;
-    if check_result.is_none() {
+    debug!("The handle before request is {:?}", handling_result);
+    if handling_result.is_none() {
         return Ok(Response::builder()
             .status(StatusCode::FORBIDDEN)
             .body(Full::new(Bytes::from(common_constants::DENY_RESPONSE)).boxed())?);
@@ -286,10 +287,10 @@ async fn proxy(
             "The request has been updated to websocket,the req is {:?}!",
             req
         );
-        return server_upgrade(req, check_result, client).await;
+        return server_upgrade(req, handling_result, client).await;
     }
 
-    if let Some(check_request) = check_result {
+    if let Some(check_request) = handling_result {
         let request_path = check_request.request_path;
         let router_destination = check_request.router_destination;
         if router_destination.is_file() {
@@ -322,13 +323,18 @@ async fn proxy(
             }
         };
 
-        let mut res = response_result?
-            .map(|b| b.boxed())
-            .map(|item| item.map_err(|_| -> Infallible { unreachable!() }).boxed());
-        if let Some(cors_config) = spire_context.cors_configed()? {
-            chain_trait
-                .handle_after_request(cors_config, &mut res)
-                .await?;
+        let mut res =
+            response_result?
+                .map(|b| b.boxed())
+                .map(|item: BoxBody<Bytes, hyper::Error>| {
+                    item.map_err(|_| -> Infallible { unreachable!() }).boxed()
+                });
+        if let Some(middlewares) = spire_context.middlewares {
+            if middlewares.is_empty() {
+                chain_trait
+                    .handle_before_response(middlewares, &mut res)
+                    .await?;
+            }
         }
         return Ok(res);
     }
@@ -343,37 +349,9 @@ async fn route_file(
     req: Request<BoxBody<Bytes, Infallible>>,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
     let static_ = Static::new(Path::new(router_destination.get_endpoint().as_str()));
-    let current_res = static_.clone().serve(req).await;
-    if let Ok(res) = current_res {
-        if res.status() == StatusCode::NOT_FOUND {
-            let request: Request<()> = Request::default();
-
-            return static_
-                .clone()
-                .serve(request)
-                .await
-                .map(|item| {
-                    item.map(|body| {
-                        body.boxed()
-                            .map_err(|_| -> Infallible { unreachable!() })
-                            .boxed()
-                    })
-                })
-                .map_err(AppError::from);
-        } else {
-            return Ok(res.map(|body| {
-                body.boxed()
-                    .map_err(|_| -> Infallible { unreachable!() })
-                    .boxed()
-            }));
-        }
-    }
-
-    let request: Request<()> = Request::default();
-
     static_
         .clone()
-        .serve(request)
+        .serve(req)
         .await
         .map(|item| {
             item.map(|body| {

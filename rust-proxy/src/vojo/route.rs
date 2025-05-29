@@ -7,9 +7,10 @@ use http::HeaderValue;
 use rand::prelude::*;
 use regex::Regex;
 use serde::de;
-
+use serde::de::MapAccess;
 use serde::de::Visitor;
 use serde::Deserializer;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -17,20 +18,79 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Router {
+    #[serde(rename = "file")]
     StaticFile(StaticFileRoute),
-    #[serde(rename = "Poll")]
+    #[serde(rename = "poll")]
     Poll(PollRoute),
-    #[serde(rename = "HeaderBased")]
+    #[serde(rename = "headerBased")]
     HeaderBased(HeaderBasedRoute),
-    #[serde(rename = "Random")]
+    #[serde(rename = "random")]
     Random(RandomRoute),
-    #[serde(rename = "WeightBased")]
+    #[serde(rename = "weightBased")]
     WeightBased(WeightBasedRoute),
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 
 pub struct StaticFileRoute {
     pub doc_root: String,
+}
+// 手动实现 Deserialize trait，替代 derive(Deserialize)
+impl<'de> Deserialize<'de> for StaticFileRoute {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // 委托给自定义 Visitor 处理 map 结构的反序列化
+        deserializer.deserialize_map(StaticFileRouteVisitor)
+    }
+}
+
+struct StaticFileRouteVisitor;
+
+impl<'de> Visitor<'de> for StaticFileRouteVisitor {
+    type Value = StaticFileRoute;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a map representing StaticFileRoute")
+    }
+
+    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        let mut doc_root = None;
+
+        while let Some((key, value)) = map.next_entry::<String, String>()? {
+            match key.as_str() {
+                "doc_root" => {
+                    let path = Path::new(&value);
+                    if !path.exists() {
+                        return Err(serde::de::Error::custom(format!(
+                            "doc_root '{}' does not exist in the file system",
+                            value
+                        )));
+                    }
+                    if !path.is_dir() {
+                        return Err(serde::de::Error::custom(format!(
+                            "doc_root '{}' is not a directory",
+                            value
+                        )));
+                    }
+                    doc_root = Some(value);
+                }
+                unknown_key => {
+                    return Err(serde::de::Error::unknown_field(
+                        unknown_key,
+                        &["doc_root"], // 预期仅有的字段
+                    ));
+                }
+            }
+        }
+
+        let doc_root = doc_root.ok_or_else(|| serde::de::Error::missing_field("doc_root"))?;
+
+        Ok(StaticFileRoute { doc_root })
+    }
 }
 impl Default for Router {
     fn default() -> Self {

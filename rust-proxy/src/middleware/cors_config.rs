@@ -1,5 +1,11 @@
-use super::app_error::AppError;
+use crate::vojo::app_error::AppError;
+use bytes::Bytes;
+use http::header;
+use http::HeaderValue;
+use http::Response;
+use http_body_util::combinators::BoxBody;
 use regex::Regex;
+use serde::de;
 use serde::de::value::SeqAccessDeserializer;
 use serde::de::SeqAccess;
 use serde::de::Visitor;
@@ -8,8 +14,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
-
-use serde::de;
+use std::convert::Infallible;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -115,6 +120,57 @@ impl CorsConfig {
                 Ok(false)
             }
         }
+    }
+    pub fn handle_before_response(
+        &self,
+        response: &mut Response<BoxBody<Bytes, Infallible>>,
+    ) -> Result<(), AppError> {
+        let headers = response.headers_mut();
+        let origin = self.allowed_origins.to_string();
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_str(origin.as_str()).map_err(|_| "HeaderValue is none")?,
+        );
+
+        let methods = self
+            .allowed_methods
+            .iter()
+            .map(|m| m.as_str().to_uppercase())
+            .collect::<Vec<String>>()
+            .join(", ");
+        info!("methods: {}", methods);
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_str(&methods).map_err(|_| "Invalid header")?,
+        );
+        if let Some(cors_headers) = &self.allowed_headers {
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                HeaderValue::from_str(&cors_headers.to_string()).map_err(|_| "Invalid header")?,
+            );
+        }
+        if let Some(allow_credentials) = self.allow_credentials {
+            if allow_credentials {
+                headers.insert(
+                    header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                    HeaderValue::from_static("true"),
+                );
+            }
+        }
+        if let Some(max_age) = self.max_age {
+            if max_age > 0 {
+                headers.insert(
+                    header::ACCESS_CONTROL_MAX_AGE,
+                    HeaderValue::from_str(&max_age.to_string()).map_err(|_| "Invalid header")?,
+                );
+            }
+        }
+
+        if !self.allowed_origins.is_all() {
+            headers.append(header::VARY, HeaderValue::from_static("Origin"));
+        }
+
+        Ok(())
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

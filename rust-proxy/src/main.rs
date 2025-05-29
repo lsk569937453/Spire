@@ -10,6 +10,7 @@ extern crate derive_builder;
 use crate::vojo::cli::Cli;
 mod configuration_service;
 mod constants;
+mod middleware;
 use clap::Parser;
 mod control_plane;
 use crate::vojo::cli::SharedConfig;
