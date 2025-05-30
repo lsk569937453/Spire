@@ -372,4 +372,108 @@ async fn route_file(
         .map_err(AppError::from)
 }
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::{vojo::route::StaticFileRoute, AppConfig};
+    use http::HeaderMap;
+    use std::net::IpAddr;
+    use std::net::Ipv4Addr;
+    use std::sync::Mutex;
+    #[test]
+    fn test_http_proxy_creation() {
+        let (tx, rx) = mpsc::channel(1);
+        let shared_config = SharedConfig {
+            shared_data: Arc::new(Mutex::new(AppConfig::default())),
+        };
+
+        let proxy = HttpProxy {
+            port: 8080,
+            channel: rx,
+            mapping_key: "test".to_string(),
+            shared_config,
+        };
+
+        assert_eq!(proxy.port, 8080);
+        assert_eq!(proxy.mapping_key, "test");
+    }
+
+    #[tokio::test]
+    async fn test_proxy_adapter_error_handling() {
+        let client = HttpClients::new();
+        let shared_config = SharedConfig {
+            shared_data: Arc::new(Mutex::new(AppConfig::default())),
+        };
+        let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let req = Request::builder()
+            .uri("invalid://uri")
+            .body(Full::new(Bytes::from("test")).boxed())
+            .unwrap();
+
+        let result = proxy_adapter(
+            8080,
+            shared_config,
+            client,
+            req,
+            "test".to_string(),
+            remote_addr,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn test_options_preflight_request() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ORIGIN, HeaderValue::from_static("http://localhost"));
+        headers.insert(
+            header::ACCESS_CONTROL_REQUEST_METHOD,
+            HeaderValue::from_static("POST"),
+        );
+
+        let client = HttpClients::new();
+        let shared_config = SharedConfig {
+            shared_data: Arc::new(Mutex::new(AppConfig::default())),
+        };
+        let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let mut req = Request::builder()
+            .method(Method::OPTIONS)
+            .uri("http://localhost/test")
+            .body(Full::new(Bytes::from("")).boxed())
+            .unwrap();
+        req.headers_mut().extend(headers);
+
+        let result = proxy(
+            8080,
+            shared_config,
+            client,
+            req,
+            "test".to_string(),
+            remote_addr,
+            CommonCheckRequest {},
+        )
+        .await;
+
+        assert!(result.is_err());
+    }
+
+    // 测试文件路由功能
+    #[tokio::test]
+    async fn test_route_file() {
+        let router_destination = RouterDestination::File(StaticFileRoute {
+            doc_root: "./test".to_string(),
+        });
+
+        let req = Request::builder()
+            .uri("http://localhost/test.txt")
+            .body(Full::new(Bytes::from("")).boxed())
+            .unwrap();
+
+        let result = route_file(router_destination, req).await;
+        assert!(result.is_ok());
+    }
+}

@@ -93,18 +93,62 @@ impl StaticResourceHeaders {
         Ok(())
     }
 }
-// impl Headers {
-//     pub fn handle_before_response(
-//         &self,
-//         req_path: &str,
+#[cfg(test)]
+mod tests {
+    use http_body_util::BodyExt;
+    use http_body_util::Full;
 
-//         response: &mut Response<BoxBody<Bytes, Infallible>>,
-//     ) -> Result<(), AppError> {
-//         match self {
-//             Headers::StaticSource(static_source) => {
-//                 static_source.handle_before_response(req_path, response)?;
-//             }
-//         }
-//         Ok(())
-//     }
-// }
+    use super::*;
+    #[test]
+    fn test_parse_duration() {
+        assert_eq!(parse_duration("30s").unwrap(), Duration::from_secs(30));
+        assert_eq!(parse_duration("5m").unwrap(), Duration::from_secs(300));
+        assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
+        assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86400));
+        assert_eq!(parse_duration("1w").unwrap(), Duration::from_secs(604800));
+
+        // 测试错误情况
+        assert!(parse_duration("").is_err());
+        assert!(parse_duration("30x").is_err());
+        assert!(parse_duration("abc").is_err());
+    }
+
+    #[test]
+    fn test_static_resource_headers_deserialize() {
+        let json = r#"{
+            "expires": "1d",
+            "extensions": [".jpg", ".png"]
+        }"#;
+
+        let headers: StaticResourceHeaders = serde_json::from_str(json).unwrap();
+        assert_eq!(headers.expires, Duration::from_secs(86400));
+        assert_eq!(
+            headers.extensions,
+            vec![".jpg".to_string(), ".png".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_handle_before_response() {
+        let headers = StaticResourceHeaders {
+            expires: Duration::from_secs(3600),
+            extensions: vec![".jpg".to_string()],
+        };
+
+        let mut response = Response::new(Full::new(Bytes::from("test")).boxed());
+        headers
+            .handle_before_response("test.jpg", &mut response)
+            .unwrap();
+
+        assert!(response.headers().contains_key(header::CACHE_CONTROL));
+        assert!(response.headers().contains_key(header::EXPIRES));
+
+        let mut response = Response::new(Full::new(Bytes::from("test")).boxed());
+        headers
+            .handle_before_response("test.txt", &mut response)
+            .unwrap();
+
+        assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+        assert!(!response.headers().contains_key(header::EXPIRES));
+    }
+}

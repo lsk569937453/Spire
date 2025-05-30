@@ -11,56 +11,13 @@ use instant_acme::{
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::convert::Infallible;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 
 pub struct LetsEntrypt {
     pub mail_name: String,
     pub domain_name: String,
-    #[serde(skip_serializing, skip_deserializing)]
-    pub token_map: Arc<Mutex<HashMap<String, String>>>,
 }
-impl LetsEncryptActions for LetsEntrypt {
-    async fn start_request2(&self) -> Result<String, AppError> {
-        let account = local_account(self.mail_name.clone()).await?;
-        info!("account created");
-        let domain_name = self.domain_name.clone();
-        let domain = domain_name.as_str();
-        let mut order = account
-            .new_order(&NewOrder {
-                identifiers: &[Identifier::Dns(domain.to_string())],
-            })
-            .await?;
-        let authorizations = order.authorizations().await?;
-
-pub async fn dyn_reply(
-    axum::extract::Path(token): axum::extract::Path<String>,
-    State(token_map_shared): State<Arc<Mutex<HashMap<String, String>>>>,
-) -> Result<impl axum::response::IntoResponse, Infallible> {
-    info!("The server has received the token,the token is {}", token);
-    let token_map = token_map_shared.lock().await;
-    if !token_map.contains_key(&token) {
-        error!("Can not find the token:{} from memory.", token);
-        return Ok((axum::http::StatusCode::BAD_REQUEST, String::from("")));
-    } else {
-        // let cloned_map = token_map.clone();
-        let proof_option = token_map.get(&token);
-        if let Some(proof) = proof_option {
-            info!(
-                "The server response the proof successfully,token:{},proof:{}",
-                token,
-                proof.clone()
-            );
-            return Ok((axum::http::StatusCode::OK, proof.clone().to_string()));
-        }
-        let challenge = authorization
-            .challenges
-            .iter()
-            .find(|c| c.r#type == ChallengeType::Http01)
-            .ok_or_else(|| AppError("no http01 challenge found".to_string()))?;
 
         let challenges = HashMap::from([(
             challenge.token.clone(),
@@ -145,7 +102,6 @@ impl LetsEntrypt {
         LetsEntrypt {
             mail_name,
             domain_name,
-            token_map: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

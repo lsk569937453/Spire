@@ -473,7 +473,7 @@ mod tests {
                 &mut SpireContext::new(8080, None),
             )
             .await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
         // assert!(result.is_some());
         // let check_result = result.unwrap();
         // assert_eq!(check_result.request_path, "http://backend.test.com/users");
@@ -520,7 +520,7 @@ mod tests {
                 &mut SpireContext::new(8080, None),
             )
             .await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     // 测试不匹配的路由

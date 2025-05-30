@@ -2,11 +2,15 @@ use ipnet::Ipv4Net;
 use iprange::IpRange;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
+use std::net::SocketAddr;
 
 use crate::vojo::app_error::AppError;
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct AllowDenyObject {
+pub struct AllowDenyIp {
+    pub list: Vec<AllowDenyItem>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AllowDenyItem {
     pub limit_type: AllowType,
     pub value: Option<String>,
 }
@@ -25,7 +29,30 @@ pub enum AllowResult {
     Deny,
     Notmapping,
 }
-impl AllowDenyObject {
+impl AllowDenyIp {
+    pub fn ip_is_allowed(&self, peer_addr: &SocketAddr) -> Result<bool, AppError> {
+        let ip = peer_addr.ip().to_string();
+        for item in &self.list {
+            let is_allow = item.is_allow(ip.clone());
+            match is_allow {
+                Ok(AllowResult::Allow) => {
+                    return Ok(true);
+                }
+                Ok(AllowResult::Deny) => {
+                    return Ok(false);
+                }
+                Ok(AllowResult::Notmapping) => {
+                    continue;
+                }
+                Err(err) => {
+                    return Err(AppError(err.to_string()));
+                }
+            }
+        }
+        Ok(true)
+    }
+}
+impl AllowDenyItem {
     pub fn is_allow(&self, client_ip: String) -> Result<AllowResult, AppError> {
         if self.limit_type == AllowType::AllowAll {
             return Ok(AllowResult::Allow);
@@ -68,7 +95,7 @@ mod tests {
 
     #[test]
     fn test_is_allow_allow_all() {
-        let allow_object = AllowDenyObject {
+        let allow_object = AllowDenyItem {
             limit_type: AllowType::AllowAll,
             value: None,
         };
@@ -78,7 +105,7 @@ mod tests {
     }
     #[test]
     fn test_is_allow_deny_all() {
-        let allow_object = AllowDenyObject {
+        let allow_object = AllowDenyItem {
             limit_type: AllowType::DenyAll,
             value: None,
         };
@@ -88,7 +115,7 @@ mod tests {
     }
     #[test]
     fn test_is_allow_allow_ip() {
-        let allow_object = AllowDenyObject {
+        let allow_object = AllowDenyItem {
             limit_type: AllowType::Allow,
             value: Some(String::from("192.168.0.1")),
         };
@@ -98,7 +125,7 @@ mod tests {
     }
     #[test]
     fn test_is_allow_allow_ip_range() {
-        let allow_object = AllowDenyObject {
+        let allow_object = AllowDenyItem {
             limit_type: AllowType::Allow,
             value: Some(String::from("192.168.0.1/24")),
         };
@@ -112,7 +139,7 @@ mod tests {
     }
     #[test]
     fn test_is_allow_deny_ip() {
-        let allow_object = AllowDenyObject {
+        let allow_object = AllowDenyItem {
             limit_type: AllowType::Deny,
             value: Some(String::from("192.168.0.1")),
         };
@@ -122,7 +149,7 @@ mod tests {
     }
     #[test]
     fn test_is_allow_deny_ip_range() {
-        let allow_object = AllowDenyObject {
+        let allow_object = AllowDenyItem {
             limit_type: AllowType::Deny,
             value: Some(String::from("192.168.0.1/16")),
         };
@@ -137,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_is_allow_not_mapping1() {
-        let allow_object = AllowDenyObject {
+        let allow_object = AllowDenyItem {
             limit_type: AllowType::Allow,
             value: Some(String::from("192.168.0.1")),
         };
@@ -147,7 +174,7 @@ mod tests {
     }
     #[test]
     fn test_is_allow_not_mapping2() {
-        let allow_object = AllowDenyObject {
+        let allow_object = AllowDenyItem {
             limit_type: AllowType::Deny,
             value: Some(String::from("192.168.0.1")),
         };

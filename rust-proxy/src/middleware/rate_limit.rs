@@ -73,14 +73,15 @@ impl LimitLocation {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[derive(Default)]
 pub enum TimeUnit {
+    #[default]
     MillionSecond,
     Second,
     Minute,
     Hour,
     Day,
 }
-
 impl TimeUnit {
     pub fn get_million_second(&self) -> u128 {
         match self {
@@ -103,7 +104,18 @@ pub struct TokenBucketRateLimit {
     #[serde(skip_serializing, skip_deserializing, default = "default_time")]
     pub last_update_time: SystemTime,
 }
-
+impl Default for TokenBucketRateLimit {
+    fn default() -> Self {
+        TokenBucketRateLimit {
+            last_update_time: SystemTime::now(),
+            rate_per_unit: 0,
+            unit: TimeUnit::default(),
+            capacity: 0,
+            limit_location: LimitLocation::default(),
+            current_count: 0,
+        }
+    }
+}
 fn default_time() -> SystemTime {
     SystemTime::now()
 }
@@ -216,5 +228,105 @@ impl FixedWindowRateLimit {
         let counter = self.count_map.entry(key).or_insert(0);
         *counter += 1;
         Ok(*counter > self.rate_per_unit as i32)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn test_token_bucket_rate_limit() {
+        let mut headers = HeaderMap::new();
+        headers.insert("test-header", "test-value".parse().unwrap());
+
+        let socket_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let mut rate_limit = TokenBucketRateLimit {
+            rate_per_unit: 10,
+            unit: TimeUnit::Second,
+            capacity: 10,
+            limit_location: LimitLocation::IP(IPBasedRatelimit {
+                value: "127.0.0.1".to_string(),
+            }),
+            current_count: 5,
+            last_update_time: SystemTime::now(),
+        };
+
+        assert!(!rate_limit.should_limit(&headers, &socket_addr).unwrap());
+
+        rate_limit.current_count = 0;
+        assert!(rate_limit.should_limit(&headers, &socket_addr).unwrap());
+    }
+
+    #[test]
+    fn test_fixed_window_rate_limit() {
+        let mut headers = HeaderMap::new();
+        headers.insert("test-header", "test-value".parse().unwrap());
+
+        let socket_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let mut rate_limit = FixedWindowRateLimit {
+            rate_per_unit: 2,
+            unit: TimeUnit::Second,
+            limit_location: LimitLocation::IP(IPBasedRatelimit {
+                value: "127.0.0.1".to_string(),
+            }),
+            count_map: HashMap::new(),
+        };
+
+        assert!(!rate_limit.should_limit(&headers, &socket_addr).unwrap());
+        assert!(!rate_limit.should_limit(&headers, &socket_addr).unwrap());
+
+        assert!(rate_limit.should_limit(&headers, &socket_addr).unwrap());
+    }
+
+    #[test]
+    fn test_ip_range_rate_limit() {
+        let headers = HeaderMap::new();
+        let socket_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), 8080);
+
+        let mut rate_limit = TokenBucketRateLimit {
+            rate_per_unit: 10,
+            unit: TimeUnit::Second,
+            capacity: 10,
+            limit_location: LimitLocation::Iprange(IpRangeBasedRatelimit {
+                value: "192.168.1.0/24".to_string(),
+            }),
+            current_count: 5,
+            last_update_time: SystemTime::now(),
+        };
+
+        assert!(!rate_limit.should_limit(&headers, &socket_addr).unwrap());
+
+        let socket_addr_outside = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 2, 1)), 8080);
+        assert!(!rate_limit
+            .should_limit(&headers, &socket_addr_outside)
+            .unwrap());
+    }
+
+    #[test]
+    fn test_header_based_rate_limit() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-API-Key", "test-key".parse().unwrap());
+
+        let socket_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let mut rate_limit = TokenBucketRateLimit {
+            rate_per_unit: 10,
+            unit: TimeUnit::Second,
+            capacity: 10,
+            limit_location: LimitLocation::Header(HeaderBasedRatelimit {
+                key: "X-API-Key".to_string(),
+                value: "test-key".to_string(),
+            }),
+            current_count: 5,
+            last_update_time: SystemTime::now(),
+        };
+
+        assert!(!rate_limit.should_limit(&headers, &socket_addr).unwrap());
+
+        headers.insert("X-API-Key", "wrong-key".parse().unwrap());
+        assert!(!rate_limit.should_limit(&headers, &socket_addr).unwrap());
     }
 }

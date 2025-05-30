@@ -287,3 +287,83 @@ impl HeaderName {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 测试 CorsAllowedOrigins 序列化
+    #[test]
+    fn test_cors_allowed_origins_serialize() {
+        let all = CorsAllowedOrigins::All;
+        let origins = CorsAllowedOrigins::Origins(vec!["http://localhost:3000".to_string()]);
+
+        assert_eq!(serde_json::to_string(&all).unwrap(), "\"*\"");
+        assert_eq!(
+            serde_json::to_string(&origins).unwrap(),
+            "[\"http://localhost:3000\"]"
+        );
+    }
+
+    // 测试 CorsAllowedOrigins 反序列化
+    #[test]
+    fn test_cors_allowed_origins_deserialize() {
+        let all: CorsAllowedOrigins = serde_json::from_str("\"*\"").unwrap();
+        let origins: CorsAllowedOrigins =
+            serde_json::from_str("[\"http://localhost:3000\"]").unwrap();
+
+        assert_eq!(all, CorsAllowedOrigins::All);
+        assert_eq!(
+            origins,
+            CorsAllowedOrigins::Origins(vec!["http://localhost:3000".to_string()])
+        );
+    }
+
+    // 测试 CorsConfig 验证源
+    #[test]
+    fn test_validate_origin() {
+        let config = CorsConfig {
+            allowed_origins: CorsAllowedOrigins::Origins(vec!["http://localhost:\\d+".to_string()]),
+            allowed_methods: vec![Method::Get],
+            allowed_headers: None,
+            allow_credentials: Some(true),
+            max_age: None,
+            options_passthrough: None,
+        };
+
+        assert!(config.validate_origin("http://localhost:3000").unwrap());
+        assert!(!config.validate_origin("http://example.com").unwrap());
+    }
+
+    // 测试 Method 枚举
+    #[test]
+    fn test_method() {
+        assert_eq!(Method::Get.as_str(), "GET");
+        assert_eq!(Method::Post.as_str(), "POST");
+        assert_eq!(Method::Put.as_str(), "PUT");
+        assert_eq!(Method::Delete.as_str(), "DELETE");
+        assert_eq!(Method::Head.as_str(), "HEAD");
+        assert_eq!(Method::Options.as_str(), "OPTIONS");
+    }
+
+    // 测试 HeaderName 枚举
+    #[test]
+    fn test_header_name() {
+        assert_eq!(HeaderName::ContentType.as_str(), "Content-Type");
+        assert_eq!(HeaderName::Authorization.as_str(), "Authorization");
+        assert_eq!(HeaderName::Accepts.as_str(), "Accepts");
+        assert_eq!(HeaderName::SetCookie.as_str(), "Set-Cookie");
+        assert_eq!(HeaderName::Cookie.as_str(), "Cookie");
+        assert_eq!(HeaderName::Range.as_str(), "Range");
+    }
+
+    // 测试 CorsAllowHeader 序列化和反序列化
+    #[test]
+    fn test_cors_allow_header() {
+        let all = CorsAllowHeader::All;
+        let headers =
+            CorsAllowHeader::Headers(vec![HeaderName::ContentType, HeaderName::Authorization]);
+
+        assert_eq!(serde_json::to_string(&all).unwrap(), "\"*\"");
+        assert_eq!(headers.to_string(), "Content-Type, Authorization");
+    }
+}

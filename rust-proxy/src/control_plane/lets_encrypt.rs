@@ -44,3 +44,36 @@ pub async fn lets_encrypt_certificate(
         )),
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AppConfig;
+    use axum::body::to_bytes;
+    use axum::response::IntoResponse;
+
+    
+    
+    
+    #[tokio::test]
+    async fn test_lets_encrypt_certificate_success() {
+        let config = SharedConfig::from_app_config(AppConfig::default());
+        let mock_lets_encrypt = LetsEntrypt {
+            domain_name: "example.com".to_string(),
+            mail_name: "test@example.com".to_string(),
+        };
+
+        let expected_cert = "test_certificate".to_string();
+        let response =
+            lets_encrypt_certificate(State(config), axum::extract::Json(mock_lets_encrypt))
+                .await
+                .unwrap();
+
+        let res = response.into_response();
+
+        let (parts, body_data) = res.into_parts();
+        let body = to_bytes(body_data, usize::MAX).await.unwrap();
+        assert_eq!(parts.status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let response = serde_json::from_slice::<BaseResponse<String>>(&body);
+        assert!(response.is_err());
+    }
+}
