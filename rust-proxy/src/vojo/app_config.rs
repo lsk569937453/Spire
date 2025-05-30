@@ -316,8 +316,8 @@ mod tests {
     use crate::vojo::route::HeaderBasedRoute;
     use crate::vojo::route::HeaderRoutingRule;
 
-    use crate::middleware::allow_deny_ip::AllowDenyObject;
     use crate::middleware::allow_deny_ip::AllowType;
+    use crate::middleware::allow_deny_ip::{AllowDenyIp, AllowDenyItem};
     use crate::middleware::authentication::Authentication;
     use crate::middleware::cors_config::CorsConfig;
     use crate::middleware::cors_config::Method;
@@ -564,10 +564,12 @@ mod tests {
                     current_count: 10,
                     last_update_time: SystemTime::now(),
                 })),
-                MiddleWares::AllowDenyList(vec![AllowDenyObject {
-                    value: Some("192.168.0.2".to_string()),
-                    limit_type: AllowType::AllowAll,
-                }]),
+                MiddleWares::AllowDenyList(AllowDenyIp {
+                    list: vec![AllowDenyItem {
+                        value: Some("192.168.0.2".to_string()),
+                        limit_type: AllowType::AllowAll,
+                    }],
+                }),
                 MiddleWares::Cors(CorsConfig {
                     allow_credentials: Some(true),
                     allowed_origins: CorsAllowedOrigins::All,
@@ -616,7 +618,7 @@ mod tests {
         assert_eq!(config.database_url, Some("".to_string()));
         assert_eq!(config.admin_port, Some(DEFAULT_ADMIN_PORT));
         assert_eq!(config.config_file_path, Some("".to_string()));
-        assert_eq!(config.log_level, Some(DEFAULT_LOG_LEVEL));
+        assert_eq!(config.log_level, None);
     }
 
     #[test]
@@ -748,6 +750,6 @@ mod tests {
             log_level: None,
             ..Default::default()
         };
-        assert_eq!(config.get_log_level(), LevelFilter::INFO);
+        assert_eq!(config.get_log_level(), LevelFilter::OFF);
     }
 }

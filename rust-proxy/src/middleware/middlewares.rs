@@ -1,5 +1,6 @@
-use crate::middleware::allow_deny_ip::AllowDenyObject;
-use crate::middleware::allow_deny_ip::AllowResult;
+use super::forward_header::ForwardHeader;
+use super::headers::StaticResourceHeaders;
+use crate::middleware::allow_deny_ip::AllowDenyIp;
 use crate::middleware::authentication::Authentication;
 use crate::middleware::cors_config::CorsConfig;
 use crate::middleware::rate_limit::Ratelimit;
@@ -14,9 +15,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
-
-use super::forward_header::ForwardHeader;
-use super::headers::StaticResourceHeaders;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "PascalCase")]
 pub enum MiddleWares {
@@ -25,7 +23,7 @@ pub enum MiddleWares {
     #[serde(rename = "authentication")]
     Authentication(Authentication),
     #[serde(rename = "allow_deny_list")]
-    AllowDenyList(Vec<AllowDenyObject>),
+    AllowDenyList(AllowDenyIp),
     #[serde(rename = "cors")]
     Cors(CorsConfig),
     #[serde(rename = "rewrite_headers")]
@@ -57,7 +55,7 @@ impl MiddleWares {
                 }
             }
             MiddleWares::AllowDenyList(allow_deny_list) => {
-                let is_allowed = ip_is_allowed(Some(allow_deny_list.clone()), peer_addr)?;
+                let is_allowed = allow_deny_list.ip_is_allowed(peer_addr)?;
                 if !is_allowed {
                     return Ok(is_allowed);
                 }
@@ -95,37 +93,117 @@ impl MiddleWares {
         Ok(())
     }
 }
-pub fn ip_is_allowed(
-    allow_deny_list: Option<Vec<AllowDenyObject>>,
-    peer_addr: &SocketAddr,
-) -> Result<bool, AppError> {
-    if allow_deny_list.is_none()
-        || allow_deny_list
-            .clone()
-            .ok_or("allow_deny_list is none")?
-            .is_empty()
-    {
-        return Ok(true);
-    }
-    let allow_deny_list = allow_deny_list.ok_or("allow_deny_list is none")?;
-    let ip = peer_addr.ip().to_string();
-    for item in allow_deny_list {
-        let is_allow = item.is_allow(ip.clone());
-        match is_allow {
-            Ok(AllowResult::Allow) => {
-                return Ok(true);
-            }
-            Ok(AllowResult::Deny) => {
-                return Ok(false);
-            }
-            Ok(AllowResult::Notmapping) => {
-                continue;
-            }
-            Err(err) => {
-                return Err(AppError(err.to_string()));
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::middleware::allow_deny_ip::AllowType;
+    use crate::middleware::cors_config::{CorsAllowHeader, CorsAllowedOrigins, Method};
+    use crate::middleware::{
+        allow_deny_ip::AllowDenyItem, authentication::BasicAuth, rate_limit::TokenBucketRateLimit,
+    };
+    use http::header;
+    use std::net::IpAddr;
+    use std::net::Ipv4Addr;
+    #[test]
+    fn test_rate_limit_middleware() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::USER_AGENT, "test-agent".parse().unwrap());
+        let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        println!("a-----------------");
+        let mut middleware =
+            MiddleWares::RateLimit(Ratelimit::TokenBucket(TokenBucketRateLimit::default()));
+
+        let result = middleware.is_allowed(&socket, Some(&headers));
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+
+        let result = middleware.is_allowed(&socket, Some(&headers));
+        assert!(result.is_ok());
+        assert!(result.unwrap());
     }
 
-    Ok(true)
+    #[test]
+    fn test_authentication_middleware() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Bearer test-token".parse().unwrap());
+        let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let mut middleware = MiddleWares::Authentication(Authentication::Basic(BasicAuth {
+            credentials: "test-token".to_string(),
+        }));
+
+        let result = middleware.is_allowed(&socket, Some(&headers));
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer invalid-token".parse().unwrap(),
+        );
+        let result = middleware.is_allowed(&socket, Some(&headers));
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_allow_deny_list_middleware() {
+        let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let mut middleware = MiddleWares::AllowDenyList(AllowDenyIp {
+            list: vec![AllowDenyItem {
+                limit_type: AllowType::Allow,
+                value: Some("127.0.0.1".to_string()),
+            }],
+        });
+
+        let result = middleware.is_allowed(&socket, None);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+
+        let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), 8080);
+        let result = middleware.is_allowed(&socket, None);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_cors_middleware() {
+        let cors_config = CorsConfig {
+            allowed_origins: CorsAllowedOrigins::All,
+            allowed_methods: vec![Method::Get],
+            allowed_headers: Some(CorsAllowHeader::All),
+            allow_credentials: Some(true),
+            max_age: None,
+            options_passthrough: None,
+        };
+        let middleware = MiddleWares::Cors(cors_config);
+
+        let mut response = Response::builder().body(BoxBody::default()).unwrap();
+
+        let result = middleware.handle_before_response("", &mut response);
+        assert!(result.is_ok());
+
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "*"
+        );
+    }
+
+    #[test]
+    fn test_forward_header_middleware() {
+        let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let middleware = MiddleWares::ForwardHeader(ForwardHeader {});
+
+        let mut request = Request::builder().body(BoxBody::default()).unwrap();
+
+        let result = middleware.handle_before_request(socket, &mut request);
+        assert!(result.is_ok());
+
+        assert_eq!(
+            request.headers().get("X-Forwarded-For").unwrap(),
+            "127.0.0.1"
+        );
+    }
 }
