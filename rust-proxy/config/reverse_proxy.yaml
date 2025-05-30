@@ -9,10 +9,6 @@ services:
           matcher:
             prefix: /
             prefix_rewrite: /
-          router:
-            type: file
-            doc_root: D:\code\github\gitstats\kvrocks
+          router: http://127.0.0.1:8090
           middlewares:
-            - type: rewrite_headers
-              expires: 24h
-              extensions: [js, css, html, png, jpg, gif]
+            - type: forward_headers

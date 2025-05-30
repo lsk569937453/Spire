@@ -9,7 +9,7 @@ services:
             prefix: /
             prefix_rewrite: /
           router:
-            type: Random
+            type: random
             routes:
               - endpoint: http://localhost:6666/
           health_check:
@@ -28,7 +28,7 @@ services:
             prefix: /
             prefix_rewrite: /
           router:
-            type: Random
+            type: random
             routes:
               - endpoint: http://127.0.0.1:9394
               - endpoint: http://127.0.0.1:8090
