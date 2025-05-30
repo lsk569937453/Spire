@@ -8,6 +8,7 @@ use bytes::Bytes;
 use http::header;
 use http::header::HeaderMap;
 use http::HeaderValue;
+use http::Request;
 use http::StatusCode;
 use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
@@ -40,7 +41,7 @@ impl SpireContext {
     }
 }
 pub trait ChainTrait {
-    async fn handle_before_request(
+    async fn get_destination(
         &self,
         shared_config: SharedConfig,
         port: i32,
@@ -61,6 +62,12 @@ pub trait ChainTrait {
         cors_config: CorsConfig,
         origin: &str,
     ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError>;
+    async fn handle_before_request(
+        &self,
+        middlewares: Vec<MiddleWares>,
+        peer_addr: SocketAddr,
+        req: &mut Request<BoxBody<Bytes, Infallible>>,
+    ) -> Result<(), AppError>;
 }
 pub struct CommonCheckRequest;
 
@@ -110,6 +117,18 @@ impl ChainTrait for CommonCheckRequest {
         Ok(())
     }
     async fn handle_before_request(
+        &self,
+        middlewares: Vec<MiddleWares>,
+
+        peer_addr: SocketAddr,
+        req: &mut Request<BoxBody<Bytes, Infallible>>,
+    ) -> Result<(), AppError> {
+        for item in middlewares.iter() {
+            item.handle_before_request(peer_addr, req)?;
+        }
+        Ok(())
+    }
+    async fn get_destination(
         &self,
         shared_config: SharedConfig,
         port: i32,
@@ -252,7 +271,7 @@ mod tests {
         let peer_addr = "127.0.0.1:12345".parse().unwrap();
 
         let result = checker
-            .handle_before_request(
+            .get_destination(
                 shared_config,
                 8080,
                 "test".into(),
@@ -299,7 +318,7 @@ mod tests {
         let peer_addr = "127.0.0.1:12345".parse().unwrap();
 
         let result = checker
-            .handle_before_request(
+            .get_destination(
                 shared_config,
                 8080,
                 "test".into(),
@@ -331,7 +350,7 @@ mod tests {
         let peer_addr = "127.0.0.1:12345".parse().unwrap();
 
         let result = checker
-            .handle_before_request(
+            .get_destination(
                 shared_config,
                 8080,
                 "test".into(),

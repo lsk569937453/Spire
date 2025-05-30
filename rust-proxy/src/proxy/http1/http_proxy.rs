@@ -253,7 +253,7 @@ async fn proxy(
     let uri = req.uri().clone();
     let mut spire_context = SpireContext::new(port, None);
     let handling_result = chain_trait
-        .handle_before_request(
+        .get_destination(
             shared_config.clone(),
             port,
             mapping_key.clone(),
@@ -263,7 +263,7 @@ async fn proxy(
             &mut spire_context,
         )
         .await?;
-    debug!("The handle before request is {:?}", handling_result);
+    debug!("The get_destination is {:?}", handling_result);
     if handling_result.is_none() {
         return Ok(Response::builder()
             .status(StatusCode::FORBIDDEN)
@@ -293,6 +293,13 @@ async fn proxy(
     if let Some(check_request) = handling_result {
         let request_path = check_request.request_path.as_str();
         let router_destination = check_request.router_destination;
+        if let Some(middlewares) = spire_context.middlewares.clone() {
+            if !middlewares.is_empty() {
+                chain_trait
+                    .handle_before_request(middlewares, remote_addr, &mut req)
+                    .await?;
+            }
+        }
         let mut res = if router_destination.is_file() {
             let mut parts = req.uri().clone().into_parts();
             parts.path_and_query = Some(request_path.try_into()?);

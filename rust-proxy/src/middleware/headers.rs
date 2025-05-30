@@ -10,12 +10,7 @@ use serde::Serialize;
 use std::convert::Infallible;
 use std::time::Duration;
 use std::time::SystemTime;
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum Headers {
-    #[serde(rename = "file")]
-    StaticSource(StaticResourceHeaders),
-}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StaticResourceHeaders {
     expires: Duration,
@@ -98,18 +93,18 @@ impl StaticResourceHeaders {
         Ok(())
     }
 }
-impl Headers {
-    pub fn handle_before_response(
-        &self,
-        req_path: &str,
+// impl Headers {
+//     pub fn handle_before_response(
+//         &self,
+//         req_path: &str,
 
-        response: &mut Response<BoxBody<Bytes, Infallible>>,
-    ) -> Result<(), AppError> {
-        match self {
-            Headers::StaticSource(static_source) => {
-                static_source.handle_before_response(req_path, response)?;
-            }
-        }
-        Ok(())
-    }
-}
+//         response: &mut Response<BoxBody<Bytes, Infallible>>,
+//     ) -> Result<(), AppError> {
+//         match self {
+//             Headers::StaticSource(static_source) => {
+//                 static_source.handle_before_response(req_path, response)?;
+//             }
+//         }
+//         Ok(())
+//     }
+// }

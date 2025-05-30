@@ -2,20 +2,23 @@ use crate::middleware::allow_deny_ip::AllowDenyObject;
 use crate::middleware::allow_deny_ip::AllowResult;
 use crate::middleware::authentication::Authentication;
 use crate::middleware::cors_config::CorsConfig;
-use crate::middleware::headers::Headers;
 use crate::middleware::rate_limit::Ratelimit;
 use crate::AppError;
 use bytes::Bytes;
 use http::HeaderMap;
 use http::HeaderValue;
+use http::Request;
 use http::Response;
 use http_body_util::combinators::BoxBody;
 use serde::Deserialize;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
+
+use super::forward_header::ForwardHeader;
+use super::headers::StaticResourceHeaders;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "PascalCase", content = "content")]
+#[serde(tag = "type", rename_all = "PascalCase")]
 pub enum MiddleWares {
     #[serde(rename = "rate_limit")]
     RateLimit(Ratelimit),
@@ -25,8 +28,10 @@ pub enum MiddleWares {
     AllowDenyList(Vec<AllowDenyObject>),
     #[serde(rename = "cors")]
     Cors(CorsConfig),
-    #[serde(rename = "headers")]
-    Headers(Headers),
+    #[serde(rename = "rewrite_headers")]
+    Headers(StaticResourceHeaders),
+    #[serde(rename = "forward_headers")]
+    ForwardHeader(ForwardHeader),
 }
 impl MiddleWares {
     pub fn is_allowed(
@@ -75,6 +80,17 @@ impl MiddleWares {
                 headers.handle_before_response(req_path, response)?;
             }
             _ => {}
+        }
+        Ok(())
+    }
+    pub fn handle_before_request(
+        &self,
+        peer_addr: SocketAddr,
+
+        req: &mut Request<BoxBody<Bytes, Infallible>>,
+    ) -> Result<(), AppError> {
+        if let MiddleWares::ForwardHeader(forward_header) = self {
+            forward_header.handle_before_request(peer_addr, req)?;
         }
         Ok(())
     }
