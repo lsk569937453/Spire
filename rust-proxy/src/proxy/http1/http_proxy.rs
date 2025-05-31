@@ -374,11 +374,18 @@ async fn route_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::configuration_service::logger::setup_logger_for_test;
+    use crate::vojo::app_config::{ApiService, ServiceConfig};
+    use crate::vojo::app_config::{Matcher, Route};
+    use crate::vojo::route::{BaseRoute, RandomRoute, Router};
     use crate::{vojo::route::StaticFileRoute, AppConfig};
     use http::HeaderMap;
+    use std::collections::HashMap;
+    use std::default;
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
     use std::sync::Mutex;
+    use tracing::level_filters::LevelFilter;
     #[test]
     fn test_http_proxy_creation() {
         let (tx, rx) = mpsc::channel(1);
@@ -424,11 +431,14 @@ mod tests {
         let response = result.unwrap();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
-
     #[tokio::test]
     async fn test_options_preflight_request() {
+        // let _ = setup_logger_for_test();
         let mut headers = HeaderMap::new();
-        headers.insert(header::ORIGIN, HeaderValue::from_static("http://localhost"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://127.0.0.1:8080"),
+        );
         headers.insert(
             header::ACCESS_CONTROL_REQUEST_METHOD,
             HeaderValue::from_static("POST"),
@@ -436,13 +446,40 @@ mod tests {
 
         let client = HttpClients::new();
         let shared_config = SharedConfig {
-            shared_data: Arc::new(Mutex::new(AppConfig::default())),
+            shared_data: Arc::new(Mutex::new(AppConfig {
+                static_config: Default::default(),
+                api_service_config: HashMap::from([(
+                    8080,
+                    ApiService {
+                        listen_port: 8080,
+                        service_config: ServiceConfig {
+                            routes: vec![Route {
+                                router: Router::Random(RandomRoute {
+                                    routes: vec![BaseRoute {
+                                        endpoint: "http://127.0.0.1:9394".to_string(),
+                                        ..Default::default()
+                                    }],
+                                }),
+                                matcher: Some(Matcher {
+                                    prefix: "/".to_string(),
+                                    prefix_rewrite: "/".to_string(),
+                                }),
+
+                                ..Default::default()
+                            }],
+
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )]),
+            })),
         };
         let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
 
         let mut req = Request::builder()
             .method(Method::OPTIONS)
-            .uri("http://localhost/test")
+            .uri("http://127.0.0.1:8080/test")
             .body(Full::new(Bytes::from("")).boxed())
             .unwrap();
         req.headers_mut().extend(headers);
@@ -457,11 +494,10 @@ mod tests {
             CommonCheckRequest {},
         )
         .await;
-
+        println!("result is {:?}", result);
         assert!(result.is_err());
     }
 
-    // 测试文件路由功能
     #[tokio::test]
     async fn test_route_file() {
         let router_destination = RouterDestination::File(StaticFileRoute {
