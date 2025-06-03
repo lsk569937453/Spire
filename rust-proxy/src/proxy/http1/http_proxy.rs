@@ -374,18 +374,18 @@ async fn route_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configuration_service::logger::setup_logger_for_test;
+    
     use crate::vojo::app_config::{ApiService, ServiceConfig};
     use crate::vojo::app_config::{Matcher, Route};
     use crate::vojo::route::{BaseRoute, RandomRoute, Router};
     use crate::{vojo::route::StaticFileRoute, AppConfig};
     use http::HeaderMap;
     use std::collections::HashMap;
-    use std::default;
+    
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
     use std::sync::Mutex;
-    use tracing::level_filters::LevelFilter;
+    
     #[test]
     fn test_http_proxy_creation() {
         let (tx, rx) = mpsc::channel(1);

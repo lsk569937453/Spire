@@ -8,33 +8,6 @@ English [简体中文](./README-zh_CN.md)
 The Spire is a high-performance reverse proxy/load balancer. And it could be also used as the ingress
 controller in the k8s.
 
-## Spire-Dashboard
-
-###
-
-Start the Spire-Dashboard over docker-compose.  
-The docker-compose.yaml is like following:
-
-```
-version: "3.9"
-services:
-  spire-dashboard:
-    image: lsk569937453/spire-dashboard:0.0.7
-    container_name: spire-dashboard
-    ports:
-      - "4486:4486"
-
-  spire:
-      image: lsk569937453/spire:0.0.7
-      container_name: spire
-      ports:
-        - "6980:6980"
-      environment:
-        ADMIN_PORT: 6980
-```
-
-You could check the [main page](http://localhost:4486/index.html) for Spire -Dashboard after you execute the **docker-compose up** command.
-
 ## Why we chose Spire
 
 ### Benchmarks
@@ -67,24 +40,6 @@ You could change the configuration over the rest API. And the new configuration 
 
 ## Compile or Download the release
 
-### Install the openssl
-
-#### Mac & Linux
-
-https://docs.rs/openssl/latest/openssl/
-
-#### Windows
-
-Install openssl as following:
-
-```
-> git clone https://github.com/microsoft/vcpkg
-> .\vcpkg\bootstrap-vcpkg.bat
-> .\vcpkg.exe install openssl
-```
-
-Install strawberryperl from https://strawberryperl.com/.
-
 ### Compile
 
 You have to install the rust first.
@@ -110,7 +65,7 @@ static_config:
 services:
   - listen_port: 8084
     service_config:
-      server_type: http
+      server_type: Http
       routes:
         - route_id: test_route
           matcher:
@@ -121,7 +76,7 @@ services:
 
 The proxy will listen the 9969 port and forward the traffic to the http://localhost:8888/,http://localhost:9999/.http://localhost:7777/.
 
-### Spire as the tcp proxy
+### Spire as the static file server
 
 ```
 static_config:
@@ -129,7 +84,7 @@ static_config:
 services:
   - listen_port: 8084
     service_config:
-      server_type: http
+      server_type: Http
       routes:
         - route_id: test_route
           matcher:
@@ -149,75 +104,7 @@ services:
 #### Windows Startup
 
 ```
-$env:CONFIG_FILE_PATH='D:\code\app_config.yaml'; .\rust-proxy.exe
-```
-
-Or you could start without the config file like the following:
-
-```
-.\rust-proxy.exe
-```
-
-## Rest Api
-
-### Create the routes
-
-```
-POST /appConfig HTTP/1.1
-Host: 127.0.0.1:8870
-Content-Type: application/json
-Content-Length: 1752
-
-```
-
-### Get the appConfig
-
-```
-GET /appConfig HTTP/1.1
-Host: 127.0.0.1:8870
-```
-
-### Update the routes
-
-```
-PUT /route HTTP/1.1
-Host: 127.0.0.1:8870
-Content-Type: application/json
-Content-Length: 629
-
-{
-    "route_id": "90c66439-5c87-4902-aebb-1c2c9443c154",
-    "host_name": null,
-    "matcher": {
-        "prefix": "/",
-        "prefix_rewrite": "ssss"
-    },
-    "allow_deny_list": null,
-    "authentication": null,
-    "anomaly_detection": null,
-    "liveness_config": null,
-    "health_check": null,
-    "ratelimit": null,
-    "route_cluster": {
-        "type": "RandomRoute",
-        "routes": [
-            {
-                "base_route": {
-                    "endpoint": "http://127.0.0.1:10000",
-                    "try_file": null,
-                    "is_alive": null
-                }
-            }
-        ]
-    }
-}
-```
-
-### Delete the route
-
-```
-DELETE /route/90c66439-5c87-4902-aebb-1c2c9443c154 HTTP/1.1
-Host: 127.0.0.1:8870
+.\target\release\spire.exe -f .\config\app_config_simple.yaml
 ```
 
 ## <span id="api-gateway">The Base Function in Api Gateway</span>

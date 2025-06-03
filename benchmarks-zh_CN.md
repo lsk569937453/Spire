@@ -54,14 +54,14 @@ Caddy 的测试结果太差，图表中不再展示。在下一章中有全部�
 hey -n 100000 -c 250 -m GET http://haproxy:80/
 
 Summary:
-  Total:	1.2244 secs
-  Slowest:	0.0890 secs
-  Fastest:	0.0001 secs
-  Average:	0.0030 secs
-  Requests/sec:	81674.2776
+  Total:        1.1709 secs
+  Slowest:      0.0496 secs
+  Fastest:      0.0001 secs
+  Average:      0.0029 secs
+  Requests/sec: 85406.0342
 
-  Total data:	13300000 bytes
-  Size/request:	133 bytes
+  Total data:   15300000 bytes
+  Size/request: 153 bytes
 
 Response time histogram:
   0.000 [1]     |
@@ -108,46 +108,45 @@ Status code distribution:
 
 ```
 hey -n 100000 -c 250 -m GET http://spire:6667
-hey -n 100000 -c 250 -m GET http://hyper:8084/get
 Summary:
-  Total:	1.5067 secs
-  Slowest:	0.0199 secs
-  Fastest:	0.0001 secs
-  Average:	0.0037 secs
-  Requests/sec:	66370.1064
+  Total:        0.9278 secs
+  Slowest:      0.0662 secs
+  Fastest:      0.0001 secs
+  Average:      0.0023 secs
+  Requests/sec: 107776.3415
 
-  Total data:	13800000 bytes
-  Size/request:	138 bytes
+  Total data:   15500000 bytes
+  Size/request: 155 bytes
 
 Response time histogram:
   0.000 [1]     |
-  0.005 [97642] |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
-  0.011 [1220]  |
-  0.016 [387]   |
-  0.021 [26]    |
-  0.026 [472]   |
-  0.032 [2]     |
-  0.037 [0]     |
-  0.042 [0]     |
-  0.048 [242]   |
-  0.053 [8]     |
+  0.007 [98550] |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.013 [729]   |
+  0.020 [220]   |
+  0.027 [250]   |
+  0.033 [0]     |
+  0.040 [0]     |
+  0.046 [0]     |
+  0.053 [66]    |
+  0.060 [113]   |
+  0.066 [71]    |
 
 
 Latency distribution:
   10% in 0.0009 secs
   25% in 0.0012 secs
-  50% in 0.0016 secs
-  75% in 0.0024 secs
-  90% in 0.0036 secs
-  95% in 0.0044 secs
-  99% in 0.0118 secs
+  50% in 0.0017 secs
+  75% in 0.0026 secs
+  90% in 0.0038 secs
+  95% in 0.0046 secs
+  99% in 0.0092 secs
 
 Details (average, fastest, slowest):
-  DNS+dialup:   0.0000 secs, 0.0001 secs, 0.0528 secs
-  DNS-lookup:   0.0000 secs, 0.0000 secs, 0.0486 secs
-  req write:    0.0000 secs, 0.0000 secs, 0.0481 secs
-  resp wait:    0.0020 secs, 0.0001 secs, 0.0448 secs
-  resp read:    0.0001 secs, 0.0000 secs, 0.0448 secs
+  DNS+dialup:   0.0000 secs, 0.0001 secs, 0.0662 secs
+  DNS-lookup:   0.0001 secs, 0.0000 secs, 0.0621 secs
+  req write:    0.0000 secs, 0.0000 secs, 0.0616 secs
+  resp wait:    0.0020 secs, 0.0001 secs, 0.0557 secs
+  resp read:    0.0002 secs, 0.0000 secs, 0.0524 secs
 
 Status code distribution:
   [200] 100000 responses
@@ -165,14 +164,14 @@ Status code distribution:
 hey -n 100000 -c 250 -m GET http://envoy:8050
 
 Summary:
-  Total:	1.6169 secs
-  Slowest:	0.0276 secs
-  Fastest:	0.0001 secs
-  Average:	0.0040 secs
-  Requests/sec:	61847.1944
+  Total:        2.0816 secs
+  Slowest:      0.0571 secs
+  Fastest:      0.0001 secs
+  Average:      0.0051 secs
+  Requests/sec: 48040.4346
 
-  Total data:	24700000 bytes
-  Size/request:	247 bytes
+  Total data:   29400000 bytes
+  Size/request: 294 bytes
 
 Response time histogram:
   0.000 [1]     |
@@ -331,14 +330,14 @@ Status code distribution:
 hey -n 100000 -c 250 -m GET http://caddy:80/
 
 Summary:
-  Total:	5.6219 secs
-  Slowest:	0.1762 secs
-  Fastest:	0.0001 secs
-  Average:	0.0137 secs
-  Requests/sec:	17787.6741
+  Total:        7.5941 secs
+  Slowest:      0.2924 secs
+  Fastest:      0.0001 secs
+  Average:      0.0183 secs
+  Requests/sec: 13168.1413
 
-  Total data:	20900000 bytes
-  Size/request:	209 bytes
+  Total data:   25700000 bytes
+  Size/request: 257 bytes
 
 Response time histogram:
   0.000 [1]     |

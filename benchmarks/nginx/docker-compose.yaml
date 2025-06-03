@@ -12,6 +12,7 @@ services:
           memory: 8192M
   backend:
     image: ghcr.io/lsk569937453/echo-server:0.0.5
+    container_name: backend
     ports:
       - "9394:80"
     deploy:
