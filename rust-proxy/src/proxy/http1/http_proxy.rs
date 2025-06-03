@@ -219,11 +219,7 @@ async fn proxy_adapter_with_error(
             .body(Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes())).boxed())
             .unwrap()
     });
-    let mut elapsed_time = 0;
-    let elapsed_time_res = current_time.elapsed();
-    if let Ok(elapsed_times) = elapsed_time_res {
-        elapsed_time = elapsed_times.as_millis();
-    }
+    let elapsed_time_res = current_time.elapsed()?;
 
     let status = res.status().as_u16();
     monitor_timer_list
@@ -232,8 +228,8 @@ async fn proxy_adapter_with_error(
     inc(mapping_key.clone(), path.clone(), status);
 
     info!(
-        "{} - -  \"{} {} HTTP/1.1\" {}  \"-\" \"-\"  {}ms",
-        remote_addr, method, path, status, elapsed_time
+        "{} - -  \"{} {} HTTP/1.1\" {}  \"-\" \"-\"  {:?}",
+        remote_addr, method, path, status, elapsed_time_res
     );
     Ok(res)
 }
