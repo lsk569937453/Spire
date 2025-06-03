@@ -184,9 +184,13 @@ impl Route {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, strum_macros::Display)]
 pub enum ServiceType {
     #[default]
+    #[serde(rename = "http")]
     Http,
+    #[serde(rename = "https")]
     Https,
+    #[serde(rename = "tcp")]
     Tcp,
+    #[serde(rename = "tls")]
     Http2,
     Http2Tls,
 }
