@@ -28,7 +28,7 @@ impl FormatTime for LocalTime {
 
 pub fn setup_logger() -> Result<Handle<Targets, Registry>, AppError> {
     let rolling_file_builder = RollingFileAppender::builder()
-        .rotation(rolling::Rotation::MINUTELY)
+        .rotation(rolling::Rotation::HOURLY)
         .filename_prefix("spire")
         .filename_suffix("log")
         .max_log_files(10)
