@@ -6,9 +6,7 @@ services:
         - matcher:
             prefix: /
             prefix_rewrite: ssss
-          route_cluster:
-            type: randomRoute
+          router:
+            type: random
             routes:
-              - base_route:
-                  endpoint: http://backend:80/
-                  try_file: null
+              - endpoint: http://backend:80/

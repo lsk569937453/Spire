@@ -1,22 +1,23 @@
-version: '3.9'
+version: "3.9"
 services:
   test:
     image: demisto/rakyll-hey:1.0.0.44140
-    tty: true 
+    tty: true
     deploy:
       resources:
         limits:
           cpus: "4.0"
           memory: 8192M
   backend:
-    image: jmalloc/echo-server
+    image: ghcr.io/lsk569937453/echo-server:0.0.5
+    container_name: backend
+    ports:
+      - "9394:80"
     deploy:
       resources:
         limits:
           cpus: "4.0"
           memory: 8192M
-    ports:
-    - "9394:8080"
   caddy:
     image: caddy:2.6.4
     ports:
