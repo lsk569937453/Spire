@@ -26,6 +26,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
 use tower_http::cors::CorsLayer;
+static INTERNAL_SERVER_ERROR: &str = "Internal Server Error";
 
 async fn get_app_config(
     State(shared_config): State<SharedConfig>,
@@ -289,8 +290,10 @@ async fn print_request_response(req: Request<axum::body::Body>, next: Next) -> R
     let uri = req.uri().clone();
     let start = Instant::now();
 
+    // 处理请求
     let response = next.run(req).await;
 
+    // 记录日志
     let duration = start.elapsed();
     debug!(
         "{} {} {} {} {:?}",
