@@ -54,7 +54,7 @@ static_config:
 services:
   - listen_port: 8084
     service_config:
-      server_type: Http
+      server_type: http
       routes:
         - route_id: test_route
           matcher:
@@ -74,7 +74,7 @@ static_config:
 services:
   - listen_port: 8084
     service_config:
-      server_type: Http
+      server_type: http
       routes:
         - route_id: test_route
           matcher:

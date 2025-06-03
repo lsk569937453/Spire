@@ -3,7 +3,7 @@ static_config:
 services:
   - listen_port: 4486
     service_config:
-      server_type: Http
+      server_type: http
       routes:
         - matcher:
             prefix: /
@@ -22,7 +22,7 @@ services:
             min_liveness_count: 1
   - listen_port: 9969
     service_config:
-      server_type: Http
+      server_type: http
       routes:
         - matcher:
             prefix: /
