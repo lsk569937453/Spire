@@ -92,7 +92,7 @@ async fn check(
     let service_config_clone = api_service.service_config.clone();
 
     let route = service_config_clone
-        .routes
+        .route_configs
         .first()
         .ok_or("service_config_clone is empty")?;
     let is_allowed = route.clone().is_allowed(&remote_addr, None)?;
@@ -111,7 +111,7 @@ async fn get_route_cluster(
             "Can not get apiservice from mapping_key {}",
             mapping_key
         )))?;
-    let service_config = &value.service_config.routes.clone();
+    let service_config = &value.service_config.route_configs.clone();
     let service_config_clone = service_config.clone();
     if service_config_clone.is_empty() {
         return Err(AppError(String::from("The len of routes is 0")));
@@ -126,11 +126,11 @@ async fn get_route_cluster(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vojo::app_config::{ApiService, AppConfig, Route, ServiceConfig};
-    use crate::vojo::route::BaseRoute;
+    use crate::vojo::app_config::{ApiService, AppConfig, RouteConfig, ServiceConfig};
+    use crate::vojo::router::BaseRoute;
 
-    use crate::vojo::route::WeightBasedRoute;
-    use crate::vojo::route::WeightedRouteItem;
+    use crate::vojo::router::WeightBasedRoute;
+    use crate::vojo::router::WeightedRouteItem;
     use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr};
 
@@ -151,14 +151,14 @@ mod tests {
                 },
             }],
         };
-        let route = Route {
+        let route = RouteConfig {
             route_id: "test_route".to_string(),
-            router: crate::vojo::route::Router::WeightBased(header_based),
+            router: crate::vojo::router::Router::WeightBased(header_based),
             ..Default::default()
         };
         let api_service = ApiService {
             service_config: ServiceConfig {
-                routes: vec![route],
+                route_configs: vec![route],
                 ..Default::default()
             },
             ..Default::default()

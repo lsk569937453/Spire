@@ -1,6 +1,6 @@
 use crate::constants::common_constants::TIMER_WAIT_SECONDS;
 use crate::proxy::http1::http_client::HttpClients;
-use crate::vojo::app_config::Route;
+use crate::vojo::app_config::RouteConfig;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
 use crate::vojo::health_check::HealthCheckType;
@@ -53,7 +53,7 @@ impl TaskKey {
         }
     }
 }
-async fn get_endpoint_list(mut route: Route) -> Vec<String> {
+async fn get_endpoint_list(mut route: RouteConfig) -> Vec<String> {
     let mut result = vec![];
     let base_route_list = route.router.get_all_route().await.unwrap_or(vec![]);
     for item in base_route_list {
@@ -94,7 +94,7 @@ impl HealthCheck {
         let app_config = self.shared_config.shared_data.lock()?.clone();
         let mut route_list = HashMap::new();
         for (_, service_config) in app_config.api_service_config.iter() {
-            for route in &service_config.service_config.routes {
+            for route in &service_config.service_config.route_configs {
                 if route.health_check.is_none() || route.liveness_config.is_none() {
                     continue;
                 }
@@ -158,7 +158,7 @@ impl HealthCheck {
 
 async fn do_http_health_check(
     http_health_check_param: HttpHealthCheckParam,
-    mut route: Route,
+    mut route: RouteConfig,
     timeout_number: i32,
     http_health_check_client: HealthCheckClient,
     shared_config: SharedConfig,
@@ -201,7 +201,7 @@ async fn do_http_health_check(
                 let shared_route = lock
                     .api_service_config
                     .iter_mut()
-                    .flat_map(|(_, item)| &mut item.service_config.routes)
+                    .flat_map(|(_, item)| &mut item.service_config.route_configs)
                     .find(|item| item.route_id == route.route_id);
                 let new_route = match shared_route {
                     Some(route) => route,
@@ -241,7 +241,7 @@ async fn do_http_health_check(
 }
 fn submit_task(
     task_id: u64,
-    route: Route,
+    route: RouteConfig,
     health_check_clients: HealthCheckClient,
     shared_config: SharedConfig,
 ) -> Result<Task, AppError> {

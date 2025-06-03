@@ -371,18 +371,18 @@ async fn route_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    use crate::vojo::app_config::{ApiService, ServiceConfig};
-    use crate::vojo::app_config::{Matcher, Route};
-    use crate::vojo::route::{BaseRoute, RandomRoute, Router};
-    use crate::{vojo::route::StaticFileRoute, AppConfig};
+
+    use crate::vojo::app_config::Matcher;
+    use crate::vojo::app_config::{ApiService, RouteConfig, ServiceConfig};
+    use crate::vojo::router::{BaseRoute, RandomRoute, Router};
+    use crate::{vojo::router::StaticFileRoute, AppConfig};
     use http::HeaderMap;
     use std::collections::HashMap;
-    
+
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
     use std::sync::Mutex;
-    
+
     #[test]
     fn test_http_proxy_creation() {
         let (tx, rx) = mpsc::channel(1);
@@ -450,7 +450,7 @@ mod tests {
                     ApiService {
                         listen_port: 8080,
                         service_config: ServiceConfig {
-                            routes: vec![Route {
+                            route_configs: vec![RouteConfig {
                                 router: Router::Random(RandomRoute {
                                     routes: vec![BaseRoute {
                                         endpoint: "http://127.0.0.1:9394".to_string(),

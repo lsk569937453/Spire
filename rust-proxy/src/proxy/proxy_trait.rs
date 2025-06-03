@@ -1,8 +1,8 @@
 use crate::middleware::cors_config::CorsConfig;
 use crate::middleware::middlewares::MiddleWares;
 use crate::vojo::app_error::AppError;
-use crate::vojo::route::BaseRoute;
-use crate::vojo::route::StaticFileRoute;
+use crate::vojo::router::BaseRoute;
+use crate::vojo::router::StaticFileRoute;
 use crate::SharedConfig;
 use bytes::Bytes;
 use http::header;
@@ -150,7 +150,7 @@ impl ChainTrait for CommonCheckRequest {
                 "Can not find config by port from app config.",
             )))?;
 
-        for item in api_service.service_config.routes.iter_mut() {
+        for item in api_service.service_config.route_configs.iter_mut() {
             let match_result = item.is_matched(backend_path, Some(headers))?;
             if match_result.is_none() {
                 continue;
@@ -236,7 +236,7 @@ mod tests {
     use super::*;
     use crate::vojo::app_config::ApiService;
     use crate::vojo::app_config::AppConfig;
-    use crate::vojo::app_config::Route;
+    use crate::vojo::app_config::RouteConfig;
     use crate::vojo::app_config::ServiceConfig;
     use http::HeaderName;
     use http::HeaderValue;
@@ -251,10 +251,10 @@ mod tests {
             HeaderValue::from_static("test.com"),
         );
 
-        let route = Route::default();
+        let route = RouteConfig::default();
 
         let mut service_config = ServiceConfig::default();
-        service_config.routes.push(route);
+        service_config.route_configs.push(route);
 
         let api_service = ApiService::default();
 
@@ -298,10 +298,10 @@ mod tests {
             HeaderValue::from_static("test.com"),
         );
 
-        let route = Route::default();
+        let route = RouteConfig::default();
 
         let mut service_config = ServiceConfig::default();
-        service_config.routes.push(route);
+        service_config.route_configs.push(route);
 
         let api_service = ApiService::default();
 

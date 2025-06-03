@@ -5,8 +5,8 @@ use crate::utils::uuid::get_uuid;
 use crate::vojo::anomaly_detection::AnomalyDetectionType;
 use crate::vojo::app_error::AppError;
 use crate::vojo::health_check::HealthCheckType;
-use crate::vojo::route::deserialize_router;
-use crate::vojo::route::Router;
+use crate::vojo::router::deserialize_router;
+use crate::vojo::router::Router;
 use http::HeaderMap;
 use http::HeaderValue;
 use regex::Regex;
@@ -95,7 +95,7 @@ fn is_empty(value: &str) -> bool {
     value.is_empty()
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct Route {
+pub struct RouteConfig {
     #[serde(skip_serializing_if = "is_empty", default = "default_route_id")]
     pub route_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -123,7 +123,7 @@ fn default_route_id() -> String {
     get_uuid()
 }
 
-impl Route {
+impl RouteConfig {
     pub fn is_matched(
         &mut self,
         path: &str,
@@ -201,7 +201,7 @@ pub struct ServiceConfig {
     pub cert_str: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_str: Option<String>,
-    pub routes: Vec<Route>,
+    pub route_configs: Vec<RouteConfig>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -313,12 +313,12 @@ mod tests {
     use crate::middleware::rate_limit::TokenBucketRateLimit;
     use crate::vojo::health_check::BaseHealthCheckParam;
     use crate::vojo::health_check::HttpHealthCheckParam;
-    use crate::vojo::route::BaseRoute;
-    use crate::vojo::route::WeightedRouteItem;
+    use crate::vojo::router::BaseRoute;
+    use crate::vojo::router::WeightedRouteItem;
 
     use crate::middleware::cors_config::CorsAllowHeader;
-    use crate::vojo::route::HeaderBasedRoute;
-    use crate::vojo::route::HeaderRoutingRule;
+    use crate::vojo::router::HeaderBasedRoute;
+    use crate::vojo::router::HeaderRoutingRule;
 
     use crate::middleware::allow_deny_ip::AllowType;
     use crate::middleware::allow_deny_ip::{AllowDenyIp, AllowDenyItem};
@@ -327,10 +327,10 @@ mod tests {
     use crate::middleware::cors_config::Method;
     use crate::middleware::rate_limit::LimitLocation;
     use crate::middleware::rate_limit::Ratelimit;
-    use crate::vojo::route::PollRoute;
-    use crate::vojo::route::RandomRoute;
-    use crate::vojo::route::TextMatch;
-    use crate::vojo::route::WeightBasedRoute;
+    use crate::vojo::router::PollRoute;
+    use crate::vojo::router::RandomRoute;
+    use crate::vojo::router::TextMatch;
+    use crate::vojo::router::WeightBasedRoute;
     use http::HeaderValue;
     fn create_api_service1() -> ApiService {
         let mut api_service = ApiService {
@@ -366,14 +366,14 @@ mod tests {
                 },
             ],
         };
-        let route = Route {
+        let route = RouteConfig {
             route_id: "test_route".to_string(),
             router: Router::WeightBased(header_based),
             ..Default::default()
         };
         let service_config = ServiceConfig {
             server_type: ServiceType::Http,
-            routes: vec![route],
+            route_configs: vec![route],
             ..Default::default()
         };
         api_service.service_config = service_config;
@@ -402,7 +402,7 @@ mod tests {
             ],
             current_index: 0,
         };
-        let route = Route {
+        let route = RouteConfig {
             route_id: "test_route".to_string(),
             router: Router::Poll(poll_route),
 
@@ -410,7 +410,7 @@ mod tests {
         };
         let service_config = ServiceConfig {
             server_type: ServiceType::Http,
-            routes: vec![route],
+            route_configs: vec![route],
             ..Default::default()
         };
         api_service.service_config = service_config;
@@ -438,7 +438,7 @@ mod tests {
                 },
             ],
         };
-        let route = Route {
+        let route = RouteConfig {
             route_id: "test_route".to_string(),
             router: Router::Random(poll_route),
 
@@ -446,7 +446,7 @@ mod tests {
         };
         let service_config = ServiceConfig {
             server_type: ServiceType::Http,
-            routes: vec![route],
+            route_configs: vec![route],
             ..Default::default()
         };
         api_service.service_config = service_config;
@@ -458,54 +458,52 @@ mod tests {
             ..Default::default()
         };
 
-        let poll_route = HeaderBasedRoute {
-            routes: vec![
-                HeaderRoutingRule {
-                    base_route: BaseRoute {
-                        endpoint: "http://127.0.0.1:9395".to_string(),
-                        ..Default::default()
-                    },
-                    header_key: "test".to_string(),
-                    header_value_mapping_type: crate::vojo::route::HeaderValueMappingType::Text(
-                        TextMatch {
-                            value: "test".to_string(),
+        let poll_route =
+            HeaderBasedRoute {
+                routes: vec![
+                    HeaderRoutingRule {
+                        base_route: BaseRoute {
+                            endpoint: "http://127.0.0.1:9395".to_string(),
+                            ..Default::default()
                         },
-                    ),
-                },
-                HeaderRoutingRule {
-                    base_route: BaseRoute {
-                        endpoint: "http://127.0.0.1:9396".to_string(),
-                        ..Default::default()
+                        header_key: "test".to_string(),
+                        header_value_mapping_type:
+                            crate::vojo::router::HeaderValueMappingType::Text(TextMatch {
+                                value: "test".to_string(),
+                            }),
                     },
-                    header_key: "test".to_string(),
-                    header_value_mapping_type: crate::vojo::route::HeaderValueMappingType::Text(
-                        TextMatch {
-                            value: "test".to_string(),
+                    HeaderRoutingRule {
+                        base_route: BaseRoute {
+                            endpoint: "http://127.0.0.1:9396".to_string(),
+                            ..Default::default()
                         },
-                    ),
-                },
-                HeaderRoutingRule {
-                    base_route: BaseRoute {
-                        endpoint: "http://127.0.0.1:9397".to_string(),
-                        ..Default::default()
+                        header_key: "test".to_string(),
+                        header_value_mapping_type:
+                            crate::vojo::router::HeaderValueMappingType::Text(TextMatch {
+                                value: "test".to_string(),
+                            }),
                     },
-                    header_key: "test".to_string(),
-                    header_value_mapping_type: crate::vojo::route::HeaderValueMappingType::Text(
-                        TextMatch {
-                            value: "test".to_string(),
+                    HeaderRoutingRule {
+                        base_route: BaseRoute {
+                            endpoint: "http://127.0.0.1:9397".to_string(),
+                            ..Default::default()
                         },
-                    ),
-                },
-            ],
-        };
-        let route = Route {
+                        header_key: "test".to_string(),
+                        header_value_mapping_type:
+                            crate::vojo::router::HeaderValueMappingType::Text(TextMatch {
+                                value: "test".to_string(),
+                            }),
+                    },
+                ],
+            };
+        let route = RouteConfig {
             route_id: "test_route".to_string(),
             router: Router::HeaderBased(poll_route),
             ..Default::default()
         };
         let service_config = ServiceConfig {
             server_type: ServiceType::Http,
-            routes: vec![route],
+            route_configs: vec![route],
             ..Default::default()
         };
         api_service.service_config = service_config;
@@ -534,7 +532,7 @@ mod tests {
                 },
             }],
         };
-        let route = Route {
+        let route = RouteConfig {
             route_id: "test_route".to_string(),
             matcher: Some(Matcher {
                 prefix: "/".to_string(),
@@ -561,7 +559,7 @@ mod tests {
                 MiddleWares::RateLimit(Ratelimit::TokenBucket(TokenBucketRateLimit {
                     capacity: 10,
                     rate_per_unit: 10,
-                    limit_location: LimitLocation::IP(IPBasedRatelimit {
+                    scope: LimitLocation::IP(IPBasedRatelimit {
                         value: "192.168.0.1".to_string(),
                     }),
                     unit: TimeUnit::Second,
@@ -569,9 +567,9 @@ mod tests {
                     last_update_time: SystemTime::now(),
                 })),
                 MiddleWares::AllowDenyList(AllowDenyIp {
-                    list: vec![AllowDenyItem {
+                    rules: vec![AllowDenyItem {
                         value: Some("192.168.0.2".to_string()),
-                        limit_type: AllowType::AllowAll,
+                        policy: AllowType::AllowAll,
                     }],
                 }),
                 MiddleWares::Cors(CorsConfig {
@@ -588,7 +586,7 @@ mod tests {
         };
         let service_config = ServiceConfig {
             server_type: ServiceType::Http,
-            routes: vec![route],
+            route_configs: vec![route],
             ..Default::default()
         };
         api_service.service_config = service_config;
@@ -627,7 +625,7 @@ mod tests {
 
     #[test]
     fn test_route_matching() {
-        let mut route = Route {
+        let mut route = RouteConfig {
             matcher: Some(Matcher {
                 prefix: "/api".to_string(),
                 prefix_rewrite: "/v1".to_string(),
@@ -644,7 +642,7 @@ mod tests {
 
     #[test]
     fn test_route_host_matching() {
-        let mut route = Route {
+        let mut route = RouteConfig {
             host_name: Some("example.com".to_string()),
             matcher: Some(Matcher {
                 prefix: "/api".to_string(),
@@ -690,7 +688,7 @@ mod tests {
 
     #[test]
     fn test_service_config_serialization() {
-        let route = Route {
+        let route = RouteConfig {
             router: Router::WeightBased(WeightBasedRoute {
                 routes: vec![WeightedRouteItem {
                     weight: 1,
@@ -706,7 +704,7 @@ mod tests {
 
         let service_config = ServiceConfig {
             server_type: ServiceType::Http,
-            routes: vec![route],
+            route_configs: vec![route],
             ..Default::default()
         };
 

@@ -4,15 +4,15 @@ services:
   - listen_port: 8084
     service_config:
       server_type: http
-      routes:
+      route_configs:
         - route_id: test_route
           matcher:
             prefix: /
             prefix_rewrite: /
           router:
-            type: file
+            kind: file
             doc_root: D:\code\github\gitstats\kvrocks
           middlewares:
-            - type: rewrite_headers
+            - kind: rewrite_headers
               expires: 24h
               extensions: [js, css, html, png, jpg, gif]

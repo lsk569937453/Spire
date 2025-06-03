@@ -10,7 +10,7 @@ pub struct HttpHealthCheckParam {
     pub path: String,
 }
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "kind")]
 pub enum HealthCheckType {
     HttpGet(HttpHealthCheckParam),
     Redis(BaseHealthCheckParam),

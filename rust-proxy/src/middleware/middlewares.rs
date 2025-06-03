@@ -16,7 +16,7 @@ use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "PascalCase")]
+#[serde(tag = "kind", rename_all = "PascalCase")]
 pub enum MiddleWares {
     #[serde(rename = "rate_limit")]
     RateLimit(Ratelimit),
@@ -149,8 +149,8 @@ mod tests {
     fn test_allow_deny_list_middleware() {
         let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         let mut middleware = MiddleWares::AllowDenyList(AllowDenyIp {
-            list: vec![AllowDenyItem {
-                limit_type: AllowType::Allow,
+            rules: vec![AllowDenyItem {
+                policy: AllowType::Allow,
                 value: Some("127.0.0.1".to_string()),
             }],
         });

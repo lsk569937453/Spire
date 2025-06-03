@@ -13,7 +13,7 @@ use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "PascalCase")]
+#[serde(tag = "limiter", rename_all = "PascalCase")]
 pub enum Ratelimit {
     TokenBucket(TokenBucketRateLimit),
     FixedWindow(FixedWindowRateLimit),
@@ -49,7 +49,7 @@ pub struct IpRangeBasedRatelimit {
     pub value: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "kind")]
 pub enum LimitLocation {
     IP(IPBasedRatelimit),
     Header(HeaderBasedRatelimit),
@@ -72,7 +72,7 @@ impl LimitLocation {
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "kind")]
 #[derive(Default)]
 pub enum TimeUnit {
     #[default]
@@ -98,7 +98,7 @@ pub struct TokenBucketRateLimit {
     pub rate_per_unit: i32,
     pub unit: TimeUnit,
     pub capacity: i32,
-    pub limit_location: LimitLocation,
+    pub scope: LimitLocation,
     #[serde(skip_serializing, skip_deserializing)]
     pub current_count: i32,
     #[serde(skip_serializing, skip_deserializing, default = "default_time")]
@@ -111,7 +111,7 @@ impl Default for TokenBucketRateLimit {
             rate_per_unit: 0,
             unit: TimeUnit::default(),
             capacity: 0,
-            limit_location: LimitLocation::default(),
+            scope: LimitLocation::default(),
             current_count: 0,
         }
     }
@@ -173,7 +173,7 @@ impl TokenBucketRateLimit {
         headers: &HeaderMap<HeaderValue>,
         peer_addr: &SocketAddr,
     ) -> Result<bool, AppError> {
-        if !matched(self.limit_location.clone(), headers, peer_addr)? {
+        if !matched(self.scope.clone(), headers, peer_addr)? {
             return Ok(false);
         }
 
@@ -246,7 +246,7 @@ mod tests {
             rate_per_unit: 10,
             unit: TimeUnit::Second,
             capacity: 10,
-            limit_location: LimitLocation::IP(IPBasedRatelimit {
+            scope: LimitLocation::IP(IPBasedRatelimit {
                 value: "127.0.0.1".to_string(),
             }),
             current_count: 5,
@@ -290,7 +290,7 @@ mod tests {
             rate_per_unit: 10,
             unit: TimeUnit::Second,
             capacity: 10,
-            limit_location: LimitLocation::Iprange(IpRangeBasedRatelimit {
+            scope: LimitLocation::Iprange(IpRangeBasedRatelimit {
                 value: "192.168.1.0/24".to_string(),
             }),
             current_count: 5,
@@ -316,7 +316,7 @@ mod tests {
             rate_per_unit: 10,
             unit: TimeUnit::Second,
             capacity: 10,
-            limit_location: LimitLocation::Header(HeaderBasedRatelimit {
+            scope: LimitLocation::Header(HeaderBasedRatelimit {
                 key: "X-API-Key".to_string(),
                 value: "test-key".to_string(),
             }),

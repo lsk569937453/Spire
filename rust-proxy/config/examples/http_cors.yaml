@@ -2,19 +2,18 @@ services:
   - listen_port: 8084
     service_config:
       server_type: http
-      routes:
-        - route_id: test_route
-          matcher:
+      route_configs:
+        - matcher:
             prefix: /
             prefix_rewrite: /
           router:
-            type: weightBased
+            kind: weightBased
             routes:
               - base_route:
                   endpoint: https://httpbin.org/get
                 weight: 1
           middlewares:
-            - type: cors
+            - kind: cors
               allowed_origins:
                 - http://127.0.0.1
               allowed_methods:

@@ -2,7 +2,7 @@ use crate::constants::common_constants::DEFAULT_TEMPORARY_DIR;
 use crate::control_plane::lets_encrypt::lets_encrypt_certificate;
 use crate::vojo::app_config::ApiService;
 use crate::vojo::app_config::AppConfig;
-use crate::vojo::app_config::Route;
+use crate::vojo::app_config::RouteConfig;
 use crate::vojo::app_config::ServiceType;
 
 use crate::vojo::app_error::AppError;
@@ -112,10 +112,10 @@ async fn post_app_config_with_error(
         .iter_mut()
         .find(|(_, item)| item.listen_port == api_service.listen_port)
     {
-        Some((_, data)) => data.service_config.routes.push(
+        Some((_, data)) => data.service_config.route_configs.push(
             api_service
                 .service_config
-                .routes
+                .route_configs
                 .first()
                 .ok_or(AppError(String::from("The route is empty!")))?
                 .clone(),
@@ -165,9 +165,9 @@ async fn delete_route_with_error(
     for (port, mut api_service) in rw_global_lock.clone().api_service_config {
         api_service
             .service_config
-            .routes
+            .route_configs
             .retain(|route| route.route_id != route_id);
-        if !api_service.service_config.routes.is_empty() {
+        if !api_service.service_config.route_configs.is_empty() {
             api_services.insert(port, api_service);
         }
     }
@@ -207,13 +207,13 @@ async fn put_route_with_error(
 ) -> Result<String, AppError> {
     let (_, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX).await?;
-    let route: Route = serde_yaml::from_slice(&bytes)?;
+    let route: RouteConfig = serde_yaml::from_slice(&bytes)?;
     let mut rw_global_lock = shared_config.shared_data.lock()?;
 
     let old_route = rw_global_lock
         .api_service_config
         .iter_mut()
-        .flat_map(|(_, item)| item.service_config.routes.iter_mut())
+        .flat_map(|(_, item)| item.service_config.route_configs.iter_mut())
         .find(|r| r.route_id == route.route_id)
         .ok_or(AppError(String::from(
             "Can not find the route by route id!",
@@ -253,7 +253,7 @@ async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
         .for_each(|(_, api_service)| {
             api_service
                 .service_config
-                .routes
+                .route_configs
                 .iter_mut()
                 .for_each(|route| {
                     route.route_id = "".to_string();

@@ -4,11 +4,11 @@ services:
   - listen_port: 8084
     service_config:
       server_type: http
-      routes:
+      route_configs:
         - route_id: test_route
           matcher:
             prefix: /
             prefix_rewrite: /
           router: http://127.0.0.1:8090
           middlewares:
-            - type: forward_headers
+            - kind: forward_headers

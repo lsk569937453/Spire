@@ -7,11 +7,11 @@ use std::net::SocketAddr;
 use crate::vojo::app_error::AppError;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AllowDenyIp {
-    pub list: Vec<AllowDenyItem>,
+    pub rules: Vec<AllowDenyItem>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AllowDenyItem {
-    pub limit_type: AllowType,
+    pub policy: AllowType,
     pub value: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -32,7 +32,7 @@ pub enum AllowResult {
 impl AllowDenyIp {
     pub fn ip_is_allowed(&self, peer_addr: &SocketAddr) -> Result<bool, AppError> {
         let ip = peer_addr.ip().to_string();
-        for item in &self.list {
+        for item in &self.rules {
             let is_allow = item.is_allow(ip.clone());
             match is_allow {
                 Ok(AllowResult::Allow) => {
@@ -54,10 +54,10 @@ impl AllowDenyIp {
 }
 impl AllowDenyItem {
     pub fn is_allow(&self, client_ip: String) -> Result<AllowResult, AppError> {
-        if self.limit_type == AllowType::AllowAll {
+        if self.policy == AllowType::AllowAll {
             return Ok(AllowResult::Allow);
         }
-        if self.limit_type == AllowType::DenyAll {
+        if self.policy == AllowType::DenyAll {
             return Ok(AllowResult::Deny);
         }
         if self.value.is_none() {
@@ -79,10 +79,10 @@ impl AllowDenyItem {
         } else {
             self.value.clone().ok_or("self.value is none")? == client_ip
         };
-        if value_mapped_ip && self.limit_type == AllowType::Allow {
+        if value_mapped_ip && self.policy == AllowType::Allow {
             return Ok(AllowResult::Allow);
         }
-        if value_mapped_ip && self.limit_type == AllowType::Deny {
+        if value_mapped_ip && self.policy == AllowType::Deny {
             return Ok(AllowResult::Deny);
         }
 
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn test_is_allow_allow_all() {
         let allow_object = AllowDenyItem {
-            limit_type: AllowType::AllowAll,
+            policy: AllowType::AllowAll,
             value: None,
         };
         let result = allow_object.is_allow(String::from("test"));
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn test_is_allow_deny_all() {
         let allow_object = AllowDenyItem {
-            limit_type: AllowType::DenyAll,
+            policy: AllowType::DenyAll,
             value: None,
         };
         let result = allow_object.is_allow(String::from("test"));
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn test_is_allow_allow_ip() {
         let allow_object = AllowDenyItem {
-            limit_type: AllowType::Allow,
+            policy: AllowType::Allow,
             value: Some(String::from("192.168.0.1")),
         };
         let result = allow_object.is_allow(String::from("192.168.0.1"));
@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn test_is_allow_allow_ip_range() {
         let allow_object = AllowDenyItem {
-            limit_type: AllowType::Allow,
+            policy: AllowType::Allow,
             value: Some(String::from("192.168.0.1/24")),
         };
         let result1 = allow_object.is_allow(String::from("192.168.0.254"));
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn test_is_allow_deny_ip() {
         let allow_object = AllowDenyItem {
-            limit_type: AllowType::Deny,
+            policy: AllowType::Deny,
             value: Some(String::from("192.168.0.1")),
         };
         let result = allow_object.is_allow(String::from("192.168.0.1"));
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn test_is_allow_deny_ip_range() {
         let allow_object = AllowDenyItem {
-            limit_type: AllowType::Deny,
+            policy: AllowType::Deny,
             value: Some(String::from("192.168.0.1/16")),
         };
         let result1 = allow_object.is_allow(String::from("192.168.255.254"));
@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn test_is_allow_not_mapping1() {
         let allow_object = AllowDenyItem {
-            limit_type: AllowType::Allow,
+            policy: AllowType::Allow,
             value: Some(String::from("192.168.0.1")),
         };
         let result = allow_object.is_allow(String::from("192.168.3.4"));
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn test_is_allow_not_mapping2() {
         let allow_object = AllowDenyItem {
-            limit_type: AllowType::Deny,
+            policy: AllowType::Deny,
             value: Some(String::from("192.168.0.1")),
         };
         let result = allow_object.is_allow(String::from("192.168.3.4"));
