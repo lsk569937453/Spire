@@ -231,8 +231,8 @@ async fn proxy_adapter_with_error(
     inc(mapping_key.clone(), path.clone(), status);
 
     info!(
-        "{} - -  \"{} {} HTTP/1.1\" {}  \"-\" \"-\"  {}ms",
-        remote_addr, method, path, status, elapsed_time
+        "{} - -  \"{} {} HTTP/1.1\" {}  \"-\" \"-\"  {:?}",
+        remote_addr, method, path, status, elapsed_time_res
     );
     Ok(res)
 }
