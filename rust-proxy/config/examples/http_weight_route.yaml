@@ -1,17 +1,22 @@
-log_level: info
-servers:
-  - listen: 8084
-    protocol: http
-    routes:
-      - matcher:
-          prefix: /
-          prefix_rewrite: /
-        forward_to:
-          kind: weight
-          targets:
-            - endpoint: http://127.0.0.1:9394
-              weight: 1
-            - endpoint: http://127.0.0.1:9396
-              weight: 2
-            - endpoint: http://127.0.0.1:939
-              weight: 3
+static_config:
+  log_level: info
+services:
+  - listen_port: 8084
+    service_config:
+      server_type: http
+      route_configs:
+        - matcher:
+            prefix: /
+            prefix_rewrite: /
+          router:
+            kind: weightBased
+            routes:
+              - base_route:
+                  endpoint: http://127.0.0.1:9394
+                weight: 1
+              - base_route:
+                  endpoint: http://127.0.0.1:9396
+                weight: 2
+              - base_route:
+                  endpoint: http://127.0.0.1:9395
+                weight: 3

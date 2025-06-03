@@ -1,25 +1,29 @@
-log_level: info
-servers:
-  - listen: 8084
-    protocol: http
-    routes:
-      - route_id: test_route
-        forward_to:
-          kind: header
-          targets:
-            - endpoint: http://127.0.0.1:9395
-              header: test
-              match:
-                text: test
-            - endpoint: http://127.0.0.1:9396
-              header: test2
-              match:
-                regex: test2
-            - endpoint: http://127.0.0.1:9397
-              header: test3
-              match:
-                split:
-                  by: ","
-                  matches:
-                    - en-US
-                    - zh-CN
+static_config:
+  log_level: info
+services:
+  - listen_port: 8084
+    service_config:
+      server_type: http
+      route_configs:
+        - route_id: test_route
+          router:
+            kind: headerBased
+            routes:
+              - base_route:
+                  endpoint: http://127.0.0.1:9395
+                header_key: test
+                header_value_mapping_type:
+                  kind: Text
+                  value: test
+              - base_route:
+                  endpoint: http://127.0.0.1:9396
+                header_key: test
+                header_value_mapping_type:
+                  kind: Text
+                  value: test
+              - base_route:
+                  endpoint: http://127.0.0.1:9397
+                header_key: test
+                header_value_mapping_type:
+                  kind: Text
+                  value: test

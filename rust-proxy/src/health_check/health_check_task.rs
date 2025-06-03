@@ -123,7 +123,7 @@ impl HealthCheck {
         let app_config = self.shared_config.shared_data.lock()?.clone();
         let mut route_list = HashMap::new();
         for (_, service_config) in app_config.api_service_config.iter() {
-            for route in &service_config.service_config.routes {
+            for route in &service_config.service_config.route_configs {
                 if route.health_check.is_none() || route.liveness_config.is_none() {
                     continue;
                 }
@@ -230,7 +230,7 @@ async fn do_http_health_check<HC: HttpClientTrait + Send + Sync + 'static>(
                 let shared_route = lock
                     .api_service_config
                     .iter_mut()
-                    .flat_map(|(_, item)| &mut item.service_config.routes)
+                    .flat_map(|(_, item)| &mut item.service_config.route_configs)
                     .find(|item| item.route_id == route.route_id);
                 let new_route = match shared_route {
                     Some(route) => route,

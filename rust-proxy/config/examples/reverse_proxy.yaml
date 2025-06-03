@@ -1,12 +1,14 @@
-log_level: info
-servers:
-  - listen: 8084
-    protocol: http
-    routes:
-      - route_id: test_route
-        matcher:
-          prefix: /
-          prefix_rewrite: /
-        forward_to: http://127.0.0.1:8090
-        middlewares:
-          - kind: forward_headers
+static_config:
+  log_level: info
+services:
+  - listen_port: 8084
+    service_config:
+      server_type: http
+      route_configs:
+        - route_id: test_route
+          matcher:
+            prefix: /
+            prefix_rewrite: /
+          router: http://127.0.0.1:8090
+          middlewares:
+            - kind: forward_headers

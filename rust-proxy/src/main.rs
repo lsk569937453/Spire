@@ -105,4 +105,27 @@ mod tests {
         let result = start().await;
         assert!(result.is_err());
     }
+    #[tokio::test]
+    async fn test_config_examples() -> Result<(), AppError> {
+        let paths = std::fs::read_dir("config/examples")?;
+
+        for path in paths {
+            let path = path?.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("yaml") {
+                let config_str = tokio::fs::read_to_string(&path).await?;
+                println!("Testing config file: {:?}", path);
+
+                match serde_yaml::from_str::<AppConfig>(&config_str) {
+                    Ok(_) => {
+                        println!("Successfully parsed config: {}", path.display());
+                    }
+                    Err(e) => {
+                        println!("Failed to parse config {:?}: {}", path, e);
+                        return Err(AppError::from(e));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }

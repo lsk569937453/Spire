@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::vojo::app_error::AppError;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "PascalCase")]
+#[serde(tag = "scheme", rename_all = "PascalCase")]
 pub enum Authentication {
     Basic(BasicAuth),
     ApiKey(ApiKeyAuth),

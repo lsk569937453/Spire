@@ -4,7 +4,7 @@ services:
   - listen_port: 4486
     service_config:
       server_type: http
-      routes:
+      route_configs:
         - matcher:
             prefix: /
             prefix_rewrite: /
@@ -23,7 +23,7 @@ services:
   - listen_port: 9969
     service_config:
       server_type: http
-      routes:
+      route_configs:
         - matcher:
             prefix: /
             prefix_rewrite: /

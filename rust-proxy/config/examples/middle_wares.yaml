@@ -1,44 +1,45 @@
-servers:
-  - listen: 8085
-    protocol: http
-    routes:
-      - route_id: test_route
-        matcher:
-          prefix: /
-          prefix_rewrite: /
-        liveness_config:
-          min_liveness_count: 1
-        health_check:
-          kind: http_get
-          base_health_check_param:
-            timeout: 5
-            interval: 5
-          path: /health
-        forward_to: http://127.0.0.1:9393
-        middlewares:
-          - kind: authentication
-            scheme: api_key
-            key: test
-            value: test
-          - kind: rate_limit
-            limiter: token_bucket
-            rate_per_unit: 10
-            unit:
-              kind: Second
-            capacity: 10
-            scope:
-              kind: IP
-              value: 192.168.0.1
-          - kind: allow_deny_list
-            rules:
-              - policy: allow_all
-                value: 192.168.0.2
-          - kind: cors
-            allowed_origins: "*"
-            allowed_methods:
-              - GET
-              - POST
-            allowed_headers: "*"
-            allow_credentials: true
-            max_age: 3600
-            options_passthrough: true
+services:
+  - listen_port: 8085
+    service_config:
+      server_type: http
+      route_configs:
+        - route_id: test_route
+          matcher:
+            prefix: /
+            prefix_rewrite: /
+          liveness_config:
+            min_liveness_count: 1
+          health_check:
+            kind: HttpGet
+            base_health_check_param:
+              timeout: 5
+              interval: 5
+            path: /health
+          router: http://127.0.0.1:9393
+          middlewares:
+            - kind: authentication
+              scheme: ApiKey
+              key: test
+              value: test
+            - kind: rate_limit
+              limiter: TokenBucket
+              rate_per_unit: 10
+              unit:
+                kind: Second
+              capacity: 10
+              scope:
+                kind: IP
+                value: 192.168.0.1
+            - kind: allow_deny_list
+              rules:
+                - policy: AllowAll
+                  value: 192.168.0.2
+            - kind: cors
+              allowed_origins: "*"
+              allowed_methods:
+                - GET
+                - POST
+              allowed_headers: "*"
+              allow_credentials: true
+              max_age: 3600
+              options_passthrough: true
