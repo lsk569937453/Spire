@@ -4,6 +4,8 @@ use crate::vojo::app_config::ApiService;
 use crate::vojo::app_config::AppConfig;
 use crate::vojo::app_config::RouteConfig;
 use crate::vojo::app_config::ServiceType;
+use axum::middleware::Next;
+use std::time::Instant;
 
 use crate::vojo::app_error::AppError;
 use crate::vojo::base_response::BaseResponse;
@@ -25,7 +27,6 @@ use std::net::SocketAddr;
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
 use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
 static INTERNAL_SERVER_ERROR: &str = "Internal Server Error";
 
 async fn get_app_config(
@@ -287,6 +288,27 @@ fn validate_tls_config(
     }
     Ok(())
 }
+async fn print_request_response(req: Request<axum::body::Body>, next: Next) -> Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let start = Instant::now();
+
+    // 处理请求
+    let response = next.run(req).await;
+
+    // 记录日志
+    let duration = start.elapsed();
+    debug!(
+        "{} {} {} {} {:?}",
+        method,
+        uri.path(),
+        uri.query().unwrap_or(""),
+        response.status(),
+        duration
+    );
+
+    response
+}
 pub fn get_router(shared_config: SharedConfig) -> Router {
     axum::Router::new()
         .route("/appConfig", get(get_app_config).post(post_app_config))
@@ -294,7 +316,7 @@ pub fn get_router(shared_config: SharedConfig) -> Router {
         .route("/route/{id}", delete(delete_route))
         .route("/route", put(put_routex))
         .route("/letsEncryptCertificate", post(lets_encrypt_certificate))
-        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(print_request_response))
         .layer(CorsLayer::permissive())
         .with_state(shared_config)
 }
