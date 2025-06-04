@@ -88,6 +88,6 @@ uuid = { version = "1.17.0", features = ["v4", "fast-rng","macro-diagnostics"] }
 webpki-roots = "1.0.0"
 # native-tls = "0.2.11"
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
-jemallocator = "0.5.4"
+mimalloc = "0.1.46"
 
 

@@ -1,10 +1,10 @@
 use configuration_service::logger::setup_logger;
 #[cfg(not(target_env = "msvc"))]
-use jemallocator::Jemalloc;
+use mimalloc::MiMalloc;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
+static GLOBAL: MiMalloc = MiMalloc;
 
 extern crate derive_builder;
 use crate::vojo::cli::Cli;
