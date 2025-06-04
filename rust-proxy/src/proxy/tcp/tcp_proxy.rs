@@ -333,41 +333,18 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // #[tokio::test]
-    // async fn test_transfer_basic() {
-    //     let (mut client, server) = tokio::io::duplex(1024);
-    //     let mock_config = create_mock_shared_config(8080, vec![], "127.0.0.1:8080");
-
-    //     // 启动传输任务
-    //     let transfer_task = tokio::spawn(async move {
-    //         transfer(server, "test_key".to_string(), mock_config, 8080).await
-    //     });
-
-    //     // 客户端写入数据
-    //     client.write_all(b"ping").await.unwrap();
-    //     client.shutdown().await.unwrap();
-
-    //     // 检查服务端接收的数据
-    //     let mut buf = [0u8; 4];
-    //     transfer_task.await.unwrap().unwrap();
-    //     client.read_exact(&mut buf).await.unwrap();
-    //     assert_eq!(&buf, b"ping");
-    // }
-
     #[tokio::test]
     async fn test_proxy_shutdown() {
         let (tx, rx) = mpsc::channel(1);
         let mut proxy = TcpProxy {
-            port: 8080,
+            port: 7070,
             mapping_key: "test".to_string(),
             channel: rx,
-            shared_config: create_mock_shared_config(8080, vec!["127.0.0.1"], "127.0.0.1:8080"),
+            shared_config: create_mock_shared_config(7070, vec!["127.0.0.1"], "127.0.0.1:7070"),
         };
 
-        // 发送关闭信号
         let _ = tx.send(()).await;
 
-        // 应该正常退出
         let result = proxy.start_proxy().await;
         assert!(result.is_ok());
     }

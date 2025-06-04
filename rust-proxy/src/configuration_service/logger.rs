@@ -1,6 +1,7 @@
 use chrono::DateTime;
 use chrono::Local;
 
+use std::path::Path;
 use tracing::level_filters::LevelFilter;
 use tracing_appender::rolling;
 use tracing_appender::rolling::RollingFileAppender;
@@ -27,13 +28,23 @@ impl FormatTime for LocalTime {
 pub fn setup_logger() -> Result<Handle<Targets, Registry>, AppError> {
     let (file_layer, reload_handle) = setup_logger_with_path(Path::new("./logs"))?;
 
-pub fn setup_logger() -> Result<Handle<Targets, Registry>, AppError> {
+    tracing_subscriber::registry()
+        .with(file_layer)
+        .with(LevelFilter::TRACE) // Global minimum level
+        .try_init()
+        .map_err(|e| AppError(e.to_string()))?;
+    Ok(reload_handle)
+}
+
+pub fn setup_logger_with_path(
+    log_directory: &Path,
+) -> Result<(impl Layer<Registry> + 'static, Handle<Targets, Registry>), AppError> {
     let rolling_file_builder = RollingFileAppender::builder()
         .rotation(rolling::Rotation::DAILY)
         .filename_prefix("spire")
         .filename_suffix("log")
         .max_log_files(10)
-        .build("./logs")?;
+        .build(log_directory)?;
     let filter = filter::Targets::new()
         .with_targets(vec![
             ("delay_timer", LevelFilter::OFF),
@@ -55,13 +66,10 @@ pub fn setup_logger() -> Result<Handle<Targets, Registry>, AppError> {
     //     .with_timer(LocalTime)
     //     .with_writer(std::io::stdout)
     //     .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
-    let _ = tracing_subscriber::registry()
-        .with(file_layer)
-        // .with(console_layer)
-        .with(tracing_subscriber::filter::LevelFilter::TRACE)
-        .try_init();
-    Ok(reload_handle)
+
+    Ok((file_layer, reload_handle))
 }
+#[cfg(all(debug_assertions, not(tarpaulin)))]
 pub fn setup_logger_for_test() -> Result<Handle<Targets, Registry>, AppError> {
     let rolling_file_builder = RollingFileAppender::builder()
         .rotation(rolling::Rotation::MINUTELY)
@@ -96,4 +104,152 @@ pub fn setup_logger_for_test() -> Result<Handle<Targets, Registry>, AppError> {
         .with(tracing_subscriber::filter::LevelFilter::TRACE)
         .try_init();
     Ok(reload_handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, thread, time::Duration};
+    use tempfile::tempdir;
+    use tracing::Subscriber;
+    use tracing::{debug, error, event, info, trace, warn, Level};
+    fn build_test_subscriber(
+        log_directory: &Path,
+    ) -> Result<(impl Subscriber + Send + Sync, Handle<Targets, Registry>), AppError> {
+        let (file_layer, reload_handle) = setup_logger_with_path(log_directory)?;
+        let subscriber = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(LevelFilter::TRACE); // Or a specific level for test
+        Ok((subscriber, reload_handle))
+    }
+
+    fn read_log_file(log_dir: &Path) -> Result<String, String> {
+        thread::sleep(Duration::from_millis(200)); // Give some time for logs to flush
+
+        for entry in fs::read_dir(log_dir).map_err(|e| format!("Failed to read dir: {}", e))? {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+            if path.is_file()
+                && path.to_string_lossy().contains("spire")
+                && path.extension().is_some_and(|ext| ext == "log")
+            {
+                return fs::read_to_string(path)
+                    .map_err(|e| format!("Failed to read log file: {}", e));
+            }
+        }
+        Err("No log file found".to_string())
+    }
+
+    #[test]
+    fn test_logger_setup_and_default_filtering() {
+        let temp_log_dir = tempdir().expect("Failed to create temp dir");
+        let _reload_handle =
+            setup_logger_with_path(temp_log_dir.path()).expect("Logger setup failed");
+
+        event!(target: "my_app", Level::TRACE, "This is a TRACE message.");
+        debug!(target: "my_app", "This is a DEBUG message.");
+        info!(target: "my_app", "This is an INFO message.");
+        warn!(target: "my_app", "This is a WARN message.");
+        error!(target: "my_app", "This is an ERROR message.");
+
+        info!(target: "delay_timer", "This delay_timer INFO should be OFF.");
+        info!(target: "hyper_util", "This hyper_util INFO should be OFF.");
+
+        let log_content = read_log_file(temp_log_dir.path()).expect("Could not read log file");
+
+        assert!(log_content.contains("This is an INFO message."));
+        assert!(log_content.contains("This is a WARN message."));
+        assert!(log_content.contains("This is an ERROR message."));
+        assert!(log_content.contains("my_app"));
+
+        assert!(!log_content.contains("This is a TRACE message."));
+        assert!(!log_content.contains("This is a DEBUG message."));
+
+        assert!(!log_content.contains("This delay_timer INFO should be OFF."));
+        assert!(!log_content.contains("This hyper_util INFO should be OFF."));
+
+        temp_log_dir.close().expect("Failed to close temp_dir");
+    }
+
+    #[test]
+    fn test_logger_filter_reloading() {
+        let temp_log_dir = tempdir().expect("Failed to create temp dir for reloading test");
+        println!("temp_log_dir: {:?}", temp_log_dir.path());
+        let reload_handle = setup_logger_with_path(temp_log_dir.path())
+            .expect("Logger setup failed for reloading test");
+
+        info!(target: "reload_test", "Initial INFO message.");
+        debug!(target: "reload_test", "Initial DEBUG message (should not appear).");
+
+        let log_content_before_reload =
+            read_log_file(temp_log_dir.path()).expect("Could not read log file before reload");
+
+        assert!(log_content_before_reload.contains("Initial INFO message."));
+        assert!(!log_content_before_reload.contains("Initial DEBUG message"));
+
+        let new_filter_targets = filter::Targets::new()
+            .with_target("delay_timer", LevelFilter::INFO) // Change one specific target
+            .with_default(LevelFilter::DEBUG); // Change default
+
+        reload_handle
+            .reload(new_filter_targets)
+            .expect("Failed to reload filter");
+
+        info!(target: "reload_test", "Post-reload INFO message.");
+        debug!(target: "reload_test", "Post-reload DEBUG message (should appear now).");
+        trace!(target: "reload_test", "Post-reload TRACE message (should not appear).");
+        info!(target: "delay_timer", "Post-reload delay_timer INFO (should appear now).");
+
+        let log_content_after_reload =
+            read_log_file(temp_log_dir.path()).expect("Could not read log file after reload");
+
+        assert!(log_content_after_reload.contains("Initial INFO message."));
+        assert!(!log_content_after_reload.contains("Initial DEBUG message"));
+
+        assert!(log_content_after_reload.contains("Post-reload INFO message."));
+        assert!(log_content_after_reload.contains("Post-reload DEBUG message (should appear now)."));
+        assert!(
+            !log_content_after_reload.contains("Post-reload TRACE message (should not appear).")
+        );
+        assert!(
+            log_content_after_reload.contains("Post-reload delay_timer INFO (should appear now).")
+        );
+
+        temp_log_dir
+            .close()
+            .expect("Failed to close temp_dir for reloading test");
+    }
+
+    #[test]
+    fn test_multiple_logger_setups() {
+        let temp_log_dir1 = tempdir().expect("Failed to create temp_dir1");
+        let temp_log_dir2 = tempdir().expect("Failed to create temp_dir2");
+
+        let handle1 = setup_logger_with_path(temp_log_dir1.path());
+        assert!(
+            handle1.is_ok(),
+            "First logger setup failed: {:?}",
+            handle1.err()
+        );
+
+        info!(target: "multi_setup", "Message after first setup");
+        let log1 = read_log_file(temp_log_dir1.path()).unwrap_or_default();
+        assert!(log1.contains("Message after first setup"));
+
+        let handle2_result = setup_logger_with_path(temp_log_dir2.path());
+
+        info!(target: "multi_setup", "Message after second setup attempt");
+
+        let log1_updated = read_log_file(temp_log_dir1.path()).unwrap_or_default();
+        assert!(log1_updated.contains("Message after second setup attempt"));
+
+        let log2 = read_log_file(temp_log_dir2.path()); // Should be empty or non-existent
+        assert!(
+            log2.is_err() || log2.unwrap().is_empty(),
+            "Log file for second setup should be empty or not found"
+        );
+
+        temp_log_dir1.close().ok();
+        temp_log_dir2.close().ok();
+    }
 }
