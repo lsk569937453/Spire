@@ -24,7 +24,7 @@ pub struct AppConfig {
         skip_serializing,
         default
     )]
-    pub static_config: StaticConifg,
+    pub static_config: StaticConfig,
     #[serde(
         rename = "services",
         deserialize_with = "deserialize_service_config",
@@ -43,12 +43,12 @@ where
     vec.serialize(serializer)
 }
 
-fn deserialize_static_config<'de, D>(deserializer: D) -> Result<StaticConifg, D::Error>
+fn deserialize_static_config<'de, D>(deserializer: D) -> Result<StaticConfig, D::Error>
 where
     D: Deserializer<'de>,
 {
     info!("deserialize_static_config");
-    let mut static_config = StaticConifg::deserialize(deserializer)?;
+    let mut static_config = StaticConfig::deserialize(deserializer)?;
     if static_config.health_check_log_enabled.is_none() {
         static_config.health_check_log_enabled = Some(false);
     }
@@ -257,14 +257,14 @@ impl Default for ApiService {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StaticConifg {
+pub struct StaticConfig {
     pub health_check_log_enabled: Option<bool>,
     pub database_url: Option<String>,
     pub admin_port: Option<i32>,
     pub config_file_path: Option<String>,
     pub log_level: Option<LogLevel>,
 }
-impl Default for StaticConifg {
+impl Default for StaticConfig {
     fn default() -> Self {
         Self {
             health_check_log_enabled: Some(false),
@@ -275,7 +275,7 @@ impl Default for StaticConifg {
         }
     }
 }
-impl StaticConifg {
+impl StaticConfig {
     pub fn get_log_level(&self) -> LevelFilter {
         match self.log_level {
             Some(LogLevel::Debug) => LevelFilter::DEBUG,
@@ -511,7 +511,7 @@ mod tests {
     }
     pub fn create_default_app_config() -> AppConfig {
         let mut app_config = AppConfig::default();
-        let static_config = StaticConifg {
+        let static_config = StaticConfig {
             health_check_log_enabled: Some(false),
             admin_port: Some(9090),
             ..Default::default()
@@ -615,7 +615,7 @@ mod tests {
 
     #[test]
     fn test_static_config_default() {
-        let config = StaticConifg::default();
+        let config = StaticConfig::default();
         assert_eq!(config.health_check_log_enabled, Some(false));
         assert_eq!(config.database_url, Some("".to_string()));
         assert_eq!(config.admin_port, Some(DEFAULT_ADMIN_PORT));
@@ -719,36 +719,36 @@ mod tests {
 
         let yaml = serde_yaml::to_string(&app_config).unwrap();
         assert!(yaml.contains("listen_port: 8080"));
-        assert!(yaml.contains("server_type: Http"));
+        assert!(yaml.contains("server_type: http"));
     }
 
     #[test]
     fn test_log_level_conversion() {
-        let config = StaticConifg {
+        let config = StaticConfig {
             log_level: Some(LogLevel::Debug),
             ..Default::default()
         };
         assert_eq!(config.get_log_level(), LevelFilter::DEBUG);
 
-        let config = StaticConifg {
+        let config = StaticConfig {
             log_level: Some(LogLevel::Info),
             ..Default::default()
         };
         assert_eq!(config.get_log_level(), LevelFilter::INFO);
 
-        let config = StaticConifg {
+        let config = StaticConfig {
             log_level: Some(LogLevel::Error),
             ..Default::default()
         };
         assert_eq!(config.get_log_level(), LevelFilter::ERROR);
 
-        let config = StaticConifg {
+        let config = StaticConfig {
             log_level: Some(LogLevel::Warn),
             ..Default::default()
         };
         assert_eq!(config.get_log_level(), LevelFilter::WARN);
 
-        let config = StaticConifg {
+        let config = StaticConfig {
             log_level: None,
             ..Default::default()
         };
