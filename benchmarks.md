@@ -77,45 +77,46 @@ Status code distribution:
 
 ```
 hey -n 100000 -c 250 -m GET http://spire:6667
+
 Summary:
-  Total:        0.9278 secs
-  Slowest:      0.0662 secs
+  Total:        0.8733 secs
+  Slowest:      0.0528 secs
   Fastest:      0.0001 secs
-  Average:      0.0023 secs
-  Requests/sec: 107776.3415
+  Average:      0.0022 secs
+  Requests/sec: 114511.6388
 
   Total data:   15500000 bytes
   Size/request: 155 bytes
 
 Response time histogram:
   0.000 [1]     |
-  0.007 [98550] |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
-  0.013 [729]   |
-  0.020 [220]   |
-  0.027 [250]   |
-  0.033 [0]     |
-  0.040 [0]     |
-  0.046 [0]     |
-  0.053 [66]    |
-  0.060 [113]   |
-  0.066 [71]    |
+  0.005 [97642] |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.011 [1220]  |
+  0.016 [387]   |
+  0.021 [26]    |
+  0.026 [472]   |
+  0.032 [2]     |
+  0.037 [0]     |
+  0.042 [0]     |
+  0.048 [242]   |
+  0.053 [8]     |
 
 
 Latency distribution:
   10% in 0.0009 secs
   25% in 0.0012 secs
-  50% in 0.0017 secs
-  75% in 0.0026 secs
-  90% in 0.0038 secs
-  95% in 0.0046 secs
-  99% in 0.0092 secs
+  50% in 0.0016 secs
+  75% in 0.0024 secs
+  90% in 0.0036 secs
+  95% in 0.0044 secs
+  99% in 0.0118 secs
 
 Details (average, fastest, slowest):
-  DNS+dialup:   0.0000 secs, 0.0001 secs, 0.0662 secs
-  DNS-lookup:   0.0001 secs, 0.0000 secs, 0.0621 secs
-  req write:    0.0000 secs, 0.0000 secs, 0.0616 secs
-  resp wait:    0.0020 secs, 0.0001 secs, 0.0557 secs
-  resp read:    0.0002 secs, 0.0000 secs, 0.0524 secs
+  DNS+dialup:   0.0000 secs, 0.0001 secs, 0.0528 secs
+  DNS-lookup:   0.0000 secs, 0.0000 secs, 0.0486 secs
+  req write:    0.0000 secs, 0.0000 secs, 0.0481 secs
+  resp wait:    0.0020 secs, 0.0001 secs, 0.0448 secs
+  resp read:    0.0001 secs, 0.0000 secs, 0.0448 secs
 
 Status code distribution:
   [200] 100000 responses

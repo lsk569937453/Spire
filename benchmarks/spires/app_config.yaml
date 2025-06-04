@@ -7,6 +7,6 @@ services:
             prefix: /
             prefix_rewrite: ssss
           router:
-            type: random
+            kind: random
             routes:
               - endpoint: http://backend:80/
