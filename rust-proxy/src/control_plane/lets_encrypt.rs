@@ -1,20 +1,24 @@
-use crate::vojo::base_response::BaseResponse;
 use crate::vojo::lets_encrypt::LetsEntrypt;
+use crate::vojo::{app_error::AppError, base_response::BaseResponse};
 use crate::SharedConfig;
 use axum::extract::State;
-
+use axum::response::IntoResponse;
+use mockall::automock;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 struct LetsEncryptResponse {
     key_perm: String,
     certificate_perm: String,
 }
-pub async fn lets_encrypt_certificate(
-    State(_): State<SharedConfig>,
-
-    axum::extract::Json(lets_encrypt_object): axum::extract::Json<LetsEntrypt>,
-) -> Result<impl axum::response::IntoResponse, Infallible> {
+#[automock]
+pub trait LetsEncryptActions: Send + Sync {
+    async fn start_request2(&self) -> Result<String, AppError>;
+}
+pub async fn lets_encrypt_certificate_logic<LEO: LetsEncryptActions>(
+    lets_encrypt_object: LEO,
+) -> Result<impl IntoResponse, Infallible> {
     let request_result = lets_encrypt_object.start_request2().await;
 
     match request_result {
@@ -44,36 +48,56 @@ pub async fn lets_encrypt_certificate(
         )),
     }
 }
+pub async fn lets_encrypt_certificate(
+    State(_): State<SharedConfig>,
+
+    axum::extract::Json(lets_encrypt_object): axum::extract::Json<LetsEntrypt>,
+) -> Result<impl axum::response::IntoResponse, Infallible> {
+    lets_encrypt_certificate_logic(lets_encrypt_object).await
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AppConfig;
+
     use axum::body::to_bytes;
     use axum::response::IntoResponse;
 
-    
-    
-    
     #[tokio::test]
     async fn test_lets_encrypt_certificate_success() {
-        let config = SharedConfig::from_app_config(AppConfig::default());
-        let mock_lets_encrypt = LetsEntrypt {
-            domain_name: "example.com".to_string(),
-            mail_name: "test@example.com".to_string(),
-        };
+        let mut mock_le_actions = MockLetsEncryptActions::new();
+        mock_le_actions
+            .expect_start_request2()
+            .times(1)
+            .returning(|| Ok("mock_certificate_content".to_string()));
+        let response = lets_encrypt_certificate_logic(mock_le_actions)
+            .await
+            .unwrap();
 
-        let expected_cert = "test_certificate".to_string();
-        let response =
-            lets_encrypt_certificate(State(config), axum::extract::Json(mock_lets_encrypt))
-                .await
-                .unwrap();
+        let res = response.into_response();
+
+        let (parts, body_data) = res.into_parts();
+        let body = to_bytes(body_data, usize::MAX).await.unwrap();
+        assert_eq!(parts.status, axum::http::StatusCode::OK);
+        let response = serde_json::from_slice::<BaseResponse<LetsEncryptResponse>>(&body);
+        assert!(response.is_ok());
+    }
+    #[tokio::test]
+    async fn test_lets_encrypt_certificat_error() {
+        let mut mock_le_actions = MockLetsEncryptActions::new();
+        mock_le_actions
+            .expect_start_request2()
+            .times(1)
+            .returning(|| Err(AppError("mock_certificate_content".to_string())));
+        let response = lets_encrypt_certificate_logic(mock_le_actions)
+            .await
+            .unwrap();
 
         let res = response.into_response();
 
         let (parts, body_data) = res.into_parts();
         let body = to_bytes(body_data, usize::MAX).await.unwrap();
         assert_eq!(parts.status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-        let response = serde_json::from_slice::<BaseResponse<String>>(&body);
+        let response = serde_json::from_slice::<String>(&body);
         assert!(response.is_err());
     }
 }

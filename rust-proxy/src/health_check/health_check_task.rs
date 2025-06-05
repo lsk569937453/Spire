@@ -17,6 +17,7 @@ use http_body_util::BodyExt;
 use http_body_util::Full;
 use hyper::Response;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -38,16 +39,16 @@ impl HealthCheckClient {
 impl HttpClientTrait for HealthCheckClient {
     async fn request_http(
         &self,
-        req: Request<BoxBody<Bytes, AppError>>,
+        req: Request<BoxBody<Bytes, Infallible>>,
         time_out: u64,
-    ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
+    ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
         let fut = self
             .http_clients
             .request_http(req, time_out)
             .await??
             .map(|b| b.boxed())
             .map(|item: BoxBody<Bytes, hyper::Error>| {
-                item.map_err(|_| -> AppError { unreachable!() }).boxed()
+                item.map_err(|_| -> Infallible { unreachable!() }).boxed()
             });
         Ok(fut)
     }
@@ -56,9 +57,9 @@ impl HttpClientTrait for HealthCheckClient {
 pub trait HttpClientTrait: Send + Sync + Clone {
     async fn request_http(
         &self,
-        req: Request<BoxBody<Bytes, AppError>>,
+        req: Request<BoxBody<Bytes, Infallible>>,
         time_out: u64,
-    ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>;
+    ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError>;
 }
 #[derive(Hash, Clone, Eq, PartialEq, Debug)]
 pub struct TaskKey {
@@ -189,12 +190,11 @@ async fn do_http_health_check<HC: HttpClientTrait + Send + Sync + 'static>(
     http_health_check_param: HttpHealthCheckParam,
     mut route: RouteConfig,
     timeout_number: i32,
-    http_health_check_client: HealthCheckClient,
+    http_health_check_client: HC,
     shared_config: SharedConfig,
 ) -> Result<(), AppError> {
     info!("Do http health check,the route is {:?}!", route);
     let route_list = route.router.get_all_route().await?;
-    let http_client = http_health_check_client.http_clients.clone();
     let mut set = JoinSet::new();
     for item in route_list {
         let http_client_shared = http_health_check_client.clone();
@@ -214,12 +214,11 @@ async fn do_http_health_check<HC: HttpClientTrait + Send + Sync + 'static>(
             .uri(join_option?.to_string())
             .method("GET")
             .body(Full::new(Bytes::new()).boxed())?;
-        let task_with_timeout = http_client_shared
-            .clone()
-            .request_http(req, timeout_number as u64);
         let cloned_route = route.clone();
-        set.spawn(async {
-            let res = task_with_timeout.await;
+        set.spawn(async move {
+            let res = http_client_shared
+                .request_http(req, timeout_number as u64)
+                .await;
             (res, cloned_route, item)
         });
     }
@@ -240,21 +239,10 @@ async fn do_http_health_check<HC: HttpClientTrait + Send + Sync + 'static>(
                 };
 
                 if let Ok(res) = res {
-                    match res {
-                        Ok(o) => {
-                            if o.status() == StatusCode::OK {
-                                let _ = new_route
-                                    .router
-                                    .update_route_alive(base_route.clone(), true);
-                            }
-                        }
-                        Err(e) => {
-                            error!(
-                                "Request error,url:{}, the error is {}",
-                                base_route.endpoint, e
-                            );
-                            let _ = new_route.router.update_route_alive(base_route, false);
-                        }
+                    if res.status() == StatusCode::OK {
+                        let _ = new_route
+                            .router
+                            .update_route_alive(base_route.clone(), true);
                     }
                 } else {
                     error!("Request time out, the url is {}", base_route.endpoint);
@@ -551,5 +539,121 @@ mod tests {
         };
         let res = get_endpoint_list(route).await;
         assert!(res.len() == 1);
+    }
+}
+pub struct MockWrapper<T> {
+    inner: Arc<T>,
+}
+
+impl<T> Clone for MockWrapper<T> {
+    fn clone(&self) -> Self {
+        MockWrapper {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<T> MockWrapper<T> {
+    pub fn new(inner: T) -> MockWrapper<T> {
+        MockWrapper {
+            inner: Arc::new(inner),
+        }
+    }
+
+    pub fn get(&self) -> &T {
+        self.inner.as_ref()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use crate::vojo::app_config::ApiService;
+    use crate::vojo::app_config::AppConfig;
+    use crate::vojo::health_check::BaseHealthCheckParam;
+    use crate::vojo::router::RandomRoute;
+
+    use super::*;
+    use mockall::mock;
+    use mockall::predicate::*;
+
+    mock! {
+            pub HttpClient {
+
+            }
+            impl Clone for HttpClient {
+                fn clone(&self) -> Self;
+            }
+            #[async_trait]
+            impl HttpClientTrait for HttpClient {
+                async fn request_http(
+                    &self,
+                    req: Request<BoxBody<Bytes, Infallible>>,
+                    time_out: u64,
+                ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> ;
+        }
+    }
+    fn dummy_response(status_code: StatusCode) -> Response<BoxBody<Bytes, Infallible>> {
+        Response::builder()
+            .status(status_code)
+            .body(Full::new(Bytes::from("")).boxed())
+            .unwrap()
+    }
+
+    fn create_test_shared_config(route_configs: Vec<RouteConfig>) -> SharedConfig {
+        let mut map = HashMap::new();
+        let api_service = ApiService {
+            service_config: crate::vojo::app_config::ServiceConfig {
+                route_configs,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        map.insert(8080, api_service);
+        SharedConfig::from_app_config(AppConfig {
+            api_service_config: map,
+            ..Default::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn test_health_check_single_route_ok() {
+        let http_health_check_param = HttpHealthCheckParam {
+            base_health_check_param: BaseHealthCheckParam {
+                interval: 10,
+                timeout: 1000,
+            },
+            path: "/health".to_string(),
+        };
+        let shared_config = create_test_shared_config(vec![RouteConfig {
+            route_id: "config1".to_string(),
+            health_check: Some(HealthCheckType::HttpGet(http_health_check_param.clone())),
+            ..Default::default()
+        }]);
+        let mut mock_http_client = MockHttpClient::new();
+        mock_http_client
+            .expect_clone()
+            .returning(MockHttpClient::new);
+        mock_http_client.expect_request_http().returning(|_, _| {
+            let response_result: Result<Response<BoxBody<Bytes, Infallible>>, AppError> =
+                Ok(dummy_response(StatusCode::OK));
+            response_result
+        });
+
+        let route_config = RouteConfig {
+            route_id: "config1".to_string(),
+            router: crate::vojo::router::Router::Random(RandomRoute::new(vec![
+                "http://192.168.0.0:8080".to_string(),
+            ])),
+            ..Default::default()
+        };
+        let result = do_http_health_check(
+            http_health_check_param,
+            route_config,
+            1000,
+            mock_http_client,
+            shared_config,
+        )
+        .await;
+
+        assert!(result.is_ok());
     }
 }
