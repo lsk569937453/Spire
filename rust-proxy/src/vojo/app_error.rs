@@ -22,6 +22,11 @@ impl From<tracing_appender::rolling::InitError> for AppError {
         ))
     }
 }
+impl From<tokio::time::error::Elapsed> for AppError {
+    fn from(error: tokio::time::error::Elapsed) -> Self {
+        AppError(format!("Timeout error: {}", error))
+    }
+}
 impl From<InvalidHeaderValue> for AppError {
     fn from(error: InvalidHeaderValue) -> Self {
         AppError(format!("Invalid header value: {}", error))

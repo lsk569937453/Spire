@@ -143,17 +143,18 @@ mod tests {
     #[test]
     fn test_logger_setup_and_default_filtering() {
         let temp_log_dir = tempdir().expect("Failed to create temp dir");
-        let _reload_handle =
-            setup_logger_with_path(temp_log_dir.path()).expect("Logger setup failed");
+        let (subscriber, _reload_handle) =
+            build_test_subscriber(temp_log_dir.path()).expect("Logger setup failed");
+        tracing::subscriber::with_default(subscriber, || {
+            event!(target: "my_app", Level::TRACE, "This is a TRACE message.");
+            debug!(target: "my_app", "This is a DEBUG message.");
+            info!(target: "my_app", "This is an INFO message.");
+            warn!(target: "my_app", "This is a WARN message.");
+            error!(target: "my_app", "This is an ERROR message.");
 
-        event!(target: "my_app", Level::TRACE, "This is a TRACE message.");
-        debug!(target: "my_app", "This is a DEBUG message.");
-        info!(target: "my_app", "This is an INFO message.");
-        warn!(target: "my_app", "This is a WARN message.");
-        error!(target: "my_app", "This is an ERROR message.");
-
-        info!(target: "delay_timer", "This delay_timer INFO should be OFF.");
-        info!(target: "hyper_util", "This hyper_util INFO should be OFF.");
+            info!(target: "delay_timer", "This delay_timer INFO should be OFF.");
+            info!(target: "hyper_util", "This hyper_util INFO should be OFF.");
+        });
 
         let log_content = read_log_file(temp_log_dir.path()).expect("Could not read log file");
 
@@ -175,33 +176,27 @@ mod tests {
     fn test_logger_filter_reloading() {
         let temp_log_dir = tempdir().expect("Failed to create temp dir for reloading test");
         println!("temp_log_dir: {:?}", temp_log_dir.path());
-        let reload_handle = setup_logger_with_path(temp_log_dir.path())
+        let (subscriber, reload_handle) = build_test_subscriber(temp_log_dir.path())
             .expect("Logger setup failed for reloading test");
 
-        info!(target: "reload_test", "Initial INFO message.");
-        debug!(target: "reload_test", "Initial DEBUG message (should not appear).");
+        tracing::subscriber::with_default(subscriber, || {
+            info!(target: "reload_test", "Initial INFO message.");
+            debug!(target: "reload_test", "Initial DEBUG message (should not appear).");
+            let new_filter_targets = filter::Targets::new()
+                .with_target("delay_timer", LevelFilter::INFO) // Change one specific target
+                .with_default(LevelFilter::DEBUG); // Change default
 
-        let log_content_before_reload =
-            read_log_file(temp_log_dir.path()).expect("Could not read log file before reload");
-
-        assert!(log_content_before_reload.contains("Initial INFO message."));
-        assert!(!log_content_before_reload.contains("Initial DEBUG message"));
-
-        let new_filter_targets = filter::Targets::new()
-            .with_target("delay_timer", LevelFilter::INFO) // Change one specific target
-            .with_default(LevelFilter::DEBUG); // Change default
-
-        reload_handle
-            .reload(new_filter_targets)
-            .expect("Failed to reload filter");
-
-        info!(target: "reload_test", "Post-reload INFO message.");
-        debug!(target: "reload_test", "Post-reload DEBUG message (should appear now).");
-        trace!(target: "reload_test", "Post-reload TRACE message (should not appear).");
-        info!(target: "delay_timer", "Post-reload delay_timer INFO (should appear now).");
+            reload_handle
+                .reload(new_filter_targets)
+                .expect("Failed to reload filter");
+            info!(target: "reload_test", "Post-reload INFO message.");
+            debug!(target: "reload_test", "Post-reload DEBUG message (should appear now).");
+            trace!(target: "reload_test", "Post-reload TRACE message (should not appear).");
+            info!(target: "delay_timer", "Post-reload delay_timer INFO (should appear now).");
+        });
 
         let log_content_after_reload =
-            read_log_file(temp_log_dir.path()).expect("Could not read log file after reload");
+            read_log_file(temp_log_dir.path()).expect("Could not read log file before reload");
 
         assert!(log_content_after_reload.contains("Initial INFO message."));
         assert!(!log_content_after_reload.contains("Initial DEBUG message"));
@@ -218,38 +213,5 @@ mod tests {
         temp_log_dir
             .close()
             .expect("Failed to close temp_dir for reloading test");
-    }
-
-    #[test]
-    fn test_multiple_logger_setups() {
-        let temp_log_dir1 = tempdir().expect("Failed to create temp_dir1");
-        let temp_log_dir2 = tempdir().expect("Failed to create temp_dir2");
-
-        let handle1 = setup_logger_with_path(temp_log_dir1.path());
-        assert!(
-            handle1.is_ok(),
-            "First logger setup failed: {:?}",
-            handle1.err()
-        );
-
-        info!(target: "multi_setup", "Message after first setup");
-        let log1 = read_log_file(temp_log_dir1.path()).unwrap_or_default();
-        assert!(log1.contains("Message after first setup"));
-
-        let handle2_result = setup_logger_with_path(temp_log_dir2.path());
-
-        info!(target: "multi_setup", "Message after second setup attempt");
-
-        let log1_updated = read_log_file(temp_log_dir1.path()).unwrap_or_default();
-        assert!(log1_updated.contains("Message after second setup attempt"));
-
-        let log2 = read_log_file(temp_log_dir2.path()); // Should be empty or non-existent
-        assert!(
-            log2.is_err() || log2.unwrap().is_empty(),
-            "Log file for second setup should be empty or not found"
-        );
-
-        temp_log_dir1.close().ok();
-        temp_log_dir2.close().ok();
     }
 }

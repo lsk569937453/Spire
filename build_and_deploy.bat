@@ -1,4 +1,5 @@
 ﻿@echo off
+CHCP 65001 >NUL
 setlocal enabledelayedexpansion
 
 :: =============== 配置部分 ===============

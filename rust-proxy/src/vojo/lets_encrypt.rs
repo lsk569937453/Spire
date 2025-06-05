@@ -1,4 +1,5 @@
 use super::app_error::AppError;
+use crate::control_plane::lets_encrypt::LetsEncryptActions;
 use axum::extract::State;
 use axum::{extract::Path, http::StatusCode, routing::any, Router};
 use hyper_util::client::legacy::Client as HyperClient;
@@ -18,16 +19,8 @@ pub struct LetsEntrypt {
     pub mail_name: String,
     pub domain_name: String,
 }
-
-impl LetsEntrypt {
-    pub fn _new(mail_name: String, domain_name: String) -> Self {
-        LetsEntrypt {
-            mail_name,
-            domain_name,
-        }
-    }
-
-    pub async fn start_request2(&self) -> Result<String, AppError> {
+impl LetsEncryptActions for LetsEntrypt {
+    async fn start_request2(&self) -> Result<String, AppError> {
         let account = local_account(self.mail_name.clone()).await?;
         info!("account created");
         let domain_name = self.domain_name.clone();
@@ -128,6 +121,14 @@ impl LetsEntrypt {
         server_handle.await.ok();
 
         result
+    }
+}
+impl LetsEntrypt {
+    pub fn _new(mail_name: String, domain_name: String) -> Self {
+        LetsEntrypt {
+            mail_name,
+            domain_name,
+        }
     }
 }
 pub async fn http01_challenge(
