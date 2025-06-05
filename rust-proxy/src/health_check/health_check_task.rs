@@ -190,7 +190,7 @@ async fn do_http_health_check<HC: HttpClientTrait + Send + Sync + 'static>(
     http_health_check_param: HttpHealthCheckParam,
     mut route: RouteConfig,
     timeout_number: i32,
-    http_health_check_client: HC,
+    http_health_check_client: Arc<HC>,
     shared_config: SharedConfig,
 ) -> Result<(), AppError> {
     info!("Do http health check,the route is {:?}!", route);
@@ -280,7 +280,7 @@ fn submit_task(
                             http_health_check_param,
                             route_share,
                             timeout_share,
-                            health_check_client_shared,
+                            Arc::new(health_check_client_shared),
                             cloned_shared_config,
                         )
                         .await
@@ -411,7 +411,7 @@ mod tests {
             http_health_check_param,
             route_config,
             1000,
-            mock_http_client,
+            Arc::new(mock_http_client),
             shared_config,
         )
         .await;
