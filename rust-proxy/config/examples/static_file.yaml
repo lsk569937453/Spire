@@ -11,7 +11,7 @@ services:
             prefix_rewrite: /
           router:
             kind: file
-            doc_root: D:\code\github\gitstats\kvrocks
+            doc_root: D:\
           middlewares:
             - kind: rewrite_headers
               expires: 24h
