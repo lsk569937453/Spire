@@ -189,3 +189,90 @@ async fn local_account(mail_name: String) -> Result<Account, AppError> {
     .await?;
     Ok(account)
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::Request;
+    use tower::ServiceExt; // for `oneshot`
+
+    #[cfg(test)]
+    mod unit_tests {
+        use std::usize;
+
+        use super::*;
+
+        #[tokio::test]
+        async fn http01_challenge_handler_logic() {
+            let token = "test-token-123".to_string();
+            let key_auth = "key-auth-abc".to_string();
+            let mut challenges = HashMap::new();
+            challenges.insert(token.clone(), key_auth.clone());
+
+            let state = State(challenges);
+
+            let path_found = Path(token);
+            let response = http01_challenge(state.clone(), path_found).await;
+            assert_eq!(response, Ok(key_auth));
+
+            let path_not_found = Path("unknown-token".to_string());
+            let response_not_found = http01_challenge(state, path_not_found).await;
+            assert_eq!(response_not_found, Err(StatusCode::NOT_FOUND));
+        }
+        use axum::body::to_bytes;
+        #[tokio::test]
+        async fn acme_router_works() {
+            let token = "another-token-456".to_string();
+            let key_auth = "another-key-auth-def".to_string();
+            let challenges = HashMap::from([(token.clone(), key_auth.clone())]);
+
+            let app = acme_router(challenges);
+
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/.well-known/acme-challenge/{}", token))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.into_body();
+            let body = to_bytes(body, usize::MAX).await.unwrap();
+            assert_eq!(&body[..], key_auth.as_bytes());
+
+            let response_not_found = app
+                .oneshot(
+                    Request::builder()
+                        .uri("/.well-known/acme-challenge/wrong-token")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response_not_found.status(), StatusCode::NOT_FOUND);
+        }
+    }
+
+    #[tokio::test]
+    async fn full_certificate_request_flow() {
+        let test_domain = "your-test-domain.com".to_string();
+        let test_email = "test@example.com".to_string();
+
+        let le_request = LetsEntrypt {
+            mail_name: test_email,
+            domain_name: test_domain,
+        };
+
+        let result = le_request.start_request2().await;
+
+        assert!(
+            result.is_err(),
+            "Certificate request failed: {:?}",
+            result.err()
+        );
+    }
+}

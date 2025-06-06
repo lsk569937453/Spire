@@ -775,4 +775,21 @@ mod tests {
         };
         assert_eq!(config.get_log_level(), LevelFilter::OFF);
     }
+    use crate::vojo::base_response::BaseResponse;
+    #[tokio::test]
+    async fn test_health_check() {
+        let src = r#"
+response_code: 0
+response_object:
+  services:
+  - listen_port: 8080
+    service_config:
+      server_type: http
+      route_configs:
+      - route_id: route1
+        router:
+          kind: poll
+          routes: []"#;
+        let body_response: BaseResponse<AppConfig> = serde_yaml::from_str(src).unwrap();
+    }
 }
