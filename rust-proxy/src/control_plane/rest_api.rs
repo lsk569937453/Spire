@@ -135,7 +135,7 @@ async fn post_app_config_with_error(
         response_code: 0,
         response_object: 0,
     };
-    let json_str = serde_json::to_string(&data)?;
+    let json_str = serde_yaml::to_string(&data)?;
 
     let response = Response::builder()
         .status(axum::http::StatusCode::OK)
@@ -185,7 +185,7 @@ async fn delete_route_with_error(
         response_code: 0,
         response_object: 0,
     };
-    let json_str = serde_json::to_string(&data)?;
+    let json_str = serde_yaml::to_string(&data)?;
     Ok(json_str)
 }
 async fn put_routex(
@@ -232,7 +232,7 @@ async fn put_route_with_error(
         response_code: 0,
         response_object: 0,
     };
-    Ok(serde_json::to_string(&data)?)
+    Ok(serde_yaml::to_string(&data)?)
 }
 async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
     let mut data = app_config;
@@ -264,7 +264,7 @@ async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
     f.write_all(api_service_str.as_bytes()).await?;
     Ok(())
 }
-fn validate_tls_config(
+pub fn validate_tls_config(
     cert_pem_option: Option<String>,
     key_pem_option: Option<String>,
 ) -> Result<(), AppError> {
@@ -328,4 +328,301 @@ pub async fn start_control_plane(port: i32, shared_config: SharedConfig) -> Resu
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use crate::control_plane::rest_api::get_router;
+    use crate::control_plane::rest_api::save_config_to_file;
+    use crate::control_plane::rest_api::Router;
+    use crate::control_plane::rest_api::DEFAULT_TEMPORARY_DIR;
+    use crate::vojo::app_config::ApiService;
+    use crate::vojo::app_config::RouteConfig;
+    use crate::vojo::app_config::ServiceConfig;
+    use crate::vojo::app_config::ServiceType;
+    use crate::vojo::base_response::BaseResponse;
+    use crate::AppConfig;
+    use crate::SharedConfig;
+    use axum::body::Body;
+    use axum::extract::Request;
+    use http::header;
+
+    use http::StatusCode;
+    use std::collections::HashMap;
+    use tower::ServiceExt;
+    fn setup() -> (Router, SharedConfig) {
+        let _ = std::fs::remove_dir_all(DEFAULT_TEMPORARY_DIR);
+
+        let initial_route = RouteConfig {
+            route_id: "route1".to_string(),
+            ..Default::default()
+        };
+        let initial_service_config = ServiceConfig {
+            server_type: ServiceType::Http,
+            cert_str: None,
+            key_str: None,
+            route_configs: vec![initial_route],
+        };
+        let initial_api_service = ApiService {
+            listen_port: 8080,
+            service_config: initial_service_config,
+            ..Default::default()
+        };
+
+        let mut api_service_config = HashMap::new();
+        api_service_config.insert(8080, initial_api_service);
+
+        let app_config = AppConfig {
+            api_service_config,
+            ..Default::default()
+        };
+
+        let shared_config = SharedConfig::from_app_config(app_config);
+
+        (get_router(shared_config.clone()), shared_config)
+    }
+
+    fn cleanup() {
+        let _ = std::fs::remove_dir_all(DEFAULT_TEMPORARY_DIR);
+    }
+    #[tokio::test]
+    async fn test_get_app_config_success() {
+        let (router, shared_config) = setup();
+
+        let request = Request::builder()
+            .uri("/appConfig")
+            .method("GET")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        println!("{}", String::from_utf8_lossy(&body));
+        let body_response: BaseResponse<AppConfig> = serde_yaml::from_slice(&body).unwrap();
+
+        let expected_config = shared_config.shared_data.lock().unwrap().clone();
+        assert_eq!(body_response.response_object, expected_config);
+
+        cleanup();
+    }
+
+    #[tokio::test]
+    async fn test_post_app_config_new_service() {
+        let (router, shared_config) = setup();
+
+        let new_route = RouteConfig {
+            route_id: "new_route".to_string(),
+            ..Default::default()
+        };
+        let new_service_config = ServiceConfig {
+            server_type: ServiceType::Http,
+            cert_str: None,
+            key_str: None,
+            route_configs: vec![new_route],
+        };
+        let new_api_service = ApiService {
+            listen_port: 9090,
+            service_config: new_service_config,
+            ..Default::default()
+        };
+
+        let yaml_body = serde_yaml::to_string(&new_api_service).unwrap();
+
+        let request = Request::builder()
+            .uri("/appConfig")
+            .method("POST")
+            .header(header::CONTENT_TYPE, "application/yaml")
+            .body(Body::from(yaml_body))
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let locked_config = shared_config.shared_data.lock().unwrap();
+        assert_eq!(locked_config.api_service_config.len(), 2);
+        assert!(locked_config.api_service_config.contains_key(&9090));
+        assert_eq!(
+            locked_config
+                .api_service_config
+                .get(&9090)
+                .unwrap()
+                .listen_port,
+            9090
+        );
+
+        cleanup();
+    }
+
+    #[tokio::test]
+    async fn test_post_app_config_add_route_to_existing_service() {
+        let (router, shared_config) = setup();
+
+        let new_route = RouteConfig {
+            route_id: "route2".to_string(),
+            ..Default::default()
+        };
+        let new_service_config = ServiceConfig {
+            server_type: ServiceType::Http,
+            cert_str: None,
+            key_str: None,
+            route_configs: vec![new_route],
+        };
+        let api_service_update = ApiService {
+            listen_port: 8080,
+            service_config: new_service_config,
+            ..Default::default()
+        };
+
+        let yaml_body = serde_yaml::to_string(&api_service_update).unwrap();
+
+        let request = Request::builder()
+            .uri("/appConfig")
+            .method("POST")
+            .header(header::CONTENT_TYPE, "application/yaml")
+            .body(Body::from(yaml_body))
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let locked_config = shared_config.shared_data.lock().unwrap();
+        let service_8080 = locked_config.api_service_config.get(&8080).unwrap();
+        assert_eq!(service_8080.service_config.route_configs.len(), 2);
+        assert!(service_8080
+            .service_config
+            .route_configs
+            .iter()
+            .any(|r| r.route_id == "route1"));
+        assert!(service_8080
+            .service_config
+            .route_configs
+            .iter()
+            .any(|r| r.route_id == "route2"));
+
+        cleanup();
+    }
+
+    #[tokio::test]
+    async fn test_put_route_success() {
+        let (router, shared_config) = setup();
+
+        let updated_route = RouteConfig {
+            route_id: "route1".to_string(), // Same ID
+            ..Default::default()
+        };
+
+        let yaml_body = serde_yaml::to_string(&updated_route).unwrap();
+
+        let request = Request::builder()
+            .uri("/route")
+            .method("PUT")
+            .header(header::CONTENT_TYPE, "application/yaml")
+            .body(Body::from(yaml_body))
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let locked_config = shared_config.shared_data.lock().unwrap();
+        let service_8080 = locked_config.api_service_config.get(&8080).unwrap();
+        let route = service_8080.service_config.route_configs.first().unwrap();
+
+        cleanup();
+    }
+
+    #[tokio::test]
+    async fn test_put_route_not_found() {
+        let (router, _) = setup();
+
+        let non_existent_route = RouteConfig {
+            route_id: "non-existent-route".to_string(),
+            ..Default::default()
+        };
+
+        let yaml_body = serde_yaml::to_string(&non_existent_route).unwrap();
+
+        let request = Request::builder()
+            .uri("/route")
+            .method("PUT")
+            .header(header::CONTENT_TYPE, "application/yaml")
+            .body(Body::from(yaml_body))
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error_message = String::from_utf8(body.to_vec()).unwrap();
+        assert!(error_message.contains("Can not find the route by route id!"));
+
+        cleanup();
+    }
+
+    #[tokio::test]
+    async fn test_delete_route_success() {
+        let (router, shared_config) = setup();
+
+        let request = Request::builder()
+            .uri("/route/route1")
+            .method("DELETE")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let locked_config = shared_config.shared_data.lock().unwrap();
+        assert!(locked_config.api_service_config.is_empty());
+
+        cleanup();
+    }
+
+    #[tokio::test]
+    async fn test_get_prometheus_metrics_success() {
+        let (router, _) = setup();
+
+        let counter = prometheus::IntCounter::new("test_metric", "A test metric").unwrap();
+        prometheus::register(Box::new(counter.clone())).unwrap();
+        counter.inc();
+
+        let request = Request::builder()
+            .uri("/metrics")
+            .method("GET")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+        assert!(body_str.contains("# HELP test_metric A test metric"));
+        assert!(body_str.contains("# TYPE test_metric counter"));
+        assert!(body_str.contains("test_metric 1"));
+
+        prometheus::unregister(Box::new(counter)).unwrap();
+        cleanup();
+    }
+    #[tokio::test]
+    async fn test_save_config_to_file_success() {
+        let app_config = AppConfig::default();
+        let res = save_config_to_file(app_config).await;
+        assert!(res.is_err());
+    }
+    use crate::control_plane::rest_api::validate_tls_config;
+    #[tokio::test]
+    async fn test_validate_tls_config_success() {
+        let cert_pem = "-----BEGIN CERTIFICATE-----...-----END CERTIFICATE-----";
+        let key_pem = "-----BEGIN PRIVATE KEY-----...-----END PRIVATE KEY-----";
+        let res = validate_tls_config(Some(cert_pem.to_string()), Some(key_pem.to_string()));
+        assert!(res.is_err());
+    }
 }
