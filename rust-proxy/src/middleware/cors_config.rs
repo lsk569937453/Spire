@@ -129,7 +129,7 @@ impl CorsConfig {
         let origin = self.allowed_origins.to_string();
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
-            HeaderValue::from_str(origin.as_str()).map_err(|_| "HeaderValue is none")?,
+            HeaderValue::from_str(origin.as_str())?,
         );
 
         let methods = self
@@ -141,12 +141,12 @@ impl CorsConfig {
         info!("methods: {}", methods);
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_METHODS,
-            HeaderValue::from_str(&methods).map_err(|_| "Invalid header")?,
+            HeaderValue::from_str(&methods)?,
         );
         if let Some(cors_headers) = &self.allowed_headers {
             headers.insert(
                 header::ACCESS_CONTROL_ALLOW_HEADERS,
-                HeaderValue::from_str(&cors_headers.to_string()).map_err(|_| "Invalid header")?,
+                HeaderValue::from_str(&cors_headers.to_string())?,
             );
         }
         if let Some(allow_credentials) = self.allow_credentials {
@@ -161,7 +161,7 @@ impl CorsConfig {
             if max_age > 0 {
                 headers.insert(
                     header::ACCESS_CONTROL_MAX_AGE,
-                    HeaderValue::from_str(&max_age.to_string()).map_err(|_| "Invalid header")?,
+                    HeaderValue::from_str(&max_age.to_string())?,
                 );
             }
         }

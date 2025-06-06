@@ -31,8 +31,7 @@ pub fn setup_logger() -> Result<Handle<Targets, Registry>, AppError> {
     tracing_subscriber::registry()
         .with(file_layer)
         .with(LevelFilter::TRACE) // Global minimum level
-        .try_init()
-        .map_err(|e| AppError(e.to_string()))?;
+        .try_init()?;
     Ok(reload_handle)
 }
 
@@ -119,25 +118,24 @@ mod tests {
         let (file_layer, reload_handle) = setup_logger_with_path(log_directory)?;
         let subscriber = tracing_subscriber::registry()
             .with(file_layer)
-            .with(LevelFilter::TRACE); // Or a specific level for test
+            .with(LevelFilter::TRACE);
         Ok((subscriber, reload_handle))
     }
 
-    fn read_log_file(log_dir: &Path) -> Result<String, String> {
-        thread::sleep(Duration::from_millis(200)); // Give some time for logs to flush
+    fn read_log_file(log_dir: &Path) -> Result<String, AppError> {
+        thread::sleep(Duration::from_millis(200));
 
-        for entry in fs::read_dir(log_dir).map_err(|e| format!("Failed to read dir: {}", e))? {
-            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        for entry in fs::read_dir(log_dir)? {
+            let entry = entry?;
             let path = entry.path();
             if path.is_file()
                 && path.to_string_lossy().contains("spire")
                 && path.extension().is_some_and(|ext| ext == "log")
             {
-                return fs::read_to_string(path)
-                    .map_err(|e| format!("Failed to read log file: {}", e));
+                return Ok(fs::read_to_string(path)?);
             }
         }
-        Err("No log file found".to_string())
+        Err("No log file found")?
     }
 
     #[test]

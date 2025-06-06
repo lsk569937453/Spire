@@ -294,46 +294,23 @@ fn submit_task(
             "The timer task has been submit,the task param is interval:{}!",
             base_param.interval
         );
-        return task_builder
+        return Ok(task_builder
             .set_task_id(task_id)
             .set_frequency_repeated_by_seconds(base_param.interval as u64)
             .set_maximum_parallel_runnable_num(1)
-            .spawn_async_routine(task)
-            .map_err(|err| AppError(err.to_string()));
+            .spawn_async_routine(task)?);
     }
     Err(AppError(String::from("Submit task error!")))
 }
-pub struct MockWrapper<T> {
-    inner: Arc<T>,
-}
 
-impl<T> Clone for MockWrapper<T> {
-    fn clone(&self) -> Self {
-        MockWrapper {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-impl<T> MockWrapper<T> {
-    pub fn new(inner: T) -> MockWrapper<T> {
-        MockWrapper {
-            inner: Arc::new(inner),
-        }
-    }
-
-    pub fn get(&self) -> &T {
-        self.inner.as_ref()
-    }
-}
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::vojo::app_config::ApiService;
     use crate::vojo::app_config::AppConfig;
+    use crate::vojo::app_config::LivenessConfig;
     use crate::vojo::health_check::BaseHealthCheckParam;
     use crate::vojo::router::RandomRoute;
-
-    use super::*;
     use mockall::mock;
     use mockall::predicate::*;
 
@@ -391,9 +368,7 @@ mod tests {
             ..Default::default()
         }]);
         let mut mock_http_client = MockHttpClient::new();
-        mock_http_client
-            .expect_clone()
-            .returning(MockHttpClient::new);
+
         mock_http_client.expect_request_http().returning(|_, _| {
             let response_result: Result<Response<BoxBody<Bytes, Infallible>>, AppError> =
                 Ok(dummy_response(StatusCode::OK));
@@ -404,6 +379,7 @@ mod tests {
             route_id: "config1".to_string(),
             router: crate::vojo::router::Router::Random(RandomRoute::new(vec![
                 "http://192.168.0.0:8080".to_string(),
+                "a".to_string(),
             ])),
             ..Default::default()
         };
@@ -417,5 +393,154 @@ mod tests {
         .await;
 
         assert!(result.is_ok());
+    }
+    #[tokio::test]
+    async fn test_health_check_single_route_error() {
+        let http_health_check_param = HttpHealthCheckParam {
+            base_health_check_param: BaseHealthCheckParam {
+                interval: 10,
+                timeout: 1000,
+            },
+            path: "/health".to_string(),
+        };
+        let shared_config = create_test_shared_config(vec![RouteConfig {
+            route_id: "config1".to_string(),
+            health_check: Some(HealthCheckType::HttpGet(http_health_check_param.clone())),
+            ..Default::default()
+        }]);
+        let mut mock_http_client = MockHttpClient::new();
+
+        mock_http_client.expect_request_http().returning(|_, _| {
+            let response_result: Result<Response<BoxBody<Bytes, Infallible>>, AppError> =
+                Err(AppError("()".to_string()));
+            response_result
+        });
+
+        let route_config = RouteConfig {
+            route_id: "config1".to_string(),
+            router: crate::vojo::router::Router::Random(RandomRoute::new(vec![
+                "http://192.168.0.0:8080".to_string(),
+                "a".to_string(),
+            ])),
+            ..Default::default()
+        };
+        let result = do_http_health_check(
+            http_health_check_param,
+            route_config,
+            1000,
+            Arc::new(mock_http_client),
+            shared_config,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_submit_task_ok() {
+        let http_health_check_param = HttpHealthCheckParam {
+            base_health_check_param: BaseHealthCheckParam {
+                interval: 1,
+                timeout: 1,
+            },
+            path: "/health".to_string(),
+        };
+        let task_id = 101;
+        let route_config = RouteConfig {
+            route_id: "config1".to_string(),
+            router: crate::vojo::router::Router::Random(RandomRoute::new(vec![
+                "http://192.168.0.0:8080".to_string(),
+                "a".to_string(),
+            ])),
+            health_check: Some(HealthCheckType::HttpGet(http_health_check_param.clone())),
+            ..Default::default()
+        };
+
+        let shared_config = create_test_shared_config(vec![RouteConfig {
+            route_id: "config1".to_string(),
+            health_check: Some(HealthCheckType::HttpGet(http_health_check_param.clone())),
+            ..Default::default()
+        }]);
+        let health_check_clients = HealthCheckClient::new();
+
+        let result = submit_task(task_id, route_config, health_check_clients, shared_config);
+
+        assert!(result.is_ok());
+        let task = result.unwrap();
+        let delay_timer = DelayTimerBuilder::default().build();
+        let _ = delay_timer.insert_task(task);
+        sleep(std::time::Duration::from_secs(3)).await;
+        let res = delay_timer.remove_task(task_id);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_submit_task_error_when_no_health_check() {
+        let task_id = 201;
+        let http_health_check_param = HttpHealthCheckParam {
+            base_health_check_param: BaseHealthCheckParam {
+                interval: 10,
+                timeout: 1000,
+            },
+            path: "/health".to_string(),
+        };
+        let health_check_clients = HealthCheckClient::new();
+        let shared_config = create_test_shared_config(vec![RouteConfig {
+            route_id: "config1".to_string(),
+            health_check: Some(HealthCheckType::HttpGet(http_health_check_param.clone())),
+            ..Default::default()
+        }]);
+        let route = RouteConfig {
+            health_check: None,
+            ..Default::default()
+        };
+
+        let result = submit_task(task_id, route, health_check_clients, shared_config);
+
+        assert!(result.is_err());
+    }
+    #[tokio::test]
+    async fn test_do_health_check_success() {
+        let http_health_check_param = HttpHealthCheckParam {
+            base_health_check_param: BaseHealthCheckParam {
+                interval: 10,
+                timeout: 1000,
+            },
+
+            path: "/health".to_string(),
+        };
+        let shared_config = create_test_shared_config(vec![RouteConfig {
+            route_id: "config1".to_string(),
+            health_check: Some(HealthCheckType::HttpGet(http_health_check_param.clone())),
+            liveness_config: Some(LivenessConfig {
+                min_liveness_count: 1,
+            }),
+            ..Default::default()
+        }]);
+        let mut health_check = HealthCheck::from_shared_config(shared_config);
+        health_check.task_id_map.insert(
+            TaskKey {
+                route_id: "".to_string(),
+                health_check_type: HealthCheckType::HttpGet(http_health_check_param.clone()),
+                endpoint_list: vec!["".to_string()],
+                min_liveness_count: 1,
+            },
+            32,
+        );
+        let result = health_check.do_health_check().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_endpoint_list_success() {
+        let route = RouteConfig {
+            route_id: "config1".to_string(),
+            router: crate::vojo::router::Router::Random(RandomRoute::new(vec![
+                "http://192.168.0.1:8888".to_string(),
+            ])),
+            ..Default::default()
+        };
+        let res = get_endpoint_list(route).await;
+        assert!(res.len() == 1);
     }
 }
