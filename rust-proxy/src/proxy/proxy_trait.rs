@@ -226,9 +226,7 @@ impl ChainTrait for CommonCheckRequest {
             builder = builder.header(header::ACCESS_CONTROL_MAX_AGE, s.to_string());
         }
 
-        builder
-            .body(Full::new(Bytes::from("".to_string())).boxed())
-            .map_err(AppError::from)
+        Ok(builder.body(Full::new(Bytes::from("".to_string())).boxed())?)
     }
 }
 #[automock]

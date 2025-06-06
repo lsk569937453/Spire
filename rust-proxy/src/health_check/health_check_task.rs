@@ -300,7 +300,6 @@ fn submit_task(
             .set_maximum_parallel_runnable_num(1)
             .spawn_async_routine(task)?);
     }
-    Err(AppError::from("Submit task error!"))
 }
 
 #[cfg(test)]
@@ -325,22 +324,25 @@ mod tests {
             impl HttpClientTrait for HttpClient {
                 async fn request_http(
                     &self,
-                    req: Request<BoxBody<Bytes, AppError>>,
+                    req: Request<BoxBody<Bytes, Infallible>>,
                     time_out: u64,
-                ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> ;
+                ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> ;
         }
     }
-    fn dummy_response(status_code: StatusCode) -> Response<BoxBody<Bytes, AppError>> {
+    fn dummy_response(status_code: StatusCode) -> Response<BoxBody<Bytes, Infallible>> {
         Response::builder()
             .status(status_code)
-            .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
+            .body(Full::new(Bytes::from("")).boxed())
             .unwrap()
     }
 
     fn create_test_shared_config(route_configs: Vec<RouteConfig>) -> SharedConfig {
         let mut map = HashMap::new();
         let api_service = ApiService {
-            route_configs,
+            service_config: crate::vojo::app_config::ServiceConfig {
+                route_configs,
+                ..Default::default()
+            },
             ..Default::default()
         };
         map.insert(8080, api_service);
@@ -367,7 +369,7 @@ mod tests {
         let mut mock_http_client = MockHttpClient::new();
 
         mock_http_client.expect_request_http().returning(|_, _| {
-            let response_result: Result<Response<BoxBody<Bytes, AppError>>, AppError> =
+            let response_result: Result<Response<BoxBody<Bytes, Infallible>>, AppError> =
                 Ok(dummy_response(StatusCode::OK));
             response_result
         });
@@ -408,7 +410,7 @@ mod tests {
         let mut mock_http_client = MockHttpClient::new();
 
         mock_http_client.expect_request_http().returning(|_, _| {
-            let response_result: Result<Response<BoxBody<Bytes, AppError>>, AppError> =
+            let response_result: Result<Response<BoxBody<Bytes, Infallible>>, AppError> =
                 Err(AppError("()".to_string()));
             response_result
         });
@@ -539,121 +541,5 @@ mod tests {
         };
         let res = get_endpoint_list(route).await;
         assert!(res.len() == 1);
-    }
-}
-pub struct MockWrapper<T> {
-    inner: Arc<T>,
-}
-
-impl<T> Clone for MockWrapper<T> {
-    fn clone(&self) -> Self {
-        MockWrapper {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-impl<T> MockWrapper<T> {
-    pub fn new(inner: T) -> MockWrapper<T> {
-        MockWrapper {
-            inner: Arc::new(inner),
-        }
-    }
-
-    pub fn get(&self) -> &T {
-        self.inner.as_ref()
-    }
-}
-#[cfg(test)]
-mod tests {
-    use crate::vojo::app_config::ApiService;
-    use crate::vojo::app_config::AppConfig;
-    use crate::vojo::health_check::BaseHealthCheckParam;
-    use crate::vojo::router::RandomRoute;
-
-    use super::*;
-    use mockall::mock;
-    use mockall::predicate::*;
-
-    mock! {
-            pub HttpClient {
-
-            }
-            impl Clone for HttpClient {
-                fn clone(&self) -> Self;
-            }
-            #[async_trait]
-            impl HttpClientTrait for HttpClient {
-                async fn request_http(
-                    &self,
-                    req: Request<BoxBody<Bytes, Infallible>>,
-                    time_out: u64,
-                ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> ;
-        }
-    }
-    fn dummy_response(status_code: StatusCode) -> Response<BoxBody<Bytes, Infallible>> {
-        Response::builder()
-            .status(status_code)
-            .body(Full::new(Bytes::from("")).boxed())
-            .unwrap()
-    }
-
-    fn create_test_shared_config(route_configs: Vec<RouteConfig>) -> SharedConfig {
-        let mut map = HashMap::new();
-        let api_service = ApiService {
-            service_config: crate::vojo::app_config::ServiceConfig {
-                route_configs,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        map.insert(8080, api_service);
-        SharedConfig::from_app_config(AppConfig {
-            api_service_config: map,
-            ..Default::default()
-        })
-    }
-
-    #[tokio::test]
-    async fn test_health_check_single_route_ok() {
-        let http_health_check_param = HttpHealthCheckParam {
-            base_health_check_param: BaseHealthCheckParam {
-                interval: 10,
-                timeout: 1000,
-            },
-            path: "/health".to_string(),
-        };
-        let shared_config = create_test_shared_config(vec![RouteConfig {
-            route_id: "config1".to_string(),
-            health_check: Some(HealthCheckType::HttpGet(http_health_check_param.clone())),
-            ..Default::default()
-        }]);
-        let mut mock_http_client = MockHttpClient::new();
-        mock_http_client
-            .expect_clone()
-            .returning(MockHttpClient::new);
-        mock_http_client.expect_request_http().returning(|_, _| {
-            let response_result: Result<Response<BoxBody<Bytes, Infallible>>, AppError> =
-                Ok(dummy_response(StatusCode::OK));
-            response_result
-        });
-
-        let route_config = RouteConfig {
-            route_id: "config1".to_string(),
-            router: crate::vojo::router::Router::Random(RandomRoute::new(vec![
-                "http://192.168.0.0:8080".to_string(),
-            ])),
-            ..Default::default()
-        };
-        let result = do_http_health_check(
-            http_health_check_param,
-            route_config,
-            1000,
-            Arc::new(mock_http_client),
-            shared_config,
-        )
-        .await;
-
-        assert!(result.is_ok());
     }
 }

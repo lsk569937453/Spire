@@ -44,19 +44,17 @@ impl<'de> Deserialize<'de> for StaticResourceHeaders {
     }
 }
 
-fn parse_duration(s: &str) -> Result<Duration, String> {
+fn parse_duration(s: &str) -> Result<Duration, AppError> {
     let s = s.trim();
     if s.is_empty() {
-        return Err("Empty duration string".to_owned());
+        Err("Empty duration string")?;
     }
     let split_pos = s
         .find(|c: char| !c.is_ascii_digit())
-        .ok_or_else(|| format!("No time unit found in '{}'", s))?;
+        .ok_or("is_ascii_digit cause error")?;
 
     let (num_str, unit) = s.split_at(split_pos);
-    let num = num_str
-        .parse::<u64>()
-        .map_err(|e| format!("Invalid number '{}': {}", num_str, e))?;
+    let num = num_str.parse::<u64>()?;
 
     let unit = unit.trim().to_lowercase();
 
@@ -66,7 +64,7 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
         "h" => Ok(Duration::from_secs(num * 60 * 60)),
         "d" => Ok(Duration::from_secs(num * 60 * 60 * 24)),
         "w" => Ok(Duration::from_secs(num * 60 * 60 * 24 * 7)),
-        _ => Err(format!("Unknown time unit '{}'", unit)),
+        _ => Err(AppError(format!("Unknown time unit '{}'", unit))),
     }
 }
 impl StaticResourceHeaders {
