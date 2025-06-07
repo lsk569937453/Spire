@@ -233,18 +233,14 @@ async fn put_route_with_error(
 }
 async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
     let mut data = app_config;
-    let result: bool = Path::new(DEFAULT_TEMPORARY_DIR).is_dir();
-    if !result {
-        let path = env::current_dir()?;
-        let absolute_path = path.join(DEFAULT_TEMPORARY_DIR);
-        std::fs::create_dir_all(absolute_path)?;
-    }
+    tokio::fs::create_dir_all(DEFAULT_TEMPORARY_DIR).await?;
+    let file_path = Path::new(DEFAULT_TEMPORARY_DIR).join("new_spire_config.yml");
 
     let mut f = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
-        .open("temporary/new_spire_config.yml")
+        .open(&file_path)
         .await?;
     data.api_service_config
         .iter_mut()
@@ -612,7 +608,8 @@ mod tests {
     async fn test_save_config_to_file_success() {
         let app_config = AppConfig::default();
         let res = save_config_to_file(app_config).await;
-        assert!(res.is_err());
+        println!("{:?}", res);
+        assert!(res.is_ok());
     }
     use crate::control_plane::rest_api::validate_tls_config;
     #[tokio::test]
