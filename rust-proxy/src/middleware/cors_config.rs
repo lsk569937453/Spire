@@ -14,8 +14,8 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
-use std::convert::Infallible;
 use std::fmt;
+use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CorsConfig {
@@ -90,15 +90,17 @@ impl<'de> Deserialize<'de> for CorsAllowedOrigins {
     }
 }
 
-impl CorsAllowedOrigins {
-    pub fn to_string(&self) -> String {
+impl Display for CorsAllowedOrigins {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CorsAllowedOrigins::All => "*".to_string(),
-            CorsAllowedOrigins::Origins(origin_list) => {
-                origin_list.first().unwrap_or(&"".to_string()).to_string()
+            CorsAllowedOrigins::All => write!(f, "*"),
+            CorsAllowedOrigins::Origins(v) => {
+                write!(f, "{}", v.join(", "))
             }
         }
     }
+}
+impl CorsAllowedOrigins {
     pub fn is_all(&self) -> bool {
         match self {
             CorsAllowedOrigins::All => true,
@@ -123,7 +125,7 @@ impl CorsConfig {
     }
     pub fn handle_before_response(
         &self,
-        response: &mut Response<BoxBody<Bytes, Infallible>>,
+        response: &mut Response<BoxBody<Bytes, AppError>>,
     ) -> Result<(), AppError> {
         let headers = response.headers_mut();
         let origin = self.allowed_origins.to_string();
@@ -254,15 +256,19 @@ pub enum CorsAllowHeader {
     All,
     Headers(Vec<HeaderName>),
 }
-impl CorsAllowHeader {
-    pub fn to_string(&self) -> String {
+
+impl Display for CorsAllowHeader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CorsAllowHeader::All => "*".to_string(),
-            CorsAllowHeader::Headers(headers) => headers
-                .iter()
-                .map(|item| item.as_str())
-                .collect::<Vec<&str>>()
-                .join(", "),
+            CorsAllowHeader::All => write!(f, "*"),
+            CorsAllowHeader::Headers(headers) => {
+                let s = headers
+                    .iter()
+                    .map(|item| item.as_str())
+                    .collect::<Vec<&str>>()
+                    .join(", ");
+                write!(f, "{}", s)
+            }
         }
     }
 }

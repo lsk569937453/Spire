@@ -18,7 +18,6 @@ use hyper::Uri;
 use mockall::automock;
 use serde::Deserialize;
 use serde::Serialize;
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -57,18 +56,18 @@ pub trait ChainTrait {
         &self,
         middlewares: Vec<MiddleWares>,
         req_path: &str,
-        response: &mut Response<BoxBody<Bytes, Infallible>>,
+        response: &mut Response<BoxBody<Bytes, AppError>>,
     ) -> Result<(), AppError>;
     fn handle_preflight(
         &self,
         cors_config: CorsConfig,
         origin: &str,
-    ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError>;
+    ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>;
     async fn handle_before_request(
         &self,
         middlewares: Vec<MiddleWares>,
         peer_addr: SocketAddr,
-        req: &mut Request<BoxBody<Bytes, Infallible>>,
+        req: &mut Request<BoxBody<Bytes, AppError>>,
     ) -> Result<(), AppError>;
 }
 pub struct CommonCheckRequest;
@@ -91,12 +90,7 @@ impl RouterDestination {
             RouterDestination::File(static_file_route) => static_file_route.doc_root.clone(),
         }
     }
-    pub fn is_http(&self) -> bool {
-        match self {
-            RouterDestination::Http(_) => true,
-            RouterDestination::File(_) => false,
-        }
-    }
+
     pub fn is_file(&self) -> bool {
         match self {
             RouterDestination::Http(_) => false,
@@ -110,7 +104,7 @@ impl ChainTrait for CommonCheckRequest {
         middlewares: Vec<MiddleWares>,
         req_path: &str,
 
-        response: &mut Response<BoxBody<Bytes, Infallible>>,
+        response: &mut Response<BoxBody<Bytes, AppError>>,
     ) -> Result<(), AppError> {
         for item in middlewares.iter() {
             item.handle_before_response(req_path, response)?;
@@ -123,7 +117,7 @@ impl ChainTrait for CommonCheckRequest {
         middlewares: Vec<MiddleWares>,
 
         peer_addr: SocketAddr,
-        req: &mut Request<BoxBody<Bytes, Infallible>>,
+        req: &mut Request<BoxBody<Bytes, AppError>>,
     ) -> Result<(), AppError> {
         for item in middlewares.iter() {
             item.handle_before_request(peer_addr, req)?;
@@ -190,11 +184,13 @@ impl ChainTrait for CommonCheckRequest {
         &self,
         cors_config: CorsConfig,
         origin: &str,
-    ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
+    ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
         if cors_config.validate_origin("")? {
-            return Ok(Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .body(Full::new(Bytes::from("".to_string())).boxed())?);
+            return Ok(Response::builder().status(StatusCode::FORBIDDEN).body(
+                Full::new(Bytes::from("".to_string()))
+                    .map_err(AppError::from)
+                    .boxed(),
+            )?);
         }
         let methods_header = cors_config
             .allowed_methods
@@ -228,7 +224,11 @@ impl ChainTrait for CommonCheckRequest {
             builder = builder.header(header::ACCESS_CONTROL_MAX_AGE, s.to_string());
         }
 
-        Ok(builder.body(Full::new(Bytes::from("".to_string())).boxed())?)
+        Ok(builder.body(
+            Full::new(Bytes::from("".to_string()))
+                .map_err(AppError::from)
+                .boxed(),
+        )?)
     }
 }
 #[automock]

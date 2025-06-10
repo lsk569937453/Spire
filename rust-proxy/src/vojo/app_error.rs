@@ -33,6 +33,11 @@ impl From<&str> for AppError {
         AppError(s.to_string())
     }
 }
+impl From<std::convert::Infallible> for AppError {
+    fn from(_: std::convert::Infallible) -> Self {
+        AppError("Infallible error".to_string())
+    }
+}
 impl From<std::num::ParseIntError> for AppError {
     fn from(error: std::num::ParseIntError) -> Self {
         AppError(format!("Parse int error: {}", error))
@@ -236,7 +241,6 @@ mod tests {
         instant_acme::Error::Str("()")
     }
 
-    // Helper for regex::Error
     fn create_regex_error() -> regex::Error {
         regex::Regex::new("[").unwrap_err()
     }

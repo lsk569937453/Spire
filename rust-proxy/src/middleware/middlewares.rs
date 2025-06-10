@@ -13,7 +13,6 @@ use http::Response;
 use http_body_util::combinators::BoxBody;
 use serde::Deserialize;
 use serde::Serialize;
-use std::convert::Infallible;
 use std::net::SocketAddr;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "PascalCase")]
@@ -68,7 +67,7 @@ impl MiddleWares {
         &self,
         req_path: &str,
 
-        response: &mut Response<BoxBody<Bytes, Infallible>>,
+        response: &mut Response<BoxBody<Bytes, AppError>>,
     ) -> Result<(), AppError> {
         match self {
             MiddleWares::Cors(cors_config) => {
@@ -85,7 +84,7 @@ impl MiddleWares {
         &self,
         peer_addr: SocketAddr,
 
-        req: &mut Request<BoxBody<Bytes, Infallible>>,
+        req: &mut Request<BoxBody<Bytes, AppError>>,
     ) -> Result<(), AppError> {
         if let MiddleWares::ForwardHeader(forward_header) = self {
             forward_header.handle_before_request(peer_addr, req)?;

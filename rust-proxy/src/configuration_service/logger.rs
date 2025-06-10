@@ -76,7 +76,7 @@ mod tests {
     use tempfile::tempdir;
     use tracing::Subscriber;
     use tracing::{debug, error, event, info, trace, warn, Level};
-    pub fn setup_logger_for_test() -> Result<Handle<Targets, Registry>, AppError> {
+    pub fn _setup_logger_for_test() -> Result<Handle<Targets, Registry>, AppError> {
         let rolling_file_builder = RollingFileAppender::builder()
             .rotation(rolling::Rotation::MINUTELY)
             .filename_prefix("spire")

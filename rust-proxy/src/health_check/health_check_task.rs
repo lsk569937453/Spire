@@ -17,7 +17,6 @@ use http_body_util::BodyExt;
 use http_body_util::Full;
 use hyper::Response;
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -39,16 +38,16 @@ impl HealthCheckClient {
 impl HttpClientTrait for HealthCheckClient {
     async fn request_http(
         &self,
-        req: Request<BoxBody<Bytes, Infallible>>,
+        req: Request<BoxBody<Bytes, AppError>>,
         time_out: u64,
-    ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
+    ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
         let fut = self
             .http_clients
             .request_http(req, time_out)
             .await??
             .map(|b| b.boxed())
             .map(|item: BoxBody<Bytes, hyper::Error>| {
-                item.map_err(|_| -> Infallible { unreachable!() }).boxed()
+                item.map_err(|_| -> AppError { unreachable!() }).boxed()
             });
         Ok(fut)
     }
@@ -57,9 +56,9 @@ impl HttpClientTrait for HealthCheckClient {
 pub trait HttpClientTrait: Send + Sync + Clone {
     async fn request_http(
         &self,
-        req: Request<BoxBody<Bytes, Infallible>>,
+        req: Request<BoxBody<Bytes, AppError>>,
         time_out: u64,
-    ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError>;
+    ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>;
 }
 #[derive(Hash, Clone, Eq, PartialEq, Debug)]
 pub struct TaskKey {
@@ -213,7 +212,7 @@ async fn do_http_health_check<HC: HttpClientTrait + Send + Sync + 'static>(
         let req = Request::builder()
             .uri(join_option?.to_string())
             .method("GET")
-            .body(Full::new(Bytes::new()).boxed())?;
+            .body(Full::new(Bytes::new()).map_err(AppError::from).boxed())?;
         let cloned_route = route.clone();
         set.spawn(async move {
             let res = http_client_shared
@@ -325,15 +324,15 @@ mod tests {
             impl HttpClientTrait for HttpClient {
                 async fn request_http(
                     &self,
-                    req: Request<BoxBody<Bytes, Infallible>>,
+                    req: Request<BoxBody<Bytes, AppError>>,
                     time_out: u64,
-                ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> ;
+                ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> ;
         }
     }
-    fn dummy_response(status_code: StatusCode) -> Response<BoxBody<Bytes, Infallible>> {
+    fn dummy_response(status_code: StatusCode) -> Response<BoxBody<Bytes, AppError>> {
         Response::builder()
             .status(status_code)
-            .body(Full::new(Bytes::from("")).boxed())
+            .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
             .unwrap()
     }
 
@@ -370,7 +369,7 @@ mod tests {
         let mut mock_http_client = MockHttpClient::new();
 
         mock_http_client.expect_request_http().returning(|_, _| {
-            let response_result: Result<Response<BoxBody<Bytes, Infallible>>, AppError> =
+            let response_result: Result<Response<BoxBody<Bytes, AppError>>, AppError> =
                 Ok(dummy_response(StatusCode::OK));
             response_result
         });
@@ -411,7 +410,7 @@ mod tests {
         let mut mock_http_client = MockHttpClient::new();
 
         mock_http_client.expect_request_http().returning(|_, _| {
-            let response_result: Result<Response<BoxBody<Bytes, Infallible>>, AppError> =
+            let response_result: Result<Response<BoxBody<Bytes, AppError>>, AppError> =
                 Err(AppError("()".to_string()));
             response_result
         });

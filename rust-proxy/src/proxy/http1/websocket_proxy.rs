@@ -45,7 +45,7 @@ async fn server_upgraded_io(
     Ok(())
 }
 pub async fn server_upgrade(
-    req: Request<BoxBody<Bytes, Infallible>>,
+    req: Request<BoxBody<Bytes, AppError>>,
     check_result: Option<HandlingResult>,
     http_client: HttpClients,
 ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
@@ -68,7 +68,7 @@ pub async fn server_upgrade(
     let mut new_request = Request::builder()
         .method(req.method().clone())
         .uri(request_path.clone())
-        .body(Full::new(Bytes::new()).boxed())?;
+        .body(Full::new(Bytes::new()).map_err(AppError::from).boxed())?;
 
     let new_header = new_request.headers_mut();
     header_map.iter().for_each(|(key, value)| {
