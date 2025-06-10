@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_http_proxy_creation() {
-        let (tx, rx) = mpsc::channel(1);
+        let (_, rx) = mpsc::channel(1);
         let shared_config = SharedConfig {
             shared_data: Arc::new(Mutex::new(AppConfig::default())),
         };

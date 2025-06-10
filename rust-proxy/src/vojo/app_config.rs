@@ -769,6 +769,6 @@ response_object:
         router:
           kind: poll
           routes: []"#;
-        let body_response: BaseResponse<AppConfig> = serde_yaml::from_str(src).unwrap();
+        let _: BaseResponse<AppConfig> = serde_yaml::from_str(src).unwrap();
     }
 }
