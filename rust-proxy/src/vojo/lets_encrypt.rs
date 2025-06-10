@@ -156,7 +156,7 @@ pub fn acme_router(challenges: HashMap<String, String>) -> Router {
 }
 use rustls::crypto::ring;
 use rustls::RootCertStore;
-async fn local_account(mail_name: String) -> Result<Account, AppError> {
+async fn local_account(_mail_name: String) -> Result<Account, AppError> {
     info!("installing ring");
     let _ = ring::default_provider().install_default();
     info!("installing ring done");
@@ -197,7 +197,6 @@ mod tests {
 
     #[cfg(test)]
     mod unit_tests {
-        use std::usize;
 
         use super::*;
 

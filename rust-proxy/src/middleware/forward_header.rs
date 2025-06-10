@@ -4,7 +4,6 @@ use http::Request;
 use http_body_util::combinators::BoxBody;
 use serde::Deserialize;
 use serde::Serialize;
-use std::convert::Infallible;
 use std::net::SocketAddr;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForwardHeader {}
@@ -13,7 +12,7 @@ impl ForwardHeader {
         &self,
         peer_addr: SocketAddr,
 
-        req: &mut Request<BoxBody<Bytes, Infallible>>,
+        req: &mut Request<BoxBody<Bytes, AppError>>,
     ) -> Result<(), AppError> {
         let client_ip = peer_addr.ip().to_string();
         req.headers_mut().insert("X-Real-IP", client_ip.parse()?);
@@ -44,7 +43,7 @@ mod tests {
 
         let mut req = Request::builder()
             .uri("http://example.com")
-            .body(Full::new(Bytes::new()).boxed())
+            .body(Full::new(Bytes::new()).map_err(AppError::from).boxed())
             .unwrap();
 
         let result = forward_header.handle_before_request(peer_addr, &mut req);
@@ -69,7 +68,7 @@ mod tests {
         let mut req = Request::builder()
             .uri("http://example.com")
             .header("X-Forwarded-For", "192.168.1.1")
-            .body(Full::new(Bytes::new()).boxed())
+            .body(Full::new(Bytes::new()).map_err(AppError::from).boxed())
             .unwrap();
 
         let result = forward_header.handle_before_request(peer_addr, &mut req);

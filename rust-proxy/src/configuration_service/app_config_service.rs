@@ -369,21 +369,20 @@ peIJpwo+Kuf964DexDVglw==
 
         let init_result = init(shared_config.clone()).await;
         assert!(init_result.is_ok());
-
-        let app_config_guard = shared_config.shared_data.lock().unwrap();
-        for (service_name, port, service_conf) in &services_to_init {
-            let api_service = app_config_guard
-                .api_service_config
-                .get(&9001)
-                .expect("Service not found in config after init");
-            assert_eq!(api_service.listen_port, *port);
-            assert_eq!(
-                api_service.service_config.server_type,
-                service_conf.server_type
-            );
+        {
+            let app_config_guard = shared_config.shared_data.lock().unwrap();
+            for (_, port, service_conf) in &services_to_init {
+                let api_service = app_config_guard
+                    .api_service_config
+                    .get(&9001)
+                    .expect("Service not found in config after init");
+                assert_eq!(api_service.listen_port, *port);
+                assert_eq!(
+                    api_service.service_config.server_type,
+                    service_conf.server_type
+                );
+            }
         }
-        drop(app_config_guard);
-
         tokio::time::sleep(Duration::from_millis(100)).await;
         println!("test_init_function completed.");
     }

@@ -6,16 +6,16 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::ResponseFuture;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use rustls::RootCertStore;
-use std::convert::Infallible;
 use std::time::Duration;
 use tokio::time::timeout;
 use tokio::time::Timeout;
 
+use crate::vojo::app_error::AppError;
+
 #[derive(Clone)]
 pub struct HttpClients {
-    pub http_client: Client<HttpConnector, BoxBody<Bytes, Infallible>>,
-    pub https_client:
-        Client<hyper_rustls::HttpsConnector<HttpConnector>, BoxBody<Bytes, Infallible>>,
+    pub http_client: Client<HttpConnector, BoxBody<Bytes, AppError>>,
+    pub https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, BoxBody<Bytes, AppError>>,
 }
 impl HttpClients {
     pub fn new() -> HttpClients {
@@ -41,7 +41,7 @@ impl HttpClients {
     }
     pub fn request_http(
         &self,
-        req: Request<BoxBody<Bytes, Infallible>>,
+        req: Request<BoxBody<Bytes, AppError>>,
         time_out: u64,
     ) -> Timeout<ResponseFuture> {
         let request_future = self.http_client.request(req);
@@ -49,7 +49,7 @@ impl HttpClients {
     }
     pub fn request_https(
         &self,
-        req: Request<BoxBody<Bytes, Infallible>>,
+        req: Request<BoxBody<Bytes, AppError>>,
         time_out: u64,
     ) -> Timeout<ResponseFuture> {
         let request_future = self.https_client.request(req);

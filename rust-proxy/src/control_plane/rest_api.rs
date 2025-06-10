@@ -25,7 +25,6 @@ use std::net::SocketAddr;
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
 use tower_http::cors::CorsLayer;
-static INTERNAL_SERVER_ERROR: &str = "Internal Server Error";
 
 async fn get_app_config(
     State(shared_config): State<SharedConfig>,
@@ -469,7 +468,7 @@ mod tests {
 
         let locked_config = shared_config.shared_data.lock().unwrap();
         let service_8080 = locked_config.api_service_config.get(&8080).unwrap();
-        let route = service_8080.service_config.route_configs.first().unwrap();
+        let _route = service_8080.service_config.route_configs.first().unwrap();
 
         cleanup();
     }

@@ -26,7 +26,6 @@ use hyper_util::rt::TokioIo;
 use prometheus::HistogramTimer;
 use rustls_pki_types::CertificateDer;
 use serde_json::json;
-use std::convert::Infallible;
 use std::io::BufReader;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -69,7 +68,7 @@ impl HttpProxy {
                             io,
                             service_fn(move |req: Request<Incoming>| {
                                 let req = req.map(|item| {
-                                    item.map_err(|_| -> Infallible { unreachable!() }).boxed()
+                                    item.map_err(AppError::from).boxed()
                                 });
                                 proxy_adapter(cloned_port,cloned_shared_config.clone(),client_cloned.clone(), req, mapping_key2.clone(), addr)
                             }),
@@ -163,7 +162,7 @@ async fn proxy_adapter(
     req: Request<BoxBody<Bytes, AppError>>,
     mapping_key: String,
     remote_addr: SocketAddr,
-) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     let result =
         proxy_adapter_with_error(port, shared_config, client, req, mapping_key, remote_addr).await;
     match result {
@@ -174,7 +173,9 @@ async fn proxy_adapter(
                 "error": err.to_string(),
             });
             Ok(Response::builder().status(StatusCode::NOT_FOUND).body(
-                Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes())).boxed(),
+                Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes()))
+                    .map_err(AppError::from)
+                    .boxed(),
             )?)
         }
     }
@@ -186,7 +187,7 @@ async fn proxy_adapter_with_error(
     req: Request<BoxBody<Bytes, AppError>>,
     mapping_key: String,
     remote_addr: SocketAddr,
-) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     let method = req.method().clone();
     let uri = req.uri().clone();
     let path = uri
@@ -216,7 +217,11 @@ async fn proxy_adapter_with_error(
         });
         Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes())).boxed())
+            .body(
+                Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes()))
+                    .map_err(AppError::from)
+                    .boxed(),
+            )
             .unwrap()
     });
     let elapsed_time_res = current_time.elapsed()?;
@@ -242,7 +247,7 @@ async fn proxy(
     mapping_key: String,
     remote_addr: SocketAddr,
     chain_trait: impl ChainTrait,
-) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     debug!("req: {:?}", req);
 
     let inbound_headers = req.headers();
@@ -261,9 +266,11 @@ async fn proxy(
         .await?;
     debug!("The get_destination is {:?}", handling_result);
     if handling_result.is_none() {
-        return Ok(Response::builder()
-            .status(StatusCode::FORBIDDEN)
-            .body(Full::new(Bytes::from(common_constants::DENY_RESPONSE)).boxed())?);
+        return Ok(Response::builder().status(StatusCode::FORBIDDEN).body(
+            Full::new(Bytes::from(common_constants::DENY_RESPONSE))
+                .map_err(AppError::from)
+                .boxed(),
+        )?);
     }
 
     if req.method() == Method::OPTIONS
@@ -327,9 +334,7 @@ async fn proxy(
             };
             response_result?
                 .map(|b| b.boxed())
-                .map(|item: BoxBody<Bytes, hyper::Error>| {
-                    item.map_err(|_| -> Infallible { unreachable!() }).boxed()
-                })
+                .map(|item: BoxBody<Bytes, hyper::Error>| item.map_err(AppError::from).boxed())
         };
         if let Some(middlewares) = spire_context.middlewares {
             if !middlewares.is_empty() {
@@ -342,14 +347,18 @@ async fn proxy(
     }
     Ok(Response::builder()
         .status(StatusCode::NOT_FOUND)
-        .body(Full::new(Bytes::from(common_constants::NOT_FOUND)).boxed())
+        .body(
+            Full::new(Bytes::from(common_constants::NOT_FOUND))
+                .map_err(AppError::from)
+                .boxed(),
+        )
         .unwrap())
 }
 
 async fn route_file(
     router_destination: RouterDestination,
-    req: Request<BoxBody<Bytes, Infallible>>,
-) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
+    req: Request<BoxBody<Bytes, AppError>>,
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     let static_ = Static::new(Path::new(router_destination.get_endpoint().as_str()));
     static_
         .clone()
@@ -358,7 +367,7 @@ async fn route_file(
         .map(|item| {
             item.map(|body| {
                 body.boxed()
-                    .map_err(|_| -> Infallible { unreachable!() })
+                    .map_err(|_| -> AppError { unreachable!() })
                     .boxed()
             })
         })
@@ -409,7 +418,11 @@ mod tests {
 
         let req = Request::builder()
             .uri("invalid://uri")
-            .body(Full::new(Bytes::from("test")).boxed())
+            .body(
+                Full::new(Bytes::from("test"))
+                    .map_err(AppError::from)
+                    .boxed(),
+            )
             .unwrap();
 
         let result = proxy_adapter(
@@ -475,7 +488,7 @@ mod tests {
         let mut req = Request::builder()
             .method(Method::OPTIONS)
             .uri("http://127.0.0.1:8080/test")
-            .body(Full::new(Bytes::from("")).boxed())
+            .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
             .unwrap();
         req.headers_mut().extend(headers);
 
@@ -511,7 +524,7 @@ mod tests {
         let mut req = Request::builder()
             .method(Method::OPTIONS)
             .uri("http://127.0.0.1:8080/test")
-            .body(Full::new(Bytes::from("")).boxed())
+            .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
             .unwrap();
         req.headers_mut().extend(headers);
 
@@ -551,7 +564,7 @@ mod tests {
         let mut req = Request::builder()
             .method(Method::OPTIONS)
             .uri("http://127.0.0.1:8080/test")
-            .body(Full::new(Bytes::from("")).boxed())
+            .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
             .unwrap();
         req.headers_mut().extend(headers);
 
@@ -607,14 +620,14 @@ mod tests {
         let mut req = Request::builder()
             .method(Method::OPTIONS)
             .uri("http://127.0.0.1:8080/test")
-            .body(Full::new(Bytes::from("")).boxed())
+            .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
             .unwrap();
         req.headers_mut().extend(headers);
 
         let mut mock_chain_trait = MockChainTrait::new();
         mock_chain_trait
             .expect_get_destination()
-            .returning(|_, _, _, _, _, _, spire_context| {
+            .returning(|_, _, _, _, _, _, _| {
                 Ok(Some(HandlingResult {
                     request_path: "/test".to_string(),
                     router_destination: RouterDestination::File(StaticFileRoute {
@@ -646,7 +659,7 @@ mod tests {
 
         let req = Request::builder()
             .uri("http://localhost/test.txt")
-            .body(Full::new(Bytes::from("")).boxed())
+            .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
             .unwrap();
 
         let result = route_file(router_destination, req).await;

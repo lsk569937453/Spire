@@ -11,12 +11,11 @@ use hyper::header::{HeaderValue, CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use sha1::{Digest, Sha1};
-use std::convert::Infallible;
 use tokio::io::AsyncWriteExt;
 
 use crate::proxy::proxy_trait::HandlingResult;
 async fn server_upgraded_io(
-    inbound_req: Request<BoxBody<Bytes, Infallible>>,
+    inbound_req: Request<BoxBody<Bytes, AppError>>,
     outbound_res: Response<Incoming>,
 ) -> Result<(), AppError> {
     let upgraded_inbound = hyper::upgrade::on(inbound_req).await?;
@@ -46,12 +45,12 @@ async fn server_upgraded_io(
     Ok(())
 }
 pub async fn server_upgrade(
-    req: Request<BoxBody<Bytes, Infallible>>,
+    req: Request<BoxBody<Bytes, AppError>>,
     check_result: Option<HandlingResult>,
     http_client: HttpClients,
-) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     debug!("The source request:{:?}.", req);
-    let mut res = Response::new(Full::new(Bytes::new()).boxed());
+    let mut res = Response::new(Full::new(Bytes::new()).map_err(AppError::from).boxed());
     if !req.headers().contains_key(UPGRADE) {
         *res.status_mut() = StatusCode::BAD_REQUEST;
         return Ok(res);
@@ -69,7 +68,7 @@ pub async fn server_upgrade(
     let mut new_request = Request::builder()
         .method(req.method().clone())
         .uri(request_path.clone())
-        .body(Full::new(Bytes::new()).boxed())?;
+        .body(Full::new(Bytes::new()).map_err(AppError::from).boxed())?;
 
     let new_header = new_request.headers_mut();
     header_map.iter().for_each(|(key, value)| {

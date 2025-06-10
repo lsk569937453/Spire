@@ -7,7 +7,6 @@ use serde::de;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
-use std::convert::Infallible;
 use std::time::Duration;
 use std::time::SystemTime;
 
@@ -72,7 +71,7 @@ impl StaticResourceHeaders {
         &self,
         req_path: &str,
 
-        response: &mut Response<BoxBody<Bytes, Infallible>>,
+        response: &mut Response<BoxBody<Bytes, AppError>>,
     ) -> Result<(), AppError> {
         for item in self.extensions.iter() {
             if req_path.ends_with(item) {
@@ -133,7 +132,11 @@ mod tests {
             extensions: vec![".jpg".to_string()],
         };
 
-        let mut response = Response::new(Full::new(Bytes::from("test")).boxed());
+        let mut response = Response::new(
+            Full::new(Bytes::from("test"))
+                .map_err(AppError::from)
+                .boxed(),
+        );
         headers
             .handle_before_response("test.jpg", &mut response)
             .unwrap();
@@ -141,7 +144,11 @@ mod tests {
         assert!(response.headers().contains_key(header::CACHE_CONTROL));
         assert!(response.headers().contains_key(header::EXPIRES));
 
-        let mut response = Response::new(Full::new(Bytes::from("test")).boxed());
+        let mut response = Response::new(
+            Full::new(Bytes::from("test"))
+                .map_err(AppError::from)
+                .boxed(),
+        );
         headers
             .handle_before_response("test.txt", &mut response)
             .unwrap();
