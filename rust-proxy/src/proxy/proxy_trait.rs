@@ -457,7 +457,7 @@ mod tests {
         let shared_config = SharedConfig {
             shared_data: Arc::new(Mutex::new(crate::vojo::app_config::AppConfig {
                 api_service_config: config_map,
-                static_config: Default::default(),
+                ..Default::default()
             })),
         };
 
@@ -504,7 +504,7 @@ mod tests {
         let shared_config = SharedConfig {
             shared_data: Arc::new(Mutex::new(AppConfig {
                 api_service_config: config_map,
-                static_config: Default::default(),
+                ..Default::default()
             })),
         };
 
@@ -536,7 +536,7 @@ mod tests {
         let shared_config = SharedConfig {
             shared_data: Arc::new(Mutex::new(AppConfig {
                 api_service_config: config_map,
-                static_config: Default::default(),
+                ..Default::default()
             })),
         };
 
