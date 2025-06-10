@@ -775,7 +775,7 @@ mod tests {
 
         let json = r#"{
         "kind": "poll",
-        "targets": [
+        "routes": [
             {"endpoint": "http://s1"},
             {"endpoint": "http://s2"}
         ]
@@ -855,7 +855,7 @@ mod tests {
             )
             .unwrap();
 
-        poll_route.current_index = -1;
+        poll_route.current_index = -1; // reset for testing
 
         assert_eq!(
             poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
@@ -932,14 +932,18 @@ mod tests {
         let mut weight_route = WeightBasedRoute {
             routes: vec![
                 WeightedRouteItem {
-                    endpoint: "s1".to_string(),
-                    is_alive: None,
+                    base_route: BaseRoute {
+                        endpoint: "s1".to_string(),
+                        is_alive: None,
+                    },
                     weight: 2,
                     index: 0,
                 },
                 WeightedRouteItem {
-                    endpoint: "s2".to_string(),
-                    is_alive: None,
+                    base_route: BaseRoute {
+                        endpoint: "s2".to_string(),
+                        is_alive: None,
+                    },
                     weight: 1,
                     index: 0,
                 },
@@ -1002,22 +1006,30 @@ mod tests {
         let mut header_route = HeaderBasedRoute {
             routes: vec![
                 HeaderRoutingRule {
-                    endpoint: "user-service".to_string(),
-                    is_alive: Some(true),
+                    base_route: BaseRoute {
+                        endpoint: "user-service".to_string(),
+                        is_alive: Some(true),
+                    },
                     header_key: "x-request-id".to_string(),
-                    header_value_mapping_type: HeaderValueMappingType::Regex(
-                        r"^user-\d+$".to_string(),
-                    ),
+                    header_value_mapping_type: HeaderValueMappingType::Regex(RegexMatch {
+                        value: r"^user-\d+$".to_string(),
+                    }),
                 },
                 HeaderRoutingRule {
-                    endpoint: "admin-service".to_string(),
-                    is_alive: Some(true),
+                    base_route: BaseRoute {
+                        endpoint: "admin-service".to_string(),
+                        is_alive: Some(true),
+                    },
                     header_key: "x-user-role".to_string(),
-                    header_value_mapping_type: HeaderValueMappingType::Text("admin".to_string()),
+                    header_value_mapping_type: HeaderValueMappingType::Text(TextMatch {
+                        value: "admin".to_string(),
+                    }),
                 },
                 HeaderRoutingRule {
-                    endpoint: "feature-service".to_string(),
-                    is_alive: Some(true),
+                    base_route: BaseRoute {
+                        endpoint: "feature-service".to_string(),
+                        is_alive: Some(true),
+                    },
                     header_key: "x-flags".to_string(),
                     header_value_mapping_type: HeaderValueMappingType::Split(SplitSegment {
                         split_by: ",".to_string(),
@@ -1080,9 +1092,13 @@ mod tests {
         let mut header_based_router = Router::HeaderBased(HeaderBasedRoute {
             routes: vec![HeaderRoutingRule {
                 header_key: "a".to_string(),
-                header_value_mapping_type: HeaderValueMappingType::Text("b".to_string()),
-                endpoint: "s1".to_string(),
-                is_alive: None,
+                header_value_mapping_type: HeaderValueMappingType::Text(TextMatch {
+                    value: "b".to_string(),
+                }),
+                base_route: BaseRoute {
+                    endpoint: "s1".to_string(),
+                    is_alive: None,
+                },
             }],
         });
         header_based_router.get_route(&HeaderMap::new()).unwrap();

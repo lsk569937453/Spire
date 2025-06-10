@@ -22,6 +22,7 @@ use axum::Router;
 use http::header;
 use prometheus::{Encoder, TextEncoder};
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
