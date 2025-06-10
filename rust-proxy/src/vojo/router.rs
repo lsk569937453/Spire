@@ -154,7 +154,6 @@ pub fn deserialize_router<'de, D>(deserializer: D) -> Result<Router, D::Error>
 where
     D: Deserializer<'de>,
 {
-    // 实现混合模式解析器
     struct StrategyVisitor;
 
     impl<'de> Visitor<'de> for StrategyVisitor {
@@ -164,7 +163,6 @@ where
             formatter.write_str("string, array or object")
         }
 
-        // 处理字符串输入
         fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
         where
             E: de::Error,

@@ -25,7 +25,6 @@ use tracing_subscriber::filter::LevelFilter;
 
 mod vojo;
 use crate::configuration_service::app_config_service;
-use crate::vojo::app_config::StaticConfig;
 use crate::vojo::app_error::AppError;
 #[macro_use]
 extern crate log;
@@ -52,16 +51,10 @@ async fn run_app(reload_handle: Handle<filter::Targets, Registry>) -> Result<(),
     info!("Configuration loaded successfully.");
     println!("Full configuration: {:?}", config);
 
-    reconfigure_logger(&reload_handle, &config.static_config);
-    info!(
-        "Logger reconfigured to level: {}",
-        config.static_config.get_log_level()
-    );
+    reconfigure_logger(&reload_handle, &config);
+    info!("Logger reconfigured to level: {}", config.get_log_level());
 
-    let admin_port = config
-        .static_config
-        .admin_port
-        .unwrap_or(DEFAULT_ADMIN_PORT);
+    let admin_port = config.admin_port.unwrap_or(DEFAULT_ADMIN_PORT);
     let shared_config = SharedConfig::from_app_config(config);
 
     app_config_service::init(shared_config.clone()).await?;
@@ -82,7 +75,7 @@ async fn load_config(cli: &Cli) -> Result<AppConfig, AppError> {
 
 fn reconfigure_logger(
     reload_handle: &Handle<filter::Targets, Registry>,
-    static_config: &StaticConfig,
+    static_config: &AppConfig,
 ) {
     let mut targets = vec![
         ("delay_timer", LevelFilter::OFF),

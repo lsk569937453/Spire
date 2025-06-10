@@ -455,7 +455,6 @@ mod tests {
         let client = HttpClients::new();
         let shared_config = SharedConfig {
             shared_data: Arc::new(Mutex::new(AppConfig {
-                static_config: Default::default(),
                 api_service_config: HashMap::from([(
                     8080,
                     ApiService {
@@ -481,6 +480,7 @@ mod tests {
                         ..Default::default()
                     },
                 )]),
+                ..Default::default()
             })),
         };
         let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);

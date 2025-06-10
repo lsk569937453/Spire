@@ -111,9 +111,7 @@ pub async fn start_proxy(
 #[cfg(test)]
 mod tests {
     use super::*; // Import items from the parent module
-    use crate::vojo::app_config::{
-        ApiService, AppConfig, ServiceConfig, ServiceType, StaticConfig,
-    };
+    use crate::vojo::app_config::{ApiService, AppConfig, ServiceConfig, ServiceType};
     use crate::vojo::cli::SharedConfig;
 
     use std::collections::HashMap;
@@ -352,7 +350,6 @@ peIJpwo+Kuf964DexDVglw==
             },
         )];
         let shared_config = SharedConfig::from_app_config(AppConfig {
-            static_config: StaticConfig::default(),
             api_service_config: HashMap::from([(
                 9001,
                 ApiService {
@@ -365,6 +362,7 @@ peIJpwo+Kuf964DexDVglw==
                     ..Default::default()
                 },
             )]),
+            ..Default::default()
         });
 
         let init_result = init(shared_config.clone()).await;
