@@ -368,13 +368,15 @@ async fn route_file(
 mod tests {
     use super::*;
 
+    use crate::middleware::authentication::BasicAuth;
+    use crate::middleware::middlewares::MiddleWares;
+    use crate::proxy::proxy_trait::{HandlingResult, MockChainTrait};
     use crate::vojo::app_config::Matcher;
     use crate::vojo::app_config::{ApiService, RouteConfig, ServiceConfig};
     use crate::vojo::router::{BaseRoute, RandomRoute, Router};
     use crate::{vojo::router::StaticFileRoute, AppConfig};
     use http::HeaderMap;
     use std::collections::HashMap;
-
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
     use std::sync::Mutex;
@@ -490,7 +492,152 @@ mod tests {
         println!("result is {:?}", result);
         assert!(result.is_err());
     }
+    #[tokio::test]
+    async fn test_proxy_handling_result_none() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://127.0.0.1:8080"),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_REQUEST_METHOD,
+            HeaderValue::from_static("POST"),
+        );
 
+        let client = HttpClients::new();
+        let shared_config = SharedConfig::from_app_config(AppConfig::default());
+        let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let mut req = Request::builder()
+            .method(Method::OPTIONS)
+            .uri("http://127.0.0.1:8080/test")
+            .body(Full::new(Bytes::from("")).boxed())
+            .unwrap();
+        req.headers_mut().extend(headers);
+
+        let mut mock_chain_trait = MockChainTrait::new();
+        mock_chain_trait
+            .expect_get_destination()
+            .returning(|_, _, _, _, _, _, _| Ok(None));
+        let result = proxy(
+            8080,
+            shared_config,
+            client,
+            req,
+            "test".to_string(),
+            remote_addr,
+            mock_chain_trait,
+        )
+        .await;
+        println!("result is {:?}", result);
+        assert!(result.is_ok());
+    }
+    #[tokio::test]
+    async fn test_proxy_middle() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://127.0.0.1:8080"),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_REQUEST_METHOD,
+            HeaderValue::from_static("POST"),
+        );
+
+        let client = HttpClients::new();
+        let shared_config = SharedConfig::from_app_config(AppConfig::default());
+        let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let mut req = Request::builder()
+            .method(Method::OPTIONS)
+            .uri("http://127.0.0.1:8080/test")
+            .body(Full::new(Bytes::from("")).boxed())
+            .unwrap();
+        req.headers_mut().extend(headers);
+
+        let mut mock_chain_trait = MockChainTrait::new();
+        mock_chain_trait
+            .expect_get_destination()
+            .returning(|_, _, _, _, _, _, spire_context| {
+                spire_context.middlewares = Some(vec![MiddleWares::Authentication(
+                    crate::middleware::authentication::Authentication::Basic(BasicAuth {
+                        credentials: "user:pass".to_string(),
+                    }),
+                )]);
+
+                Ok(Some(HandlingResult {
+                    request_path: "/test".to_string(),
+                    router_destination: RouterDestination::File(StaticFileRoute {
+                        doc_root: "./test".to_string(),
+                    }),
+                }))
+            });
+        mock_chain_trait
+            .expect_handle_before_request()
+            .returning(|_, _, _| Err(AppError("test".to_string())));
+        let result = proxy(
+            8080,
+            shared_config,
+            client,
+            req,
+            "test".to_string(),
+            remote_addr,
+            mock_chain_trait,
+        )
+        .await;
+        println!("result is {:?}", result);
+        assert!(result.is_err());
+    }
+    #[tokio::test]
+    async fn test_proxy_route_file() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://127.0.0.1:8080"),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_REQUEST_METHOD,
+            HeaderValue::from_static("POST"),
+        );
+
+        let client = HttpClients::new();
+        let shared_config = SharedConfig::from_app_config(AppConfig::default());
+        let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let mut req = Request::builder()
+            .method(Method::OPTIONS)
+            .uri("http://127.0.0.1:8080/test")
+            .body(Full::new(Bytes::from("")).boxed())
+            .unwrap();
+        req.headers_mut().extend(headers);
+
+        let mut mock_chain_trait = MockChainTrait::new();
+        mock_chain_trait
+            .expect_get_destination()
+            .returning(|_, _, _, _, _, _, spire_context| {
+                Ok(Some(HandlingResult {
+                    request_path: "/test".to_string(),
+                    router_destination: RouterDestination::File(StaticFileRoute {
+                        doc_root: "./test".to_string(),
+                    }),
+                }))
+            });
+        mock_chain_trait
+            .expect_handle_before_request()
+            .returning(|_, _, _| Err(AppError("test".to_string())));
+        let result = proxy(
+            8080,
+            shared_config,
+            client,
+            req,
+            "test".to_string(),
+            remote_addr,
+            mock_chain_trait,
+        )
+        .await;
+        println!("result is {:?}", result);
+        assert!(result.is_ok());
+    }
     #[tokio::test]
     async fn test_route_file() {
         let router_destination = RouterDestination::File(StaticFileRoute {

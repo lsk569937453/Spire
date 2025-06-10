@@ -29,7 +29,7 @@ pub enum Router {
     #[serde(rename = "weightBased")]
     WeightBased(WeightBasedRoute),
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Default, Eq)]
 
 pub struct StaticFileRoute {
     pub doc_root: String,
@@ -202,7 +202,7 @@ where
 pub struct AnomalyDetectionStatus {
     pub consecutive_5xx: i32,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, Eq)]
 pub struct BaseRoute {
     pub endpoint: String,
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
@@ -550,164 +550,500 @@ impl WeightBasedRoute {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http::HeaderValue;
+    use http::{HeaderMap, HeaderValue};
+    use serde_json;
 
-    #[tokio::test]
-    async fn test_poll_route() {
+    use tempfile::tempdir;
+    #[test]
+    fn test_static_file_route_deserialization() {
+        let temp_dir = tempdir().unwrap();
+        let path_str = temp_dir.path().to_str().unwrap();
+        let json = format!(r#"{{"doc_root": "{}"}}"#, path_str.replace('\\', "\\\\"));
+        let result: Result<StaticFileRoute, _> = serde_json::from_str(&json);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().doc_root, path_str);
+
+        let json = r#"{"doc_root": "/a/b/c/non-existent-path"}"#;
+        let result: Result<StaticFileRoute, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
+
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let file_path_str = temp_file.path().to_str().unwrap();
+        let json = format!(
+            r#"{{"doc_root": "{}"}}"#,
+            file_path_str.replace('\\', "\\\\")
+        );
+        let result: Result<StaticFileRoute, _> = serde_json::from_str(&json);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("is not a directory"));
+
+        let json = r#"{"a":"b"}"#;
+        let result: Result<StaticFileRoute, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("expected `doc_root`"));
+
+        let json = r#""a":"b"}"#;
+        let result: Result<StaticFileRoute, _> = serde_json::from_str(json);
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("expected a map representing StaticFileRoute"));
+    }
+
+    #[test]
+    fn test_deserialize_router_flexible_formats() {
+        let json = r#""http://localhost:8080""#;
+        let router: Router =
+            deserialize_router(&mut serde_json::Deserializer::from_str(json)).unwrap();
+        match router {
+            Router::Random(r) => {
+                assert_eq!(r.routes.len(), 1);
+                assert_eq!(r.routes[0].endpoint, "http://localhost:8080");
+            }
+            _ => panic!("Expected RandomRoute"),
+        }
+
+        let json = r#"["http://localhost:8080", "http://localhost:8081"]"#;
+        let router: Router =
+            deserialize_router(&mut serde_json::Deserializer::from_str(json)).unwrap();
+        match router {
+            Router::Random(r) => {
+                assert_eq!(r.routes.len(), 2);
+                assert_eq!(r.routes[1].endpoint, "http://localhost:8081");
+            }
+            _ => panic!("Expected RandomRoute"),
+        }
+
+        let json = r#"{
+        "kind": "poll",
+        "routes": [
+            {"endpoint": "http://s1"},
+            {"endpoint": "http://s2"}
+        ]
+    }"#;
+        let router: Router =
+            deserialize_router(&mut serde_json::Deserializer::from_str(json)).unwrap();
+        match router {
+            Router::Poll(p) => {
+                assert_eq!(p.routes.len(), 2);
+                assert_eq!(p.routes[0].endpoint, "http://s1");
+            }
+            _ => panic!("Expected PollRoute"),
+        }
+    }
+    #[test]
+    fn test_poll_route_logic() {
         let mut poll_route = PollRoute {
-            routes: vec![
-                BaseRoute {
-                    endpoint: "server1".to_string(),
-                    ..Default::default()
-                },
-                BaseRoute {
-                    endpoint: "server2".to_string(),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-
-        assert_eq!(
-            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
-            "server2"
-        );
-        assert_eq!(
-            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
-            "server1"
-        );
-        assert_eq!(
-            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
-            "server2"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_header_based_route() {
-        let header_route = HeaderBasedRoute {
-            routes: vec![
-                HeaderRoutingRule {
-                    header_key: "x-version".to_string(),
-                    header_value_mapping_type: HeaderValueMappingType::Text(TextMatch {
-                        value: "v1".to_string(),
-                    }),
-                    base_route: BaseRoute {
-                        endpoint: "server_v1".to_string(),
-                        ..Default::default()
-                    },
-                },
-                HeaderRoutingRule {
-                    header_key: "x-debug".to_string(),
-                    header_value_mapping_type: HeaderValueMappingType::Regex(RegexMatch {
-                        value: r"true|1".to_string(),
-                    }),
-                    base_route: BaseRoute {
-                        endpoint: "debug_server".to_string(),
-                        ..Default::default()
-                    },
-                },
-            ],
-        };
-
-        let mut strategy = Router::HeaderBased(header_route);
-
-        let mut headers = HeaderMap::new();
-        headers.insert("x-version", HeaderValue::from_static("v1"));
-        assert_eq!(
-            strategy.get_route(&headers).unwrap().get_endpoint(),
-            "server_v1"
-        );
-
-        // 测试正则匹配
-        let mut headers = HeaderMap::new();
-        headers.insert("x-debug", HeaderValue::from_static("true"));
-        assert_eq!(
-            strategy.get_route(&headers).unwrap().get_endpoint(),
-            "debug_server"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_random_route() {
-        let mut strategy = Router::Random(RandomRoute {
-            routes: vec![
-                BaseRoute {
-                    endpoint: "server_a".to_string(),
-                    ..Default::default()
-                },
-                BaseRoute {
-                    endpoint: "server_b".to_string(),
-                    ..Default::default()
-                },
-            ],
-        });
-
-        let mut results = vec![];
-        for _ in 0..100 {
-            let route = strategy.get_route(&HeaderMap::new()).unwrap();
-            results.push(route.get_endpoint());
-        }
-        assert!(results.contains(&"server_a".to_string()));
-        assert!(results.contains(&"server_b".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_weight_based_route() {
-        let mut strategy = Router::WeightBased(WeightBasedRoute {
-            routes: vec![
-                WeightedRouteItem {
-                    weight: 3,
-                    base_route: BaseRoute {
-                        endpoint: "server_heavy".to_string(),
-                        ..Default::default()
-                    },
-                    index: 0,
-                },
-                WeightedRouteItem {
-                    weight: 1,
-                    base_route: BaseRoute {
-                        endpoint: "server_light".to_string(),
-                        ..Default::default()
-                    },
-                    index: 0,
-                },
-            ],
-        });
-
-        let mut results = vec![];
-        for _ in 0..4 {
-            let route = strategy.get_route(&HeaderMap::new()).unwrap();
-            results.push(route.get_endpoint());
-        }
-        assert_eq!(results[0..3], vec!["server_heavy"; 3]);
-        assert_eq!(results[3], "server_light");
-    }
-
-    #[tokio::test]
-    async fn test_get_all_routes() {
-        let mut poll_strategy = Router::Poll(PollRoute {
+            current_index: -1,
             routes: vec![
                 BaseRoute {
                     endpoint: "s1".to_string(),
-                    ..Default::default()
+                    is_alive: None,
                 },
                 BaseRoute {
                     endpoint: "s2".to_string(),
-                    ..Default::default()
+                    is_alive: None,
+                },
+                BaseRoute {
+                    endpoint: "s3".to_string(),
+                    is_alive: None,
                 },
             ],
-            ..Default::default()
+        };
+
+        assert_eq!(
+            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+            "s1"
+        );
+        assert_eq!(
+            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+            "s2"
+        );
+        assert_eq!(
+            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+            "s3"
+        );
+        assert_eq!(
+            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+            "s1"
+        );
+
+        poll_route
+            .update_route_alive(
+                BaseRoute {
+                    endpoint: "s2".to_string(),
+                    is_alive: None,
+                },
+                false,
+            )
+            .unwrap();
+        poll_route
+            .update_route_alive(
+                BaseRoute {
+                    endpoint: "s1".to_string(),
+                    is_alive: None,
+                },
+                true,
+            )
+            .unwrap();
+        poll_route
+            .update_route_alive(
+                BaseRoute {
+                    endpoint: "s3".to_string(),
+                    is_alive: None,
+                },
+                true,
+            )
+            .unwrap();
+
+        poll_route.current_index = -1; // reset for testing
+
+        assert_eq!(
+            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+            "s1"
+        );
+        assert_eq!(
+            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+            "s3"
+        );
+        assert_eq!(
+            poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+            "s1"
+        );
+    }
+    #[test]
+    fn test_random_route_logic() {
+        let mut random_route = RandomRoute {
+            routes: vec![
+                BaseRoute {
+                    endpoint: "s1".to_string(),
+                    is_alive: None,
+                },
+                BaseRoute {
+                    endpoint: "s2".to_string(),
+                    is_alive: None,
+                },
+            ],
+        };
+
+        let route = random_route.get_route(&HeaderMap::new()).unwrap();
+        assert!(route.endpoint == "s1" || route.endpoint == "s2");
+
+        random_route
+            .update_route_alive(
+                BaseRoute {
+                    endpoint: "s1".to_string(),
+                    is_alive: None,
+                },
+                false,
+            )
+            .unwrap();
+        random_route
+            .update_route_alive(
+                BaseRoute {
+                    endpoint: "s2".to_string(),
+                    is_alive: None,
+                },
+                true,
+            )
+            .unwrap();
+
+        for _ in 0..10 {
+            assert_eq!(
+                random_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+                "s2"
+            );
+        }
+
+        random_route
+            .update_route_alive(
+                BaseRoute {
+                    endpoint: "s2".to_string(),
+                    is_alive: None,
+                },
+                false,
+            )
+            .unwrap();
+
+        let route = random_route.get_route(&HeaderMap::new()).unwrap();
+        assert!(route.endpoint == "s1" || route.endpoint == "s2");
+    }
+    #[test]
+    fn test_weight_based_route_logic() {
+        let mut weight_route = WeightBasedRoute {
+            routes: vec![
+                WeightedRouteItem {
+                    base_route: BaseRoute {
+                        endpoint: "s1".to_string(),
+                        is_alive: None,
+                    },
+                    weight: 2,
+                    index: 0,
+                },
+                WeightedRouteItem {
+                    base_route: BaseRoute {
+                        endpoint: "s2".to_string(),
+                        is_alive: None,
+                    },
+                    weight: 1,
+                    index: 0,
+                },
+            ],
+        };
+
+        assert_eq!(
+            weight_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+            "s1"
+        );
+        assert_eq!(
+            weight_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+            "s1"
+        );
+        assert_eq!(
+            weight_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+            "s2"
+        );
+        assert_eq!(
+            weight_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+            "s1"
+        );
+        assert_eq!(
+            weight_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+            "s1"
+        );
+
+        weight_route
+            .update_route_alive(
+                BaseRoute {
+                    endpoint: "s1".to_string(),
+                    is_alive: None,
+                },
+                false,
+            )
+            .unwrap();
+        weight_route
+            .update_route_alive(
+                BaseRoute {
+                    endpoint: "s2".to_string(),
+                    is_alive: None,
+                },
+                true,
+            )
+            .unwrap();
+
+        for r in &mut weight_route.routes {
+            r.index = 0;
+        }
+
+        for _ in 0..5 {
+            assert_eq!(
+                weight_route.get_route(&HeaderMap::new()).unwrap().endpoint,
+                "s2"
+            );
+        }
+    }
+    #[test]
+    fn test_header_based_route_logic() {
+        let mut header_route = HeaderBasedRoute {
+            routes: vec![
+                HeaderRoutingRule {
+                    base_route: BaseRoute {
+                        endpoint: "user-service".to_string(),
+                        is_alive: Some(true),
+                    },
+                    header_key: "x-request-id".to_string(),
+                    header_value_mapping_type: HeaderValueMappingType::Regex(RegexMatch {
+                        value: r"^user-\d+$".to_string(),
+                    }),
+                },
+                HeaderRoutingRule {
+                    base_route: BaseRoute {
+                        endpoint: "admin-service".to_string(),
+                        is_alive: Some(true),
+                    },
+                    header_key: "x-user-role".to_string(),
+                    header_value_mapping_type: HeaderValueMappingType::Text(TextMatch {
+                        value: "admin".to_string(),
+                    }),
+                },
+                HeaderRoutingRule {
+                    base_route: BaseRoute {
+                        endpoint: "feature-service".to_string(),
+                        is_alive: Some(true),
+                    },
+                    header_key: "x-flags".to_string(),
+                    header_value_mapping_type: HeaderValueMappingType::Split(SplitSegment {
+                        split_by: ",".to_string(),
+                        split_list: vec!["beta".to_string(), "canary".to_string()],
+                    }),
+                },
+            ],
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-request-id", HeaderValue::from_static("user-12345"));
+        assert_eq!(
+            header_route.get_route(&headers).unwrap().endpoint,
+            "user-service"
+        );
+
+        headers.clear();
+        headers.insert("x-user-role", HeaderValue::from_static("admin"));
+        assert_eq!(
+            header_route.get_route(&headers).unwrap().endpoint,
+            "admin-service"
+        );
+
+        headers.clear();
+        headers.insert("x-flags", HeaderValue::from_static("canary,new-ui,beta"));
+        assert_eq!(
+            header_route.get_route(&headers).unwrap().endpoint,
+            "feature-service"
+        );
+
+        headers.clear();
+        headers.insert("x-some-other-header", HeaderValue::from_static("value"));
+        assert_eq!(
+            header_route.get_route(&headers).unwrap().endpoint,
+            "user-service"
+        );
+
+        header_route
+            .update_route_alive(
+                BaseRoute {
+                    endpoint: "admin-service".to_string(),
+                    is_alive: None,
+                },
+                false,
+            )
+            .unwrap();
+        headers.clear();
+        headers.insert("x-user-role", HeaderValue::from_static("admin"));
+        assert_eq!(
+            header_route.get_route(&headers).unwrap().endpoint,
+            "user-service"
+        );
+    }
+    #[test]
+    fn test_router_enum_dispatch() {
+        let mut static_file_router = Router::StaticFile(StaticFileRoute {
+            doc_root: "".to_string(),
+        });
+        static_file_router.get_route(&HeaderMap::new()).unwrap();
+        let mut header_based_router = Router::HeaderBased(HeaderBasedRoute {
+            routes: vec![HeaderRoutingRule {
+                header_key: "a".to_string(),
+                header_value_mapping_type: HeaderValueMappingType::Text(TextMatch {
+                    value: "b".to_string(),
+                }),
+                base_route: BaseRoute {
+                    endpoint: "s1".to_string(),
+                    is_alive: None,
+                },
+            }],
+        });
+        header_based_router.get_route(&HeaderMap::new()).unwrap();
+        let mut router = Router::Poll(PollRoute {
+            current_index: -1,
+            routes: vec![BaseRoute {
+                endpoint: "s1".to_string(),
+                is_alive: None,
+            }],
         });
 
-        let routes = poll_strategy.get_all_route().await.unwrap();
-        assert_eq!(routes.len(), 2);
-        assert_eq!(routes[0].endpoint, "s1");
-        assert_eq!(routes[1].endpoint, "s2");
+        let dest = router.get_route(&HeaderMap::new()).unwrap();
+        assert_eq!(
+            dest,
+            RouterDestination::Http(BaseRoute {
+                endpoint: "s1".to_string(),
+                is_alive: None
+            })
+        );
+
+        router
+            .update_route_alive(
+                BaseRoute {
+                    endpoint: "s1".to_string(),
+                    is_alive: None,
+                },
+                false,
+            )
+            .unwrap();
+        if let Router::Poll(p) = router {
+            assert_eq!(p.routes[0].is_alive, Some(false));
+        } else {
+            panic!("Router type changed unexpectedly");
+        }
     }
 
     #[tokio::test]
-    async fn test_empty_routes() {
-        let mut strategy = Router::WeightBased(WeightBasedRoute { routes: vec![] });
-        assert!(strategy.get_route(&HeaderMap::new()).is_err());
+    async fn test_router_get_all_route() {
+        let mut header_based_router = Router::HeaderBased(HeaderBasedRoute { routes: vec![] });
+        let _ = header_based_router.get_all_route().await;
+        let _ = header_based_router.update_route_alive(
+            BaseRoute {
+                endpoint: "test".to_string(),
+                is_alive: None,
+            },
+            false,
+        );
+        let mut weight_based_router = Router::WeightBased(WeightBasedRoute { routes: vec![] });
+        let _ = weight_based_router.get_all_route().await;
+        let _ = weight_based_router.update_route_alive(
+            BaseRoute {
+                endpoint: "test".to_string(),
+                is_alive: None,
+            },
+            false,
+        );
+        let mut router = Router::Random(RandomRoute {
+            routes: vec![
+                BaseRoute {
+                    endpoint: "s1".to_string(),
+                    is_alive: None,
+                },
+                BaseRoute {
+                    endpoint: "s2".to_string(),
+                    is_alive: None,
+                },
+            ],
+        });
+        let _ = router.update_route_alive(
+            BaseRoute {
+                endpoint: "test".to_string(),
+                is_alive: None,
+            },
+            false,
+        );
+        let all_routes = router.get_all_route().await.unwrap();
+        assert_eq!(all_routes.len(), 2);
+        assert_eq!(all_routes[0].endpoint, "s1");
+
+        let mut static_router = Router::StaticFile(StaticFileRoute {
+            doc_root: ".".to_string(),
+        });
+        let _ = static_router.update_route_alive(
+            BaseRoute {
+                endpoint: "test".to_string(),
+                is_alive: None,
+            },
+            false,
+        );
+        let result = static_router.get_all_route().await;
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            AppError("StaticFile router can not get route".to_string())
+        );
     }
 }

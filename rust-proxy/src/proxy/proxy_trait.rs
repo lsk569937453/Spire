@@ -15,6 +15,7 @@ use http_body_util::BodyExt;
 use http_body_util::Full;
 use hyper::Response;
 use hyper::Uri;
+use mockall::automock;
 use serde::Deserialize;
 use serde::Serialize;
 use std::convert::Infallible;
@@ -40,6 +41,7 @@ impl SpireContext {
         Ok(None)
     }
 }
+#[automock]
 pub trait ChainTrait {
     async fn get_destination(
         &self,
@@ -76,7 +78,7 @@ pub struct HandlingResult {
     pub request_path: String,
     pub router_destination: RouterDestination,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 
 pub enum RouterDestination {
     Http(BaseRoute),
