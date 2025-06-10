@@ -1,7 +1,10 @@
 use crate::vojo::app_config::AppConfig;
+use axum::response::IntoResponse;
+use axum::response::Response;
 use http::header::InvalidHeaderValue;
 use http::header::ToStrError;
 use http::uri::InvalidUriParts;
+use http::StatusCode;
 use rustls_pki_types::InvalidDnsNameError;
 use std::sync::PoisonError;
 use std::time::SystemTimeError;
@@ -9,6 +12,22 @@ use thiserror::Error;
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 #[error("Error is: {0}")]
 pub struct AppError(pub String);
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, error_message) = (StatusCode::INTERNAL_SERVER_ERROR, self.to_string());
+
+        error!("Error processing request: {}", self);
+
+        (status, error_message).into_response()
+    }
+}
+#[macro_export]
+macro_rules! app_error {
+    ($($arg:tt)*) => {
+        AppError(format!($($arg)*))
+    }
+}
 impl From<&str> for AppError {
     fn from(s: &str) -> Self {
         AppError(s.to_string())

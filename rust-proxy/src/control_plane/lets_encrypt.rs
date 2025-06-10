@@ -3,9 +3,9 @@ use crate::vojo::{app_error::AppError, base_response::BaseResponse};
 use crate::SharedConfig;
 use axum::extract::State;
 use axum::response::IntoResponse;
+use axum::Json;
 use mockall::automock;
 use serde::{Deserialize, Serialize};
-use std::convert::Infallible;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 struct LetsEncryptResponse {
@@ -18,41 +18,20 @@ pub trait LetsEncryptActions: Send + Sync {
 }
 pub async fn lets_encrypt_certificate_logic<LEO: LetsEncryptActions>(
     lets_encrypt_object: LEO,
-) -> Result<impl IntoResponse, Infallible> {
-    let request_result = lets_encrypt_object.start_request2().await;
+) -> Result<impl IntoResponse, AppError> {
+    let certificate_response = lets_encrypt_object.start_request2().await?;
+    let data = BaseResponse {
+        response_code: 0,
+        response_object: certificate_response,
+    };
 
-    match request_result {
-        Ok(certificate) => {
-            let response = LetsEncryptResponse {
-                key_perm: certificate.clone(),
-                certificate_perm: certificate,
-            };
-            let data = BaseResponse {
-                response_code: 0,
-                response_object: response,
-            };
-            match serde_json::to_string(&data) {
-                Ok(json_str) => Ok((axum::http::StatusCode::OK, json_str)),
-                Err(err) => {
-                    error!("Error serializing response: {:?}", err); // Log the error for debugging
-                    Ok((
-                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        "Failed to serialize response".to_string(), // Provide a generic error message to the client
-                    ))
-                }
-            }
-        }
-        Err(err) => Ok((
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            err.to_string(),
-        )),
-    }
+    Ok(Json(data))
 }
 pub async fn lets_encrypt_certificate(
     State(_): State<SharedConfig>,
 
     axum::extract::Json(lets_encrypt_object): axum::extract::Json<LetsEntrypt>,
-) -> Result<impl axum::response::IntoResponse, Infallible> {
+) -> Result<impl axum::response::IntoResponse, AppError> {
     lets_encrypt_certificate_logic(lets_encrypt_object).await
 }
 #[cfg(test)]

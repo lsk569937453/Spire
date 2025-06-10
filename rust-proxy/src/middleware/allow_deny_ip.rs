@@ -61,9 +61,9 @@ impl AllowDenyItem {
             return Ok(AllowResult::Deny);
         }
         if self.value.is_none() {
-            return Err(AppError(String::from(
+            return Err(AppError::from(
                 "the value counld not be none when the limit_type is not AllowAll or DenyAll!",
-            )));
+            ));
         }
         let config_ip = self.value.clone().ok_or("config_ip is none")?;
         let value_mapped_ip: bool = if config_ip.contains('/') {

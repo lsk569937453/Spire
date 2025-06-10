@@ -61,12 +61,14 @@ pub async fn start_proxy(
         };
         http_proxy.start_http_server().await
     } else if server_type == ServiceType::Https {
-        let pem_str = service_config
-            .cert_str
-            .ok_or(AppError("Pem is null.".to_string()))?;
-        let key_str = service_config
-            .key_str
-            .ok_or(AppError("Pem is null.".to_string()))?;
+        let pem_str = service_config.cert_str.ok_or(app_error!(
+            "Certificate (cert_str) is missing for TLS service on port {}",
+            port
+        ))?;
+        let key_str = service_config.key_str.ok_or(app_error!(
+            "Private key (key_str) is missing for TLS service on port {}",
+            port
+        ))?;
         let mut http_proxy = HttpProxy {
             shared_config,
             port,
@@ -91,12 +93,14 @@ pub async fn start_proxy(
         };
         grpc_proxy.start_proxy().await
     } else {
-        let pem_str = service_config
-            .cert_str
-            .ok_or(AppError("Pem is null.".to_string()))?;
-        let key_str = service_config
-            .key_str
-            .ok_or(AppError("Pem is null.".to_string()))?;
+        let pem_str = service_config.cert_str.ok_or(app_error!(
+            "Certificate (cert_str) is missing for TLS service on port {}",
+            port
+        ))?;
+        let key_str = service_config.key_str.ok_or(app_error!(
+            "Private key (key_str) is missing for TLS service on port {}",
+            port
+        ))?;
         let mut grpc_proxy = GrpcProxy {
             shared_config,
             port,
