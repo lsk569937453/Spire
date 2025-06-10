@@ -240,7 +240,7 @@ mod tests {
     fn create_instant_acme_error() -> instant_acme::Error {
         instant_acme::Error::Str("()")
     }
-
+    #[allow(clippy::invalid_regex)]
     fn create_regex_error() -> regex::Error {
         regex::Regex::new("[").unwrap_err()
     }

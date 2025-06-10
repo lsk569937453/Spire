@@ -42,6 +42,7 @@ impl SpireContext {
 }
 #[automock]
 pub trait ChainTrait {
+    #[allow(clippy::too_many_arguments)]
     async fn get_destination(
         &self,
         shared_config: SharedConfig,
