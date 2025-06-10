@@ -137,7 +137,7 @@ impl HttpProxy {
                     let io = TokioIo::new(tls_stream);
                     let service = service_fn(move |req: Request<Incoming>| {
                         let req = req
-                            .map(|item| item.map_err(|_| -> Infallible { unreachable!() }).boxed());
+                            .map(|item| item.map_err(AppError::from).boxed());
 
                         proxy_adapter(cloned_port,cloned_shared_config.clone(),client.clone(), req, mapping_key2.clone(), addr)
                     });
@@ -160,7 +160,7 @@ async fn proxy_adapter(
     port: i32,
     shared_config: SharedConfig,
     client: HttpClients,
-    req: Request<BoxBody<Bytes, Infallible>>,
+    req: Request<BoxBody<Bytes, AppError>>,
     mapping_key: String,
     remote_addr: SocketAddr,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
@@ -183,7 +183,7 @@ async fn proxy_adapter_with_error(
     port: i32,
     shared_config: SharedConfig,
     client: HttpClients,
-    req: Request<BoxBody<Bytes, Infallible>>,
+    req: Request<BoxBody<Bytes, AppError>>,
     mapping_key: String,
     remote_addr: SocketAddr,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, AppError> {
@@ -238,7 +238,7 @@ async fn proxy(
     port: i32,
     shared_config: SharedConfig,
     client: HttpClients,
-    mut req: Request<BoxBody<Bytes, Infallible>>,
+    mut req: Request<BoxBody<Bytes, AppError>>,
     mapping_key: String,
     remote_addr: SocketAddr,
     chain_trait: impl ChainTrait,

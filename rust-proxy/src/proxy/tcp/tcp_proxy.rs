@@ -114,7 +114,7 @@ async fn get_route_cluster(
     let service_config = &value.service_config.route_configs.clone();
     let service_config_clone = service_config.clone();
     if service_config_clone.is_empty() {
-        return Err(AppError(String::from("The len of routes is 0")));
+        return Err(AppError::from("The len of routes is 0"));
     }
     let mut route = service_config_clone
         .first()

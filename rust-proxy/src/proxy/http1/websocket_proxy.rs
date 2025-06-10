@@ -61,7 +61,7 @@ pub async fn server_upgrade(
     let upgrade_value = header_map.get(UPGRADE).ok_or("Update header is none")?;
     let sec_websocke_key = header_map
         .get(SEC_WEBSOCKET_KEY)
-        .ok_or(AppError(String::from("Can not get the websocket key!")))?
+        .ok_or(AppError::from("Can not get the websocket key!"))?
         .to_str()?
         .to_string();
 
@@ -90,7 +90,7 @@ pub async fn server_upgrade(
         ))),
     }?;
     if outbound_res.status() != StatusCode::SWITCHING_PROTOCOLS {
-        return Err(AppError(String::from("Request error!")));
+        return Err(AppError::from("Request error!"));
     }
     tokio::task::spawn(async move {
         let res = server_upgraded_io(req, outbound_res).await;

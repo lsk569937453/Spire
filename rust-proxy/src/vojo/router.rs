@@ -484,7 +484,7 @@ impl WeightBasedRoute {
 
     fn get_route(&mut self, _headers: &HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
         if self.routes.is_empty() {
-            return Err(AppError(String::from("No routes available")));
+            return Err(AppError::from("No routes available"));
         }
 
         let has_unconfigured = self.routes.iter().any(|r| r.base_route.is_alive.is_none());
@@ -499,7 +499,7 @@ impl WeightBasedRoute {
                 route.index += 1;
                 Ok(route.base_route.clone())
             } else {
-                Err(AppError(String::from("WeightRoute get route error")))
+                Err(AppError::from("WeightRoute get route error"))
             }
         } else {
             let alive_indices: Vec<usize> = self
@@ -525,7 +525,7 @@ impl WeightBasedRoute {
                         return Ok(self.routes[i].base_route.clone());
                     }
                 }
-                Err(AppError(String::from("WeightRoute get route error")))
+                Err(AppError::from("WeightRoute get route error"))
             } else {
                 let mut rng = rand::rng();
                 let idx = rng.random_range(0..self.routes.len());

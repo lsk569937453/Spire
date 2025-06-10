@@ -142,15 +142,15 @@ impl ChainTrait for CommonCheckRequest {
     ) -> Result<Option<HandlingResult>, AppError> {
         let backend_path = uri
             .path_and_query()
-            .ok_or(AppError(String::from("Path is empty")))?
+            .ok_or(AppError::from("Path is empty"))?
             .as_str();
         let mut app_config = shared_config.shared_data.lock()?;
         let api_service = app_config
             .api_service_config
             .get_mut(&port)
-            .ok_or(AppError(String::from(
+            .ok_or(AppError::from(
                 "Can not find config by port from app config.",
-            )))?;
+            ))?;
 
         for item in api_service.service_config.route_configs.iter_mut() {
             let match_result = item.is_matched(backend_path, Some(headers))?;

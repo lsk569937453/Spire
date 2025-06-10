@@ -236,25 +236,23 @@ async fn request_outbound(
         )
         .await?;
     if check_result.is_none() {
-        return Err(AppError(String::from(
-            "The request has been denied by the proxy!",
-        )));
+        return Err(AppError::from("The request has been denied by the proxy!"));
     }
     let request_path = check_result.ok_or("check_result is none")?.request_path;
     let url = Url::parse(&request_path)?;
     let cloned_url = url.clone();
     let host = cloned_url
         .host()
-        .ok_or(AppError(String::from("Parse host error!")))?;
+        .ok_or(AppError::from("Parse host error!"))?;
     let port = cloned_url
         .port()
-        .ok_or(AppError(String::from("Parse host error!")))?;
+        .ok_or(AppError::from("Parse host error!"))?;
     debug!("The host is {}", host);
 
     let addr = format!("{}:{}", host, port)
         .to_socket_addrs()?
         .next()
-        .ok_or(AppError(String::from("Parse the domain error!")))?;
+        .ok_or(AppError::from("Parse the domain error!"))?;
     debug!("The addr is {}", addr);
     let host_str = host.to_string();
 

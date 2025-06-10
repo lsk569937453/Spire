@@ -300,7 +300,7 @@ fn submit_task(
             .set_maximum_parallel_runnable_num(1)
             .spawn_async_routine(task)?);
     }
-    Err(AppError(String::from("Submit task error!")))
+    Err(AppError::from("Submit task error!"))
 }
 
 #[cfg(test)]

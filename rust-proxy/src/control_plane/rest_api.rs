@@ -12,16 +12,15 @@ use crate::vojo::base_response::BaseResponse;
 use crate::vojo::cli::SharedConfig;
 use axum::extract::Request;
 use axum::extract::State;
-use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::delete;
 use axum::routing::put;
 use axum::routing::{get, post};
+use axum::Json;
 use axum::Router;
 use http::header;
 use prometheus::{Encoder, TextEncoder};
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
@@ -30,42 +29,15 @@ static INTERNAL_SERVER_ERROR: &str = "Internal Server Error";
 
 async fn get_app_config(
     State(shared_config): State<SharedConfig>,
-) -> Result<impl axum::response::IntoResponse, Infallible> {
-    match get_app_config_with_error(shared_config).await {
-        Ok(response) => Ok(response),
-        Err(err) => {
-            let response = Response::builder()
-                .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(format!("Error is : {}", err))
-                .unwrap_or_default();
-            Ok(response)
-        }
-    }
-}
-async fn get_app_config_with_error(
-    shared_config: SharedConfig,
-) -> Result<Response<String>, AppError> {
-    let app_config_res = shared_config.shared_data.lock()?;
-
-    let data = BaseResponse {
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let app_config = shared_config.shared_data.lock()?.clone();
+    Ok(Json(BaseResponse {
         response_code: 0,
-        response_object: app_config_res.clone(),
-    };
-    let (status, body) = match serde_yaml::to_string(&data) {
-        Ok(json) => (axum::http::StatusCode::OK, json),
-        Err(_) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("No route {}", INTERNAL_SERVER_ERROR),
-        ),
-    };
-    let response = Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(body)?;
-    Ok(response)
+        response_object: app_config,
+    }))
 }
-async fn get_prometheus_metrics() -> Result<impl axum::response::IntoResponse, Infallible> {
+
+async fn get_prometheus_metrics() -> Result<impl axum::response::IntoResponse, AppError> {
     let metric_families = prometheus::gather();
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
@@ -80,16 +52,8 @@ async fn get_prometheus_metrics() -> Result<impl axum::response::IntoResponse, I
 async fn post_app_config(
     State(shared_config): State<SharedConfig>,
     req: Request,
-) -> Result<impl axum::response::IntoResponse, Infallible> {
-    let t = match post_app_config_with_error(shared_config, req).await {
-        Ok(r) => r.into_response(),
-        Err(err) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            err.to_string(),
-        )
-            .into_response(),
-    };
-    Ok(t)
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    post_app_config_with_error(shared_config, req).await
 }
 async fn post_app_config_with_error(
     shared_config: SharedConfig,
@@ -117,7 +81,7 @@ async fn post_app_config_with_error(
                 .service_config
                 .route_configs
                 .first()
-                .ok_or(AppError(String::from("The route is empty!")))?
+                .ok_or(AppError::from("The route is empty!"))?
                 .clone(),
         ),
         None => {
@@ -147,14 +111,8 @@ async fn post_app_config_with_error(
 async fn delete_route(
     State(shared_config): State<SharedConfig>,
     axum::extract::Path(route_id): axum::extract::Path<String>,
-) -> Result<impl axum::response::IntoResponse, Infallible> {
-    match delete_route_with_error(shared_config, route_id).await {
-        Ok(r) => Ok((axum::http::StatusCode::OK, r)),
-        Err(err) => Ok((
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            err.to_string(),
-        )),
-    }
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    delete_route_with_error(shared_config, route_id).await
 }
 async fn delete_route_with_error(
     shared_config: SharedConfig,
@@ -190,16 +148,8 @@ async fn delete_route_with_error(
 async fn put_routex(
     State(shared_config): State<SharedConfig>,
     req: Request,
-) -> Result<impl axum::response::IntoResponse, Infallible> {
-    let t = match put_route_with_error(shared_config, req).await {
-        Ok(r) => r.into_response(),
-        Err(err) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            err.to_string(),
-        )
-            .into_response(),
-    };
-    Ok(t)
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    put_route_with_error(shared_config, req).await
 }
 async fn put_route_with_error(
     shared_config: SharedConfig,
@@ -215,9 +165,7 @@ async fn put_route_with_error(
         .iter_mut()
         .flat_map(|(_, item)| item.service_config.route_configs.iter_mut())
         .find(|r| r.route_id == route.route_id)
-        .ok_or(AppError(String::from(
-            "Can not find the route by route id!",
-        )))?;
+        .ok_or(AppError::from("Can not find the route by route id!"))?;
 
     *old_route = route;
 
@@ -264,9 +212,9 @@ pub fn validate_tls_config(
     key_pem_option: Option<String>,
 ) -> Result<(), AppError> {
     if cert_pem_option.is_none() || key_pem_option.is_none() {
-        return Err(AppError(String::from("Cert or key is none")));
+        return Err(AppError::from("Cert or key is none"));
     }
-    let cert_pem = cert_pem_option.ok_or(AppError(String::from("Cert is none")))?;
+    let cert_pem = cert_pem_option.ok_or(AppError::from("Cert is none"))?;
     let mut cer_reader = std::io::BufReader::new(cert_pem.as_bytes());
     let result_certs = rustls_pemfile::certs(&mut cer_reader).next();
     if result_certs.is_none()
@@ -274,12 +222,12 @@ pub fn validate_tls_config(
             .ok_or(AppError("result_certs is null".to_string()))?
             .is_err()
     {
-        return Err(AppError(String::from("Can not parse the certs pem.")));
+        return Err(AppError::from("Can not parse the certs pem."));
     }
-    let key_pem = key_pem_option.ok_or(AppError(String::from("Key is none")))?;
+    let key_pem = key_pem_option.ok_or(AppError::from("Key is none"))?;
     let key_pem_result = pkcs8::Document::from_pem(key_pem.as_str());
     if key_pem_result.is_err() {
-        return Err(AppError(String::from("Can not parse the key pem.")));
+        return Err(AppError::from("Can not parse the key pem."));
     }
     Ok(())
 }
@@ -288,10 +236,8 @@ async fn print_request_response(req: Request<axum::body::Body>, next: Next) -> R
     let uri = req.uri().clone();
     let start = Instant::now();
 
-    // 处理请求
     let response = next.run(req).await;
 
-    // 记录日志
     let duration = start.elapsed();
     debug!(
         "{} {} {} {} {:?}",
