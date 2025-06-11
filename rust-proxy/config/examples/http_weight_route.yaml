@@ -9,12 +9,9 @@ servers:
         forward_to:
           kind: weightBased
           routes:
-            - base_route:
-                endpoint: http://127.0.0.1:9394
+            - endpoint: http://127.0.0.1:9394
               weight: 1
-            - base_route:
-                endpoint: http://127.0.0.1:9396
+            - endpoint: http://127.0.0.1:9396
               weight: 2
-            - base_route:
-                endpoint: http://127.0.0.1:9395
+            - endpoint: http://127.0.0.1:939
               weight: 3

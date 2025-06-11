@@ -1,4 +1,5 @@
 use crate::proxy::proxy_trait::RouterDestination;
+use serde::Serializer;
 
 use super::app_error::AppError;
 use core::fmt::Debug;
@@ -9,6 +10,7 @@ use regex::Regex;
 use serde::de;
 use serde::de::MapAccess;
 use serde::de::Visitor;
+use serde::ser::SerializeStruct;
 use serde::Deserializer;
 use std::path::Path;
 
@@ -34,13 +36,11 @@ pub enum Router {
 pub struct StaticFileRoute {
     pub doc_root: String,
 }
-// 手动实现 Deserialize trait，替代 derive(Deserialize)
 impl<'de> Deserialize<'de> for StaticFileRoute {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        // 委托给自定义 Visitor 处理 map 结构的反序列化
         deserializer.deserialize_map(StaticFileRouteVisitor)
     }
 }
@@ -79,10 +79,7 @@ impl<'de> Visitor<'de> for StaticFileRouteVisitor {
                     doc_root = Some(value);
                 }
                 unknown_key => {
-                    return Err(serde::de::Error::unknown_field(
-                        unknown_key,
-                        &["doc_root"], // 预期仅有的字段
-                    ));
+                    return Err(serde::de::Error::unknown_field(unknown_key, &["doc_root"]));
                 }
             }
         }
@@ -209,7 +206,9 @@ pub struct BaseRoute {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SplitSegment {
+    #[serde(rename = "by")]
     pub split_by: String,
+    #[serde(rename = "matches")]
     pub split_list: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -217,7 +216,7 @@ pub struct SplitItem {
     pub header_key: String,
     pub header_value: String,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 
 pub struct RegexMatch {
     pub value: String,
@@ -229,15 +228,153 @@ pub struct TextMatch {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum HeaderValueMappingType {
-    Regex(RegexMatch),
-    Text(TextMatch),
+    Regex(String),
+    Text(String),
     Split(SplitSegment),
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+impl Default for HeaderValueMappingType {
+    fn default() -> Self {
+        Self::Text("".to_string())
+    }
+}
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct HeaderRoutingRule {
-    pub base_route: BaseRoute,
+    pub endpoint: String,
+    pub is_alive: Option<bool>,
     pub header_key: String,
     pub header_value_mapping_type: HeaderValueMappingType,
+}
+impl HeaderRoutingRule {
+    pub fn get_base_route(&self) -> BaseRoute {
+        BaseRoute {
+            endpoint: self.endpoint.clone(),
+            is_alive: self.is_alive,
+        }
+    }
+}
+
+impl Serialize for HeaderRoutingRule {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut field_count = 3;
+        if self.is_alive.is_some() {
+            field_count += 1;
+        }
+
+        let mut state = serializer.serialize_struct("HeaderRoutingRule", field_count)?;
+
+        state.serialize_field("endpoint", &self.endpoint)?;
+
+        if let Some(alive) = self.is_alive {
+            state.serialize_field("is_alive", &alive)?;
+        }
+
+        state.serialize_field("header", &self.header_key)?;
+
+        match &self.header_value_mapping_type {
+            HeaderValueMappingType::Text(value) => {
+                state.serialize_field("match", &serde_json::json!({ "text": value }))?;
+            }
+            HeaderValueMappingType::Regex(value) => {
+                state.serialize_field("match", &serde_json::json!({ "regex": value }))?;
+            }
+            HeaderValueMappingType::Split(segment) => {
+                state.serialize_field("match", &serde_json::json!({ "split": segment }))?;
+            }
+        }
+
+        state.end()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MatchTypeHelper {
+    Text(String),
+    Regex(String),
+    Split(SplitSegment),
+}
+
+impl<'de> Deserialize<'de> for HeaderRoutingRule {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field {
+            Endpoint,
+            Header,
+            Match,
+        }
+
+        struct HeaderRoutingRuleVisitor;
+
+        impl<'de> Visitor<'de> for HeaderRoutingRuleVisitor {
+            type Value = HeaderRoutingRule;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str(
+                    "struct HeaderRoutingRule with fields 'endpoint', 'header', and 'match'",
+                )
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<HeaderRoutingRule, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut endpoint = None;
+                let mut header_key = None;
+                let mut mapping_type = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Endpoint => {
+                            if endpoint.is_some() {
+                                return Err(de::Error::duplicate_field("endpoint"));
+                            }
+                            endpoint = Some(map.next_value()?);
+                        }
+                        Field::Header => {
+                            if header_key.is_some() {
+                                return Err(de::Error::duplicate_field("header"));
+                            }
+                            header_key = Some(map.next_value()?);
+                        }
+                        Field::Match => {
+                            if mapping_type.is_some() {
+                                return Err(de::Error::duplicate_field("match"));
+                            }
+                            let helper: MatchTypeHelper = map.next_value()?;
+                            mapping_type = Some(match helper {
+                                MatchTypeHelper::Text(v) => HeaderValueMappingType::Text(v),
+                                MatchTypeHelper::Regex(v) => HeaderValueMappingType::Regex(v),
+                                MatchTypeHelper::Split(v) => HeaderValueMappingType::Split(v),
+                            });
+                        }
+                    }
+                }
+
+                let endpoint = endpoint.ok_or_else(|| de::Error::missing_field("endpoint"))?;
+                let header_key = header_key.ok_or_else(|| de::Error::missing_field("header"))?;
+                let header_value_mapping_type =
+                    mapping_type.ok_or_else(|| de::Error::missing_field("match"))?;
+
+                Ok(HeaderRoutingRule {
+                    endpoint,
+                    header_key,
+                    header_value_mapping_type,
+
+                    is_alive: None,
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &["endpoint", "header", "match"];
+        deserializer.deserialize_struct("HeaderRoutingRule", FIELDS, HeaderRoutingRuleVisitor)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -250,19 +387,19 @@ impl HeaderBasedRoute {
         Ok(self
             .routes
             .iter()
-            .map(|item| item.base_route.clone())
+            .map(|item| item.get_base_route().clone())
             .collect::<Vec<BaseRoute>>())
     }
 
     fn get_route(&mut self, headers: &HeaderMap<HeaderValue>) -> Result<BaseRoute, AppError> {
-        let has_unconfigured = self.routes.iter().any(|r| r.base_route.is_alive.is_none());
+        let has_unconfigured = self.routes.iter().any(|r| r.is_alive.is_none());
         debug!("has_unconfigured:{}", has_unconfigured);
         let routes = if has_unconfigured {
             self.routes.clone()
         } else {
             self.routes
                 .iter()
-                .filter(|r| r.base_route.is_alive == Some(true))
+                .filter(|r| r.is_alive == Some(true))
                 .cloned()
                 .collect()
         };
@@ -277,17 +414,17 @@ impl HeaderBasedRoute {
             let header_value_str = header_value.to_str()?;
             match item.clone().header_value_mapping_type {
                 HeaderValueMappingType::Regex(regex_str) => {
-                    let re = Regex::new(&regex_str.value)?;
+                    let re = Regex::new(&regex_str)?;
                     let capture_option = re.captures(header_value_str);
                     if capture_option.is_none() {
                         continue;
                     } else {
-                        return Ok(item.clone().base_route);
+                        return Ok(item.clone().get_base_route());
                     }
                 }
                 HeaderValueMappingType::Text(text_str) => {
-                    if text_str.value == header_value_str {
-                        return Ok(item.clone().base_route);
+                    if text_str == header_value_str {
+                        return Ok(item.clone().get_base_route());
                     } else {
                         continue;
                     }
@@ -306,7 +443,7 @@ impl HeaderBasedRoute {
                         }
                     }
                     if flag {
-                        return Ok(item.clone().base_route);
+                        return Ok(item.clone().get_base_route());
                     }
                 }
             }
@@ -317,7 +454,7 @@ impl HeaderBasedRoute {
             .routes
             .first()
             .ok_or("The first item not found.")?
-            .base_route
+            .get_base_route()
             .clone();
         Ok(first)
     }
@@ -327,8 +464,8 @@ impl HeaderBasedRoute {
         is_alive: bool,
     ) -> Result<(), AppError> {
         for item in self.routes.iter_mut() {
-            if item.base_route.endpoint == base_route.endpoint {
-                item.base_route.is_alive = Some(is_alive);
+            if item.endpoint == base_route.endpoint {
+                item.is_alive = Some(is_alive);
             }
         }
         Ok(())
@@ -464,19 +601,29 @@ impl PollRoute {
 pub struct WeightBasedRoute {
     pub routes: Vec<WeightedRouteItem>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct WeightedRouteItem {
-    pub base_route: BaseRoute,
+    pub endpoint: String,
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub is_alive: Option<bool>,
     pub weight: i32,
     #[serde(skip_deserializing, skip_serializing, default)]
     pub index: i32,
+}
+impl WeightedRouteItem {
+    fn get_base_route(&self) -> BaseRoute {
+        BaseRoute {
+            endpoint: self.endpoint.clone(),
+            is_alive: self.is_alive,
+        }
+    }
 }
 impl WeightBasedRoute {
     async fn get_all_route(&mut self) -> Result<Vec<BaseRoute>, AppError> {
         Ok(self
             .routes
             .iter_mut()
-            .map(|item| item.base_route.clone())
+            .map(|item| item.get_base_route().clone())
             .collect::<Vec<BaseRoute>>())
     }
 
@@ -485,7 +632,7 @@ impl WeightBasedRoute {
             return Err(AppError::from("No routes available"));
         }
 
-        let has_unconfigured = self.routes.iter().any(|r| r.base_route.is_alive.is_none());
+        let has_unconfigured = self.routes.iter().any(|r| r.is_alive.is_none());
         if has_unconfigured {
             let all_reached = self.routes.iter().all(|r| r.index >= r.weight);
             if all_reached {
@@ -495,7 +642,7 @@ impl WeightBasedRoute {
             }
             if let Some(route) = self.routes.iter_mut().find(|r| r.index < r.weight) {
                 route.index += 1;
-                Ok(route.base_route.clone())
+                Ok(route.get_base_route().clone())
             } else {
                 Err(AppError::from("WeightRoute get route error"))
             }
@@ -504,7 +651,7 @@ impl WeightBasedRoute {
                 .routes
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| r.base_route.is_alive == Some(true))
+                .filter(|(_, r)| r.is_alive == Some(true))
                 .map(|(i, _)| i)
                 .collect();
 
@@ -520,7 +667,7 @@ impl WeightBasedRoute {
                 for &i in &alive_indices {
                     if self.routes[i].index < self.routes[i].weight {
                         self.routes[i].index += 1;
-                        return Ok(self.routes[i].base_route.clone());
+                        return Ok(self.routes[i].get_base_route().clone());
                     }
                 }
                 Err(AppError::from("WeightRoute get route error"))
@@ -528,7 +675,7 @@ impl WeightBasedRoute {
                 let mut rng = rand::rng();
                 let idx = rng.random_range(0..self.routes.len());
                 self.routes[idx].index += 1;
-                Ok(self.routes[idx].base_route.clone())
+                Ok(self.routes[idx].get_base_route().clone())
             }
         }
     }
@@ -538,8 +685,8 @@ impl WeightBasedRoute {
         is_alive: bool,
     ) -> Result<(), AppError> {
         for item in self.routes.iter_mut() {
-            if item.base_route.endpoint == base_route.endpoint {
-                item.base_route.is_alive = Some(is_alive);
+            if item.endpoint == base_route.endpoint {
+                item.is_alive = Some(is_alive);
             }
         }
         Ok(())
@@ -781,18 +928,14 @@ mod tests {
         let mut weight_route = WeightBasedRoute {
             routes: vec![
                 WeightedRouteItem {
-                    base_route: BaseRoute {
-                        endpoint: "s1".to_string(),
-                        is_alive: None,
-                    },
+                    endpoint: "s1".to_string(),
+                    is_alive: None,
                     weight: 2,
                     index: 0,
                 },
                 WeightedRouteItem {
-                    base_route: BaseRoute {
-                        endpoint: "s2".to_string(),
-                        is_alive: None,
-                    },
+                    endpoint: "s2".to_string(),
+                    is_alive: None,
                     weight: 1,
                     index: 0,
                 },
@@ -855,30 +998,22 @@ mod tests {
         let mut header_route = HeaderBasedRoute {
             routes: vec![
                 HeaderRoutingRule {
-                    base_route: BaseRoute {
-                        endpoint: "user-service".to_string(),
-                        is_alive: Some(true),
-                    },
+                    endpoint: "user-service".to_string(),
+                    is_alive: Some(true),
                     header_key: "x-request-id".to_string(),
-                    header_value_mapping_type: HeaderValueMappingType::Regex(RegexMatch {
-                        value: r"^user-\d+$".to_string(),
-                    }),
+                    header_value_mapping_type: HeaderValueMappingType::Regex(
+                        r"^user-\d+$".to_string(),
+                    ),
                 },
                 HeaderRoutingRule {
-                    base_route: BaseRoute {
-                        endpoint: "admin-service".to_string(),
-                        is_alive: Some(true),
-                    },
+                    endpoint: "admin-service".to_string(),
+                    is_alive: Some(true),
                     header_key: "x-user-role".to_string(),
-                    header_value_mapping_type: HeaderValueMappingType::Text(TextMatch {
-                        value: "admin".to_string(),
-                    }),
+                    header_value_mapping_type: HeaderValueMappingType::Text("admin".to_string()),
                 },
                 HeaderRoutingRule {
-                    base_route: BaseRoute {
-                        endpoint: "feature-service".to_string(),
-                        is_alive: Some(true),
-                    },
+                    endpoint: "feature-service".to_string(),
+                    is_alive: Some(true),
                     header_key: "x-flags".to_string(),
                     header_value_mapping_type: HeaderValueMappingType::Split(SplitSegment {
                         split_by: ",".to_string(),
@@ -941,13 +1076,9 @@ mod tests {
         let mut header_based_router = Router::HeaderBased(HeaderBasedRoute {
             routes: vec![HeaderRoutingRule {
                 header_key: "a".to_string(),
-                header_value_mapping_type: HeaderValueMappingType::Text(TextMatch {
-                    value: "b".to_string(),
-                }),
-                base_route: BaseRoute {
-                    endpoint: "s1".to_string(),
-                    is_alive: None,
-                },
+                header_value_mapping_type: HeaderValueMappingType::Text("b".to_string()),
+                endpoint: "s1".to_string(),
+                is_alive: None,
             }],
         });
         header_based_router.get_route(&HeaderMap::new()).unwrap();

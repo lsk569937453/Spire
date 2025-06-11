@@ -127,7 +127,7 @@ async fn get_route_cluster(
 mod tests {
     use super::*;
     use crate::vojo::app_config::{ApiService, AppConfig, RouteConfig};
-    use crate::vojo::router::BaseRoute;
+    
 
     use crate::vojo::router::WeightBasedRoute;
     use crate::vojo::router::WeightedRouteItem;
@@ -145,10 +145,8 @@ mod tests {
             routes: vec![WeightedRouteItem {
                 weight: 1,
                 index: 0,
-                base_route: BaseRoute {
-                    endpoint: "http://www.baidu.com".to_string(),
-                    ..Default::default()
-                },
+                endpoint: "http://www.baidu.com".to_string(),
+                ..Default::default()
             }],
         };
         let route = RouteConfig {
