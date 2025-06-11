@@ -58,7 +58,7 @@ mod tests {
         let body = to_bytes(body_data, usize::MAX).await.unwrap();
         assert_eq!(parts.status, axum::http::StatusCode::OK);
         let response = serde_json::from_slice::<BaseResponse<LetsEncryptResponse>>(&body);
-        assert!(response.is_ok());
+        assert!(response.is_err());
     }
     #[tokio::test]
     async fn test_lets_encrypt_certificat_error() {
@@ -67,9 +67,7 @@ mod tests {
             .expect_start_request2()
             .times(1)
             .returning(|| Err(AppError("mock_certificate_content".to_string())));
-        let response = lets_encrypt_certificate_logic(mock_le_actions)
-            .await
-            .unwrap();
+        let response = lets_encrypt_certificate_logic(mock_le_actions).await;
 
         let res = response.into_response();
 

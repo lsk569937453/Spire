@@ -240,7 +240,10 @@ peIJpwo+Kuf964DexDVglw==
         )
         .await;
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), AppError("Pem is null.".to_string()));
+        assert_eq!(
+            result.unwrap_err(),
+            AppError("Certificate (cert_str) is missing for TLS service on port 8082".to_string())
+        );
     }
 
     #[tokio::test]
@@ -336,7 +339,10 @@ peIJpwo+Kuf964DexDVglw==
         )
         .await;
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), AppError("Pem is null.".to_string()));
+        assert_eq!(
+            result.unwrap_err(),
+            AppError("Private key (key_str) is missing for TLS service on port 8086".to_string())
+        );
     }
 
     #[tokio::test]
