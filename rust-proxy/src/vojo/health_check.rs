@@ -12,8 +12,11 @@ pub struct HttpHealthCheckParam {
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum HealthCheckType {
+    #[serde(rename = "http_get")]
     HttpGet(HttpHealthCheckParam),
+    #[serde(rename = "redis")]
     Redis(BaseHealthCheckParam),
+    #[serde(rename = "mysql")]
     Mysql(BaseHealthCheckParam),
 }
 impl HealthCheckType {

@@ -6,7 +6,7 @@ servers:
           prefix: /
           prefix_rewrite: /
         forward_to:
-          kind: weightBased
+          kind: weight
           routes:
             - endpoint: https://httpbin.org/get
               weight: 1

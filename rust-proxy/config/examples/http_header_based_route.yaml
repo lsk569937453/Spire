@@ -5,7 +5,7 @@ servers:
     routes:
       - route_id: test_route
         forward_to:
-          kind: headerBased
+          kind: header
           routes:
             - endpoint: http://127.0.0.1:9395
               header: test

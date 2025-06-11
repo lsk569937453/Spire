@@ -15,7 +15,9 @@ use std::net::SocketAddr;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "limiter", rename_all = "PascalCase")]
 pub enum Ratelimit {
+    #[serde(rename = "token_bucket")]
     TokenBucket(TokenBucketRateLimit),
+    #[serde(rename = "fixed_window")]
     FixedWindow(FixedWindowRateLimit),
 }
 impl Ratelimit {

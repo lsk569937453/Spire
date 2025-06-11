@@ -10,7 +10,9 @@ use crate::vojo::app_error::AppError;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "scheme", rename_all = "PascalCase")]
 pub enum Authentication {
+    #[serde(rename = "basic")]
     Basic(BasicAuth),
+    #[serde(rename = "api_key")]
     ApiKey(ApiKeyAuth),
 }
 

@@ -24,11 +24,11 @@ pub enum Router {
     StaticFile(StaticFileRoute),
     #[serde(rename = "poll")]
     Poll(PollRoute),
-    #[serde(rename = "headerBased")]
+    #[serde(rename = "header")]
     HeaderBased(HeaderBasedRoute),
     #[serde(rename = "random")]
     Random(RandomRoute),
-    #[serde(rename = "weightBased")]
+    #[serde(rename = "weight")]
     WeightBased(WeightBasedRoute),
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Default, Eq)]
