@@ -9,7 +9,7 @@ servers:
         liveness_config:
           min_liveness_count: 1
         health_check:
-          kind: HttpGet
+          kind: http_get
           base_health_check_param:
             timeout: 5
             interval: 5
@@ -17,11 +17,11 @@ servers:
         forward_to: http://127.0.0.1:9393
         middlewares:
           - kind: authentication
-            scheme: ApiKey
+            scheme: api_key
             key: test
             value: test
           - kind: rate_limit
-            limiter: TokenBucket
+            limiter: token_bucket
             rate_per_unit: 10
             unit:
               kind: Second
@@ -31,7 +31,7 @@ servers:
               value: 192.168.0.1
           - kind: allow_deny_list
             rules:
-              - policy: AllowAll
+              - policy: allow_all
                 value: 192.168.0.2
           - kind: cors
             allowed_origins: "*"

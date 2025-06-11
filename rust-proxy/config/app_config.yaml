@@ -11,7 +11,7 @@ servers:
           routes:
             - endpoint: http://localhost:6666/
         health_check:
-          type: HttpGet
+          type: http_get
           base_health_check_param:
             timeout: 10
             interval: 10
@@ -31,7 +31,7 @@ servers:
             - endpoint: http://127.0.0.1:8090
             - endpoint: http://127.0.0.1:9396
         health_check:
-          type: HttpGet
+          type: http_get
           base_health_check_param:
             timeout: 5
             interval: 5

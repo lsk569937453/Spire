@@ -17,9 +17,13 @@ pub struct AllowDenyItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum AllowType {
     #[default]
+    #[serde(rename = "allow_all")]
     AllowAll,
+    #[serde(rename = "deny_all")]
     DenyAll,
+    #[serde(rename = "allow")]
     Allow,
+    #[serde(rename = "deny")]
     Deny,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
