@@ -1,25 +1,24 @@
-services:
-  - listen_port: 8084
-    service_config:
-      server_type: http
-      route_configs:
-        - matcher:
-            prefix: /
-            prefix_rewrite: /
-          router:
-            kind: weightBased
-            routes:
-              - base_route:
-                  endpoint: https://httpbin.org/get
-                weight: 1
-          middlewares:
-            - kind: cors
-              allowed_origins:
-                - http://127.0.0.1
-              allowed_methods:
-                - PUT
-                - GET
-              allowed_headers: "*"
-              allow_credentials: true
-              max_age: 3600
-              options_passthrough: true
+servers:
+  - listen: 8084
+    protocol: http
+    routes:
+      - matcher:
+          prefix: /
+          prefix_rewrite: /
+        forward_to:
+          kind: weightBased
+          routes:
+            - base_route:
+                endpoint: https://httpbin.org/get
+              weight: 1
+        middlewares:
+          - kind: cors
+            allowed_origins:
+              - http://127.0.0.1
+            allowed_methods:
+              - PUT
+              - GET
+            allowed_headers: "*"
+            allow_credentials: true
+            max_age: 3600
+            options_passthrough: true

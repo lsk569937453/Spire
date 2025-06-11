@@ -1,43 +1,40 @@
-static_config:
-  log_level: info
-services:
-  - listen_port: 4486
-    service_config:
-      server_type: http
-      route_configs:
-        - matcher:
-            prefix: /
-            prefix_rewrite: /
-          router:
-            type: random
-            routes:
-              - endpoint: http://localhost:6666/
-          health_check:
-            type: HttpGet
-            base_health_check_param:
-              timeout: 10
-              interval: 10
-            path: /health
-          liveness_config:
-            min_liveness_count: 1
-  - listen_port: 9969
-    service_config:
-      server_type: http
-      route_configs:
-        - matcher:
-            prefix: /
-            prefix_rewrite: /
-          router:
-            type: random
-            routes:
-              - endpoint: http://127.0.0.1:9394
-              - endpoint: http://127.0.0.1:8090
-              - endpoint: http://127.0.0.1:9396
-          health_check:
-            type: HttpGet
-            base_health_check_param:
-              timeout: 5
-              interval: 5
-            path: /health
-          liveness_config:
-            min_liveness_count: 1
+log_level: info
+servers:
+  - listen: 4486
+    protocol: http
+    routes:
+      - matcher:
+          prefix: /
+          prefix_rewrite: /
+        forward_to:
+          type: random
+          routes:
+            - endpoint: http://localhost:6666/
+        health_check:
+          type: HttpGet
+          base_health_check_param:
+            timeout: 10
+            interval: 10
+          path: /health
+        liveness_config:
+          min_liveness_count: 1
+  - listen: 9969
+    protocol: http
+    routes:
+      - matcher:
+          prefix: /
+          prefix_rewrite: /
+        forward_to:
+          type: random
+          routes:
+            - endpoint: http://127.0.0.1:9394
+            - endpoint: http://127.0.0.1:8090
+            - endpoint: http://127.0.0.1:9396
+        health_check:
+          type: HttpGet
+          base_health_check_param:
+            timeout: 5
+            interval: 5
+          path: /health
+        liveness_config:
+          min_liveness_count: 1

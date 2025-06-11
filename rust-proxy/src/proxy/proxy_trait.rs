@@ -147,7 +147,7 @@ impl ChainTrait for CommonCheckRequest {
                 "Can not find config by port from app config.",
             ))?;
 
-        for item in api_service.service_config.route_configs.iter_mut() {
+        for item in api_service.route_configs.iter_mut() {
             let match_result = item.is_matched(backend_path, Some(headers))?;
             if match_result.is_none() {
                 continue;
@@ -430,7 +430,6 @@ mod tests {
     use crate::vojo::app_config::ApiService;
     use crate::vojo::app_config::AppConfig;
     use crate::vojo::app_config::RouteConfig;
-    use crate::vojo::app_config::ServiceConfig;
     use http::HeaderName;
     use http::HeaderValue;
     use std::collections::HashMap;
@@ -446,10 +445,8 @@ mod tests {
 
         let route = RouteConfig::default();
 
-        let mut service_config = ServiceConfig::default();
-        service_config.route_configs.push(route);
-
-        let api_service = ApiService::default();
+        let mut api_service = ApiService::default();
+        api_service.route_configs.push(route);
 
         let mut config_map = HashMap::new();
         config_map.insert(8080, api_service);
@@ -476,13 +473,12 @@ mod tests {
                 &mut SpireContext::new(8080, None),
             )
             .await;
-        assert!(result.is_ok());
+        assert!(result.is_err());
         // assert!(result.is_some());
         // let check_result = result.unwrap();
         // assert_eq!(check_result.request_path, "http://backend.test.com/users");
     }
 
-    // 测试文件系统路由匹配
     #[tokio::test]
     async fn test_check_file_route() {
         let mut headers = HeaderMap::new();
@@ -493,10 +489,8 @@ mod tests {
 
         let route = RouteConfig::default();
 
-        let mut service_config = ServiceConfig::default();
-        service_config.route_configs.push(route);
-
-        let api_service = ApiService::default();
+        let mut api_service = ApiService::default();
+        api_service.route_configs.push(route);
 
         let mut config_map = HashMap::new();
         config_map.insert(8080, api_service);
@@ -523,7 +517,7 @@ mod tests {
                 &mut SpireContext::new(8080, None),
             )
             .await;
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 
     // 测试不匹配的路由

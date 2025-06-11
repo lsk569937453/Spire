@@ -22,7 +22,7 @@ pub struct AppConfig {
     pub admin_port: Option<i32>,
     pub log_level: Option<LogLevel>,
     #[serde(
-        rename = "services",
+        rename = "servers",
         deserialize_with = "deserialize_service_config",
         serialize_with = "serialize_api_service_config"
     )]
@@ -49,29 +49,6 @@ where
     vec.serialize(serializer)
 }
 
-// fn deserialize_static_config<'de, D>(deserializer: D) -> Result<StaticConfig, D::Error>
-// where
-//     D: Deserializer<'de>,
-// {
-//     info!("deserialize_static_config");
-//     let mut static_config = StaticConfig::deserialize(deserializer)?;
-//     if static_config.health_check_log_enabled.is_none() {
-//         static_config.health_check_log_enabled = Some(false);
-//     }
-//     if static_config.database_url.is_none() {
-//         static_config.database_url = Some("".to_string());
-//     }
-//     if static_config.admin_port.is_none() {
-//         static_config.admin_port = Some(DEFAULT_ADMIN_PORT);
-//     }
-//     if static_config.config_file_path.is_none() {
-//         static_config.config_file_path = Some("".to_string());
-//     }
-//     if static_config.log_level.is_none() {
-//         static_config.log_level = Some(DEFAULT_LOG_LEVEL);
-//     }
-//     Ok(static_config)
-// }
 fn deserialize_service_config<'de, D>(deserializer: D) -> Result<HashMap<i32, ApiService>, D::Error>
 where
     D: Deserializer<'de>,
@@ -119,7 +96,7 @@ pub struct RouteConfig {
     pub liveness_config: Option<LivenessConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_check: Option<HealthCheckType>,
-    #[serde(deserialize_with = "deserialize_router")]
+    #[serde(deserialize_with = "deserialize_router", rename = "forward_to")]
     pub router: Router,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub middlewares: Option<Vec<MiddleWares>>,
@@ -200,21 +177,13 @@ pub enum ServiceType {
     Http2,
     Http2Tls,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct ServiceConfig {
-    pub server_type: ServiceType,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cert_str: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_str: Option<String>,
-    pub route_configs: Vec<RouteConfig>,
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ApiService {
     #[serde(rename = "listen")]
     pub listen_port: i32,
-
+    #[serde(skip_deserializing, skip_serializing)]
+    pub api_service_id: String,
     #[serde(rename = "protocol")]
     pub server_type: ServiceType,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -250,6 +219,7 @@ impl<'de> Deserialize<'de> for ApiService {
 
         Ok(ApiService {
             listen_port: api_service_without_sender.port,
+            api_service_id: Default::default(),
             server_type: api_service_without_sender.server_type,
             cert_str: api_service_without_sender.cert_str,
             key_str: api_service_without_sender.key_str,
@@ -273,6 +243,7 @@ impl Default for ApiService {
 
         Self {
             listen_port: Default::default(),
+            api_service_id: Default::default(),
             server_type: Default::default(),
             cert_str: Default::default(),
             key_str: Default::default(),
@@ -379,12 +350,8 @@ mod tests {
             router: Router::WeightBased(header_based),
             ..Default::default()
         };
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Http,
-            route_configs: vec![route],
-            ..Default::default()
-        };
-        api_service.service_config = service_config;
+
+        api_service.route_configs = vec![route];
         api_service
     }
     fn create_api_service2() -> ApiService {
@@ -416,12 +383,8 @@ mod tests {
 
             ..Default::default()
         };
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Http,
-            route_configs: vec![route],
-            ..Default::default()
-        };
-        api_service.service_config = service_config;
+
+        api_service.route_configs = vec![route];
         api_service
     }
     fn create_api_service3() -> ApiService {
@@ -452,12 +415,8 @@ mod tests {
 
             ..Default::default()
         };
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Http,
-            route_configs: vec![route],
-            ..Default::default()
-        };
-        api_service.service_config = service_config;
+
+        api_service.route_configs = vec![route];
         api_service
     }
     fn create_api_service4() -> ApiService {
@@ -509,12 +468,8 @@ mod tests {
             router: Router::HeaderBased(poll_route),
             ..Default::default()
         };
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Http,
-            route_configs: vec![route],
-            ..Default::default()
-        };
-        api_service.service_config = service_config;
+
+        api_service.route_configs = vec![route];
         api_service
     }
     pub fn create_default_app_config() -> AppConfig {
@@ -587,12 +542,8 @@ mod tests {
             ]),
             ..Default::default()
         };
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Http,
-            route_configs: vec![route],
-            ..Default::default()
-        };
-        api_service.service_config = service_config;
+
+        api_service.route_configs = vec![route];
         app_config.api_service_config.insert(8079, api_service);
 
         app_config
@@ -703,15 +654,9 @@ mod tests {
             ..Default::default()
         };
 
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Http,
-            route_configs: vec![route],
-            ..Default::default()
-        };
-
         let api_service = ApiService {
             listen_port: 8080,
-            service_config,
+            route_configs: vec![route],
             ..Default::default()
         };
 
@@ -719,8 +664,8 @@ mod tests {
         app_config.api_service_config.insert(8080, api_service);
 
         let yaml = serde_yaml::to_string(&app_config).unwrap();
-        assert!(yaml.contains("listen_port: 8080"));
-        assert!(yaml.contains("server_type: http"));
+        assert!(yaml.contains("listen: 8080"));
+        assert!(yaml.contains("protocol: http"));
     }
 
     use crate::vojo::base_response::BaseResponse;
@@ -729,13 +674,12 @@ mod tests {
         let src = r#"
 response_code: 0
 response_object:
-  services:
-  - listen_port: 8080
-    service_config:
-      server_type: http
-      route_configs:
+  servers:
+  - listen: 8080
+    protocol: http
+    routes:
       - route_id: route1
-        router:
+        forward_to:
           kind: poll
           routes: []"#;
         let _: BaseResponse<AppConfig> = serde_yaml::from_str(src).unwrap();

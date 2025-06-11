@@ -89,7 +89,7 @@ async fn check(
             port
         )))?;
 
-    let service_config_clone = api_service;
+    let service_config_clone = api_service.clone();
 
     let route = service_config_clone
         .route_configs
@@ -111,7 +111,7 @@ async fn get_route_cluster(
             "Can not get apiservice from mapping_key {}",
             mapping_key
         )))?;
-    let service_config = &value.service_config.route_configs.clone();
+    let service_config = &value.route_configs.clone();
     let service_config_clone = service_config.clone();
     if service_config_clone.is_empty() {
         return Err(AppError::from("The len of routes is 0"));
@@ -126,7 +126,7 @@ async fn get_route_cluster(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vojo::app_config::{ApiService, AppConfig, RouteConfig, ServiceConfig};
+    use crate::vojo::app_config::{ApiService, AppConfig, RouteConfig};
     use crate::vojo::router::BaseRoute;
 
     use crate::vojo::router::WeightBasedRoute;
@@ -157,10 +157,7 @@ mod tests {
             ..Default::default()
         };
         let api_service = ApiService {
-            service_config: ServiceConfig {
-                route_configs: vec![route],
-                ..Default::default()
-            },
+            route_configs: vec![route],
             ..Default::default()
         };
 
