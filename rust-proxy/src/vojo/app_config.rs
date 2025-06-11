@@ -308,7 +308,7 @@ mod tests {
     use crate::middleware::rate_limit::Ratelimit;
     use crate::vojo::router::PollRoute;
     use crate::vojo::router::RandomRoute;
-    use crate::vojo::router::TextMatch;
+    
     use crate::vojo::router::WeightBasedRoute;
     use http::HeaderValue;
     fn create_api_service1() -> ApiService {
@@ -322,26 +322,20 @@ mod tests {
                 WeightedRouteItem {
                     weight: 1,
                     index: 0,
-                    base_route: BaseRoute {
-                        endpoint: "http://127.0.0.1:9394".to_string(),
-                        ..Default::default()
-                    },
+                    endpoint: "http://127.0.0.1:9394".to_string(),
+                    ..Default::default()
                 },
                 WeightedRouteItem {
                     weight: 2,
                     index: 0,
-                    base_route: BaseRoute {
-                        endpoint: "http://127.0.0.1:9396".to_string(),
-                        ..Default::default()
-                    },
+                    endpoint: "http://127.0.0.1:9396".to_string(),
+                    ..Default::default()
                 },
                 WeightedRouteItem {
                     weight: 3,
                     index: 0,
-                    base_route: BaseRoute {
-                        endpoint: "http://127.0.0.1:9395".to_string(),
-                        ..Default::default()
-                    },
+                    endpoint: "http://127.0.0.1:9395".to_string(),
+                    ..Default::default()
                 },
             ],
         };
@@ -429,37 +423,25 @@ mod tests {
             HeaderBasedRoute {
                 routes: vec![
                     HeaderRoutingRule {
-                        base_route: BaseRoute {
-                            endpoint: "http://127.0.0.1:9395".to_string(),
-                            ..Default::default()
-                        },
                         header_key: "test".to_string(),
                         header_value_mapping_type:
-                            crate::vojo::router::HeaderValueMappingType::Text(TextMatch {
-                                value: "test".to_string(),
-                            }),
+                            crate::vojo::router::HeaderValueMappingType::Text("test".to_string()),
+                        endpoint: "http://127.0.0.1:9395".to_string(),
+                        ..Default::default()
                     },
                     HeaderRoutingRule {
-                        base_route: BaseRoute {
-                            endpoint: "http://127.0.0.1:9396".to_string(),
-                            ..Default::default()
-                        },
                         header_key: "test".to_string(),
                         header_value_mapping_type:
-                            crate::vojo::router::HeaderValueMappingType::Text(TextMatch {
-                                value: "test".to_string(),
-                            }),
+                            crate::vojo::router::HeaderValueMappingType::Text("test".to_string()),
+                        endpoint: "http://127.0.0.1:9396".to_string(),
+                        ..Default::default()
                     },
                     HeaderRoutingRule {
-                        base_route: BaseRoute {
-                            endpoint: "http://127.0.0.1:9397".to_string(),
-                            ..Default::default()
-                        },
                         header_key: "test".to_string(),
                         header_value_mapping_type:
-                            crate::vojo::router::HeaderValueMappingType::Text(TextMatch {
-                                value: "test".to_string(),
-                            }),
+                            crate::vojo::router::HeaderValueMappingType::Text("test".to_string()),
+                        endpoint: "http://127.0.0.1:9397".to_string(),
+                        ..Default::default()
                     },
                 ],
             };
@@ -484,10 +466,8 @@ mod tests {
             routes: vec![WeightedRouteItem {
                 weight: 1,
                 index: 0,
-                base_route: BaseRoute {
-                    endpoint: "http://127.0.0.1:9393".to_string(),
-                    ..Default::default()
-                },
+                endpoint: "http://127.0.0.1:9393".to_string(),
+                ..Default::default()
             }],
         };
         let route = RouteConfig {
@@ -645,10 +625,8 @@ mod tests {
                 routes: vec![WeightedRouteItem {
                     weight: 1,
                     index: 0,
-                    base_route: BaseRoute {
-                        endpoint: "http://example.com".to_string(),
-                        ..Default::default()
-                    },
+                    endpoint: "http://example.com".to_string(),
+                    ..Default::default()
                 }],
             }),
             ..Default::default()

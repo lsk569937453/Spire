@@ -7,21 +7,19 @@ servers:
         forward_to:
           kind: headerBased
           routes:
-            - base_route:
-                endpoint: http://127.0.0.1:9395
-              header_key: test
-              header_value_mapping_type:
-                kind: Text
-                value: test
-            - base_route:
-                endpoint: http://127.0.0.1:9396
-              header_key: test
-              header_value_mapping_type:
-                kind: Text
-                value: test
-            - base_route:
-                endpoint: http://127.0.0.1:9397
-              header_key: test
-              header_value_mapping_type:
-                kind: Text
-                value: test
+            - endpoint: http://127.0.0.1:9395
+              header: test
+              match:
+                text: test
+            - endpoint: http://127.0.0.1:9396
+              header: test2
+              match:
+                regex: test2
+            - endpoint: http://127.0.0.1:9397
+              header: test3
+              match:
+                split:
+                  by: ","
+                  matches:
+                    - en-US
+                    - zh-CN

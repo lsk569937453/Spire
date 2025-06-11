@@ -8,8 +8,7 @@ servers:
         forward_to:
           kind: weightBased
           routes:
-            - base_route:
-                endpoint: https://httpbin.org/get
+            - endpoint: https://httpbin.org/get
               weight: 1
         middlewares:
           - kind: cors
