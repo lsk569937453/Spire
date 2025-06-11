@@ -381,7 +381,7 @@ mod tests {
     use crate::middleware::middlewares::MiddleWares;
     use crate::proxy::proxy_trait::{HandlingResult, MockChainTrait};
     use crate::vojo::app_config::Matcher;
-    use crate::vojo::app_config::{ApiService, RouteConfig, ServiceConfig};
+    use crate::vojo::app_config::{ApiService, RouteConfig};
     use crate::vojo::router::{BaseRoute, RandomRoute, Router};
     use crate::{vojo::router::StaticFileRoute, AppConfig};
     use http::HeaderMap;
@@ -459,24 +459,20 @@ mod tests {
                     8080,
                     ApiService {
                         listen_port: 8080,
-                        service_config: ServiceConfig {
-                            route_configs: vec![RouteConfig {
-                                router: Router::Random(RandomRoute {
-                                    routes: vec![BaseRoute {
-                                        endpoint: "http://127.0.0.1:9394".to_string(),
-                                        ..Default::default()
-                                    }],
-                                }),
-                                matcher: Some(Matcher {
-                                    prefix: "/".to_string(),
-                                    prefix_rewrite: "/".to_string(),
-                                }),
-
-                                ..Default::default()
-                            }],
+                        route_configs: vec![RouteConfig {
+                            router: Router::Random(RandomRoute {
+                                routes: vec![BaseRoute {
+                                    endpoint: "http://127.0.0.1:9394".to_string(),
+                                    ..Default::default()
+                                }],
+                            }),
+                            matcher: Some(Matcher {
+                                prefix: "/".to_string(),
+                                prefix_rewrite: "/".to_string(),
+                            }),
 
                             ..Default::default()
-                        },
+                        }],
                         ..Default::default()
                     },
                 )]),

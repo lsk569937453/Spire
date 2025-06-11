@@ -1,18 +1,16 @@
-static_config:
-  log_level: info
-services:
-  - listen_port: 8084
-    service_config:
-      server_type: http
-      route_configs:
-        - route_id: test_route
-          matcher:
-            prefix: /
-            prefix_rewrite: /
-          router:
-            kind: file
-            doc_root: D:\
-          middlewares:
-            - kind: rewrite_headers
-              expires: 24h
-              extensions: [js, css, html, png, jpg, gif]
+log_level: info
+servers:
+  - listen: 8084
+    protocol: http
+    routes:
+      - route_id: test_route
+        matcher:
+          prefix: /
+          prefix_rewrite: /
+        forward_to:
+          kind: file
+          doc_root: D:\
+        middlewares:
+          - kind: rewrite_headers
+            expires: 24h
+            extensions: [js, css, html, png, jpg, gif]

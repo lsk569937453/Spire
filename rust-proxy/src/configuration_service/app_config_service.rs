@@ -3,7 +3,6 @@ use crate::health_check::health_check_task::HealthCheck;
 use crate::proxy::http1::http_proxy::HttpProxy;
 use crate::proxy::http2::grpc_proxy::GrpcProxy;
 use crate::proxy::tcp::tcp_proxy::TcpProxy;
-use crate::vojo::app_config::ServiceConfig;
 use crate::vojo::app_config::ServiceType;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
@@ -18,12 +17,13 @@ pub async fn init(shared_config: SharedConfig) -> Result<(), AppError> {
     let mut app_config = shared_config.shared_data.lock()?;
     for (_, item) in app_config.api_service_config.iter_mut() {
         let port = item.listen_port;
-        let server_type = item.service_config.server_type.clone();
+        let server_type = item.server_type.clone();
         let mapping_key = format!("{}-{}", port, server_type);
         let (sender, receiver) = mpsc::channel::<()>(1000);
         item.sender = sender;
         let cloned_config = shared_config.clone();
-        let service_config = item.service_config.clone();
+        let cert_str = item.cert_str.clone();
+        let key_str = item.key_str.clone();
         tokio::task::spawn(async move {
             if let Err(err) = start_proxy(
                 cloned_config,
@@ -31,7 +31,8 @@ pub async fn init(shared_config: SharedConfig) -> Result<(), AppError> {
                 receiver,
                 server_type,
                 mapping_key,
-                service_config,
+                cert_str,
+                key_str,
             )
             .await
             {
@@ -48,7 +49,8 @@ pub async fn start_proxy(
     channel: mpsc::Receiver<()>,
     server_type: ServiceType,
     mapping_key: String,
-    service_config: ServiceConfig,
+    cert_str: Option<String>,
+    key_str: Option<String>,
 ) -> Result<(), AppError> {
     if server_type == ServiceType::Http {
         let mut http_proxy = HttpProxy {
@@ -59,11 +61,11 @@ pub async fn start_proxy(
         };
         http_proxy.start_http_server().await
     } else if server_type == ServiceType::Https {
-        let pem_str = service_config.cert_str.ok_or(app_error!(
+        let pem_str = cert_str.ok_or(app_error!(
             "Certificate (cert_str) is missing for TLS service on port {}",
             port
         ))?;
-        let key_str = service_config.key_str.ok_or(app_error!(
+        let key_str = key_str.ok_or(app_error!(
             "Private key (key_str) is missing for TLS service on port {}",
             port
         ))?;
@@ -91,11 +93,11 @@ pub async fn start_proxy(
         };
         grpc_proxy.start_proxy().await
     } else {
-        let pem_str = service_config.cert_str.ok_or(app_error!(
+        let pem_str = cert_str.ok_or(app_error!(
             "Certificate (cert_str) is missing for TLS service on port {}",
             port
         ))?;
-        let key_str = service_config.key_str.ok_or(app_error!(
+        let key_str = key_str.ok_or(app_error!(
             "Private key (key_str) is missing for TLS service on port {}",
             port
         ))?;
@@ -111,7 +113,7 @@ pub async fn start_proxy(
 #[cfg(test)]
 mod tests {
     use super::*; // Import items from the parent module
-    use crate::vojo::app_config::{ApiService, AppConfig, ServiceConfig, ServiceType};
+    use crate::vojo::app_config::{ApiService, AppConfig, ServiceType};
     use crate::vojo::cli::SharedConfig;
 
     use std::collections::HashMap;
@@ -121,10 +123,6 @@ mod tests {
     async fn test_start_proxy_http() {
         let shared_config = SharedConfig::from_app_config(AppConfig::default());
         let (tx, rx) = mpsc::channel(1);
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Http,
-            ..Default::default()
-        };
 
         let proxy_task = tokio::spawn(start_proxy(
             shared_config,
@@ -132,7 +130,8 @@ mod tests {
             rx,
             ServiceType::Http,
             "test-http".to_string(),
-            service_config,
+            None,
+            None,
         ));
 
         tokio::time::sleep(Duration::from_millis(10)).await; // Give it time to start
@@ -196,12 +195,6 @@ peIJpwo+Kuf964DexDVglw==
 "#;
         let shared_config = SharedConfig::from_app_config(AppConfig::default());
         let (tx, rx) = mpsc::channel(1);
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Https,
-            cert_str: Some(cert.to_string()),
-            key_str: Some(key.to_string()),
-            route_configs: vec![],
-        };
 
         let proxy_task = tokio::spawn(start_proxy(
             shared_config,
@@ -209,7 +202,8 @@ peIJpwo+Kuf964DexDVglw==
             rx,
             ServiceType::Https,
             "test-https".to_string(),
-            service_config,
+            Some(cert.to_string()),
+            Some(key.to_string()),
         ));
         tokio::time::sleep(Duration::from_millis(10)).await;
         let cc = tx.send(()).await;
@@ -222,27 +216,21 @@ peIJpwo+Kuf964DexDVglw==
     async fn test_start_proxy_https_missing_cert() {
         let shared_config = SharedConfig::from_app_config(AppConfig::default());
         let (_tx, rx) = mpsc::channel(1); // tx not used as it should fail before listening
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Https,
-            cert_str: None,
-            key_str: Some("dummy_key_content".to_string()),
-            route_configs: vec![],
-        };
 
-        // No need to spawn, call directly as it should return error quickly
         let result = start_proxy(
             shared_config,
             8082,
             rx,
             ServiceType::Https,
             "test-https-fail".to_string(),
-            service_config,
+            Some("dummy_key_content".to_string()),
+            None,
         )
         .await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
-            AppError("Certificate (cert_str) is missing for TLS service on port 8082".to_string())
+            AppError("Private key (key_str) is missing for TLS service on port 8082".to_string())
         );
     }
 
@@ -250,10 +238,6 @@ peIJpwo+Kuf964DexDVglw==
     async fn test_start_proxy_tcp() {
         let shared_config = SharedConfig::from_app_config(AppConfig::default());
         let (tx, rx) = mpsc::channel(1);
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Tcp,
-            ..Default::default()
-        };
 
         let proxy_task = tokio::spawn(start_proxy(
             shared_config,
@@ -261,7 +245,8 @@ peIJpwo+Kuf964DexDVglw==
             rx,
             ServiceType::Tcp,
             "test-tcp".to_string(),
-            service_config,
+            None,
+            None,
         ));
         tokio::time::sleep(Duration::from_millis(10)).await;
         tx.send(()).await.expect("Failed to send shutdown signal");
@@ -273,10 +258,6 @@ peIJpwo+Kuf964DexDVglw==
     async fn test_start_proxy_http2() {
         let shared_config = SharedConfig::from_app_config(AppConfig::default());
         let (tx, rx) = mpsc::channel(1);
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Http2,
-            ..Default::default()
-        };
 
         let proxy_task = tokio::spawn(start_proxy(
             shared_config,
@@ -284,7 +265,8 @@ peIJpwo+Kuf964DexDVglw==
             rx,
             ServiceType::Http2,
             "test-http2".to_string(),
-            service_config,
+            None,
+            None,
         ));
         tokio::time::sleep(Duration::from_millis(10)).await;
         tx.send(()).await.expect("Failed to send shutdown signal");
@@ -296,12 +278,6 @@ peIJpwo+Kuf964DexDVglw==
     async fn test_start_proxy_grpc_tls_success() {
         let shared_config = SharedConfig::from_app_config(AppConfig::default());
         let (tx, rx) = mpsc::channel(1);
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Http2Tls,
-            cert_str: Some("dummy_pem_content".to_string()),
-            key_str: Some("dummy_key_content".to_string()),
-            route_configs: vec![],
-        };
 
         let proxy_task = tokio::spawn(start_proxy(
             shared_config,
@@ -309,7 +285,8 @@ peIJpwo+Kuf964DexDVglw==
             rx,
             ServiceType::Http2Tls,
             "test-grpc-tls".to_string(),
-            service_config,
+            Some("dummy_pem_content".to_string()),
+            Some("dummy_key_content".to_string()),
         ));
         tokio::time::sleep(Duration::from_millis(10)).await;
         let tt = tx.send(()).await;
@@ -322,12 +299,6 @@ peIJpwo+Kuf964DexDVglw==
     async fn test_start_proxy_grpc_tls_missing_key() {
         let shared_config = SharedConfig::from_app_config(AppConfig::default());
         let (_tx, rx) = mpsc::channel(1);
-        let service_config = ServiceConfig {
-            server_type: ServiceType::Http2Tls,
-            cert_str: Some("dummy_pem_content".to_string()),
-            key_str: None,
-            route_configs: vec![],
-        };
 
         let result = start_proxy(
             shared_config,
@@ -335,7 +306,8 @@ peIJpwo+Kuf964DexDVglw==
             rx,
             ServiceType::Http2Tls,
             "test-grpc-tls-fail".to_string(),
-            service_config,
+            Some("dummy_pem_content".to_string()),
+            None,
         )
         .await;
         assert!(result.is_err());
@@ -347,24 +319,14 @@ peIJpwo+Kuf964DexDVglw==
 
     #[tokio::test]
     async fn test_init_function() {
-        let services_to_init = vec![(
-            "http_service".to_string(),
-            9001,
-            ServiceConfig {
-                server_type: ServiceType::Http,
-                ..Default::default()
-            },
-        )];
+        let services_to_init = vec![("http_service".to_string(), 9001, ServiceType::Http)];
         let shared_config = SharedConfig::from_app_config(AppConfig {
             api_service_config: HashMap::from([(
                 9001,
                 ApiService {
                     api_service_id: "".to_string(),
                     listen_port: 9001,
-                    service_config: ServiceConfig {
-                        server_type: ServiceType::Http,
-                        ..Default::default()
-                    },
+
                     ..Default::default()
                 },
             )]),
@@ -381,10 +343,7 @@ peIJpwo+Kuf964DexDVglw==
                     .get(&9001)
                     .expect("Service not found in config after init");
                 assert_eq!(api_service.listen_port, *port);
-                assert_eq!(
-                    api_service.service_config.server_type,
-                    service_conf.server_type
-                );
+                assert_eq!(api_service.server_type, service_conf.clone());
             }
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
