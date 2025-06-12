@@ -182,8 +182,7 @@ pub enum ServiceType {
 pub struct ApiService {
     #[serde(rename = "listen")]
     pub listen_port: i32,
-    #[serde(skip_deserializing, skip_serializing)]
-    pub api_service_id: String,
+
     #[serde(rename = "protocol")]
     pub server_type: ServiceType,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -219,7 +218,6 @@ impl<'de> Deserialize<'de> for ApiService {
 
         Ok(ApiService {
             listen_port: api_service_without_sender.port,
-            api_service_id: Default::default(),
             server_type: api_service_without_sender.server_type,
             cert_str: api_service_without_sender.cert_str,
             key_str: api_service_without_sender.key_str,
@@ -243,7 +241,6 @@ impl Default for ApiService {
 
         Self {
             listen_port: Default::default(),
-            api_service_id: Default::default(),
             server_type: Default::default(),
             cert_str: Default::default(),
             key_str: Default::default(),
@@ -308,7 +305,7 @@ mod tests {
     use crate::middleware::rate_limit::Ratelimit;
     use crate::vojo::router::PollRoute;
     use crate::vojo::router::RandomRoute;
-    
+
     use crate::vojo::router::WeightBasedRoute;
     use http::HeaderValue;
     fn create_api_service1() -> ApiService {
@@ -598,24 +595,15 @@ mod tests {
     fn test_api_service_equality() {
         let service1 = ApiService {
             listen_port: 8080,
-            api_service_id: "id1".to_string(),
             ..Default::default()
         };
 
         let service2 = ApiService {
             listen_port: 8080,
-            api_service_id: "id1".to_string(),
-            ..Default::default()
-        };
-
-        let service3 = ApiService {
-            listen_port: 8081,
-            api_service_id: "id1".to_string(),
             ..Default::default()
         };
 
         assert_eq!(service1, service2);
-        assert_ne!(service1, service3);
     }
 
     #[test]
