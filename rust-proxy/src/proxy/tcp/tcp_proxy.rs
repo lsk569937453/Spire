@@ -177,7 +177,6 @@ mod tests {
         let allowed_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
         let denied_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), 1234);
 
-        // 测试允许的IP
         let result = check(
             port,
             shared_config.clone(),
@@ -187,7 +186,6 @@ mod tests {
         .await;
         assert!(result.unwrap());
 
-        // 测试禁止的IP
         let result = check(port, shared_config, "test_key".to_string(), denied_addr).await;
         println!("{:?}", result);
         assert!(result.is_ok());
