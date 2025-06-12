@@ -89,7 +89,7 @@ async fn check(
             port
         )))?;
 
-    let service_config_clone = api_service.clone();
+    let service_config_clone = api_service;
 
     let route = service_config_clone
         .route_configs
@@ -127,7 +127,6 @@ async fn get_route_cluster(
 mod tests {
     use super::*;
     use crate::vojo::app_config::{ApiService, AppConfig, RouteConfig};
-    
 
     use crate::vojo::router::WeightBasedRoute;
     use crate::vojo::router::WeightedRouteItem;
