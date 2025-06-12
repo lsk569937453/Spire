@@ -1,6 +1,4 @@
-use crate::vojo::app_config::LogLevel;
 pub const DEFAULT_ADMIN_PORT: i32 = 8870;
-pub const DEFAULT_LOG_LEVEL: LogLevel = LogLevel::Info;
 pub const DENY_RESPONSE: &str = r#"{
     "response_code": -1,
     "response_object": "The request has been blocked by the Spire!"

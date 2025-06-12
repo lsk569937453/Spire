@@ -157,7 +157,7 @@ mod tests {
 
     fn setup_test_logger_handle() -> Handle<filter::Targets, registry::Registry> {
         let filter = filter::Targets::new().with_default(Level::INFO);
-        let (filter, reload_handle) = reload::Layer::new(filter);
+        let (_, reload_handle) = reload::Layer::new(filter);
 
         reload_handle
     }
