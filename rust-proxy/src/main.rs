@@ -95,8 +95,13 @@ fn reconfigure_logger(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use std::io::Write;
+
+    use tempfile::NamedTempFile;
+    use tracing::Level;
+    use tracing_subscriber::registry;
+    use tracing_subscriber::reload;
 
     #[tokio::test]
     #[ignore]
@@ -143,5 +148,113 @@ mod tests {
             }
         }
         Ok(())
+    }
+    fn create_temp_config_file(content: &str) -> NamedTempFile {
+        let mut file = NamedTempFile::new().expect("Failed to create temp file");
+        write!(file, "{}", content).expect("Failed to write to temp file");
+        file
+    }
+
+    fn setup_test_logger_handle() -> Handle<filter::Targets, registry::Registry> {
+        let filter = filter::Targets::new().with_default(Level::INFO);
+        let (filter, reload_handle) = reload::Layer::new(filter);
+
+        reload_handle
+    }
+    #[tokio::test]
+    async fn test_load_config_success() {
+        let yaml_content = r#"
+log_level: info
+servers:
+  - listen: 8084
+    protocol: http
+    routes:
+      - match:
+          prefix: /
+        forward_to: http://192.168.0.0:9393
+        "#;
+        let config_file = create_temp_config_file(yaml_content);
+        let config_path_str = config_file.path().to_str().unwrap();
+        let cli = Cli::try_parse_from(vec!["spire", "-f", config_path_str]);
+        println!("cli: {:?}", cli);
+        assert!(cli.is_ok());
+        let cli = cli.unwrap();
+
+        let result = load_config(&cli).await;
+
+        println!("result: {:?}", result);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_load_config_invalid_yaml() {
+        let invalid_yaml = "log_level: 'debug'\ninvalid-yaml-format";
+        let config_file = create_temp_config_file(invalid_yaml);
+        let cli = Cli::try_parse_from(&config_file.path().to_path_buf());
+        assert!(cli.is_err());
+    }
+
+    #[test]
+    fn test_reconfigure_logger_with_health_check_logs_disabled() {
+        let reload_handle = setup_test_logger_handle();
+        let config = AppConfig {
+            admin_port: None,
+            health_check_log_enabled: Some(false),
+            ..Default::default()
+        };
+
+        reconfigure_logger(&reload_handle, &config);
+
+        let res = reload_handle.with_current(|filter| {
+            let filter_str = filter.to_string();
+
+            assert!(filter_str.contains("info"));
+            assert!(filter_str.contains("delay_timer=off"));
+            assert!(filter_str.contains("hyper_util=off"));
+            assert!(filter_str.contains("spire::health_check::health_check_task=off"));
+        });
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_reconfigure_logger_with_health_check_logs_enabled() {
+        let reload_handle = setup_test_logger_handle();
+        let config = AppConfig {
+            admin_port: None,
+            health_check_log_enabled: Some(true),
+            ..Default::default()
+        };
+
+        reconfigure_logger(&reload_handle, &config);
+
+        let res = reload_handle.with_current(|filter| {
+            let filter_str = filter.to_string();
+            assert!(filter_str.contains("debug"));
+            assert!(filter_str.contains("delay_timer=off"));
+            assert!(filter_str.contains("hyper_util=off"));
+            assert!(!filter_str.contains("spire::health_check::health_check_task=off"));
+        });
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_reconfigure_logger_with_health_check_logs_not_set() {
+        let reload_handle = setup_test_logger_handle();
+        let config = AppConfig {
+            admin_port: None,
+            health_check_log_enabled: None, // 关键测试点
+            ..Default::default()
+        };
+
+        reconfigure_logger(&reload_handle, &config);
+
+        let res = reload_handle.with_current(|filter| {
+            let filter_str = filter.to_string();
+            assert!(filter_str.contains("warn"));
+            assert!(filter_str.contains("delay_timer=off"));
+            assert!(filter_str.contains("hyper_util=off"));
+            assert!(filter_str.contains("spire::health_check::health_check_task=off"));
+        });
+        assert!(res.is_err());
     }
 }

@@ -196,7 +196,7 @@ mod tests {
     async fn create_elapsed_error() -> tokio::time::error::Elapsed {
         tokio::time::timeout(
             Duration::from_millis(1),
-            tokio::time::sleep(Duration::from_millis(10)),
+            tokio::time::sleep(Duration::from_millis(100)),
         )
         .await
         .unwrap_err()

@@ -112,7 +112,7 @@ pub async fn start_proxy(
 }
 #[cfg(test)]
 mod tests {
-    use super::*; // Import items from the parent module
+    use super::*;
     use crate::vojo::app_config::{ApiService, AppConfig, ServiceType};
     use crate::vojo::cli::SharedConfig;
 
@@ -324,7 +324,6 @@ peIJpwo+Kuf964DexDVglw==
             api_service_config: HashMap::from([(
                 9001,
                 ApiService {
-                    api_service_id: "".to_string(),
                     listen_port: 9001,
 
                     ..Default::default()
