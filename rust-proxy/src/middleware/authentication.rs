@@ -35,7 +35,6 @@ pub struct BasicAuth {
 
 impl BasicAuth {
     fn check_authentication(&mut self, headers: &HeaderMap<HeaderValue>) -> Result<bool, AppError> {
-        // 原有实现逻辑
         if headers.is_empty() || !headers.contains_key("Authorization") {
             return Ok(false);
         }
@@ -60,7 +59,6 @@ pub struct ApiKeyAuth {
 
 impl ApiKeyAuth {
     fn check_authentication(&mut self, headers: &HeaderMap<HeaderValue>) -> Result<bool, AppError> {
-        // 原有实现逻辑
         if headers.is_empty() || !headers.contains_key(&self.key) {
             return Ok(false);
         }
@@ -73,7 +71,6 @@ mod tests {
     use super::*;
     use http::HeaderValue;
 
-    // BasicAuth 测试
     #[test]
     fn test_basic_auth_success() {
         let mut auth = BasicAuth {

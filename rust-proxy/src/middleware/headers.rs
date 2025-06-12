@@ -104,7 +104,6 @@ mod tests {
         assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86400));
         assert_eq!(parse_duration("1w").unwrap(), Duration::from_secs(604800));
 
-        // 测试错误情况
         assert!(parse_duration("").is_err());
         assert!(parse_duration("30x").is_err());
         assert!(parse_duration("abc").is_err());

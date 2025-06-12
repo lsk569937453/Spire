@@ -855,7 +855,7 @@ mod tests {
             )
             .unwrap();
 
-        poll_route.current_index = -1; // reset for testing
+        poll_route.current_index = -1;
 
         assert_eq!(
             poll_route.get_route(&HeaderMap::new()).unwrap().endpoint,
