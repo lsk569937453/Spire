@@ -49,18 +49,13 @@ cargo build --release
 ### 配置 Spire 作为 http 代理
 
 ```
-static_config:
-  log_level: info
-services:
-  - listen_port: 8084
-    service_config:
-      server_type: http
-      routes:
-        - route_id: test_route
-          matcher:
-            prefix: /
-            prefix_rewrite: /
-          router: http://192.168.0.0:9393
+servers:
+  - listen: 8084
+    protocol: http
+    routes:
+      - match:
+          prefix: /
+        forward_to: http://192.168.0.0:9393
 
 ```
 
@@ -69,24 +64,22 @@ Spire 将会监听 8084 端口然后转发流量到 http://192.168.0.0:9393。
 ### 配置 Spire 作为文件服务器
 
 ```
-static_config:
-  log_level: info
-services:
-  - listen_port: 8084
-    service_config:
-      server_type: http
-      routes:
-        - route_id: test_route
-          matcher:
-            prefix: /
-            prefix_rewrite: /
-          router:
-            type: file
-            doc_root: D:\code\github\gitstats\kvrocks
-          middlewares:
-            - type: rewrite_headers
-              expires: 24h
-              extensions: [js, css, html, png, jpg, gif]
+servers:
+  - listen: 8084
+    protocol: http
+    routes:
+      - route_id: test_route
+        matcher:
+          prefix: /
+          prefix_rewrite: /
+        forward_to:
+          kind: file
+          doc_root: D:\
+        middlewares:
+          - kind: rewrite_headers
+            expires: 24h
+            extensions: [js, css, html, png, jpg, gif]
+
 ```
 
 Spire 将会监听 8084 端口。
