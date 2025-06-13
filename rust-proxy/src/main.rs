@@ -63,7 +63,7 @@ async fn run_app(reload_handle: Handle<filter::Targets, Registry>) -> Result<(),
     info!("Starting control plane on port {}...", admin_port);
     start_control_plane(admin_port, shared_config).await?;
 
-    info!("Application shut down gracefully.");
+    info!("Application shut down gracefully. ");
     Ok(())
 }
 
