@@ -52,7 +52,7 @@ async fn run_app(reload_handle: Handle<filter::Targets, Registry>) -> Result<(),
     println!("Full configuration: {:?}", config);
 
     reconfigure_logger(&reload_handle, &config);
-    info!("Logger reconfigured to level: {} ", config.get_log_level());
+    info!("Logger reconfigured to level: {}", config.get_log_level());
 
     let admin_port = config.admin_port.unwrap_or(DEFAULT_ADMIN_PORT);
     let shared_config = SharedConfig::from_app_config(config);
