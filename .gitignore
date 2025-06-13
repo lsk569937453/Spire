@@ -46,3 +46,4 @@ spire
 *.data
 *.old
 *.svg
+.cache

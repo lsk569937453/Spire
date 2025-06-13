@@ -1,6 +1,6 @@
 [package]
 name = "spire"
-version = "0.0.22"
+version = "0.0.23"
 authors = ["lsk"]
 license = "Apache-2.0"
 edition = "2021"
