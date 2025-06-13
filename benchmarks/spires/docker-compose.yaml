@@ -22,7 +22,7 @@ services:
           memory: 8192M
   spire:
     # image: ghcr.io/lsk569937453/spire:0.0.20
-    image: lsk569937453/spire:0.0.22
+    image: lsk569937453/spire:0.0.23
     container_name: spire
     environment:
       CONFIG_FILE_PATH: /temp/app_config.yaml

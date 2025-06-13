@@ -15,7 +15,7 @@ jobs:
       matrix:
         platform:
           - release_for: linux-x86_64
-            os: ubuntu-20.04
+            os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             bin: spire
             name: spire-x86_64-unknown-linux-gnu
@@ -63,8 +63,8 @@ jobs:
       - name: Build the docker image
         if: matrix.platform.target == 'x86_64-unknown-linux-gnu'
         run: |-
-          cp rust-proxy/target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin }} ./docker/spire
-          cd docker/spire
+          cp rust-proxy/target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin }} ./docker/spires
+          cd docker/spires
           docker build -t ghcr.io/lsk569937453/spire:${{ github.ref_name }} .
           docker push ghcr.io/lsk569937453/spire:${{ github.ref_name }}
 
