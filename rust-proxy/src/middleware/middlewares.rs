@@ -2,6 +2,7 @@ use super::forward_header::ForwardHeader;
 use super::headers::StaticResourceHeaders;
 use crate::middleware::allow_deny_ip::AllowDenyIp;
 use crate::middleware::authentication::Authentication;
+use crate::middleware::circuit_breaker::CircuitBreaker;
 use crate::middleware::cors_config::CorsConfig;
 use crate::middleware::rate_limit::Ratelimit;
 use crate::AppError;
@@ -29,6 +30,8 @@ pub enum MiddleWares {
     Headers(StaticResourceHeaders),
     #[serde(rename = "forward_headers")]
     ForwardHeader(ForwardHeader),
+
+    CircuitBreaker(CircuitBreaker),
 }
 impl MiddleWares {
     pub fn is_allowed(

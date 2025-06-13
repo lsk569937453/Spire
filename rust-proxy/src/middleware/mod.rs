@@ -1,5 +1,6 @@
 pub mod allow_deny_ip;
 pub mod authentication;
+pub mod circuit_breaker;
 pub mod cors_config;
 pub mod forward_header;
 pub mod headers;
