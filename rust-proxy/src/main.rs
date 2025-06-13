@@ -36,7 +36,7 @@ async fn main() -> Result<(), AppError> {
     let reload_handle = setup_logger()?;
 
     if let Err(e) = run_app(reload_handle).await {
-        error!("Application failed to start: {:?}", e);
+        error!("Application failed to start:   {:?}", e);
         return Err(e);
     }
 
