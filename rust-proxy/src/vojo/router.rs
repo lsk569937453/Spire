@@ -775,7 +775,7 @@ mod tests {
 
         let json = r#"{
         "kind": "poll",
-        "routes": [
+        "targets": [
             {"endpoint": "http://s1"},
             {"endpoint": "http://s2"}
         ]

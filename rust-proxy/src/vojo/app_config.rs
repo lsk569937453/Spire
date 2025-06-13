@@ -647,7 +647,7 @@ response_object:
       - route_id: route1
         forward_to:
           kind: poll
-          routes: []"#;
+          targets: []"#;
         let _: BaseResponse<AppConfig> = serde_yaml::from_str(src).unwrap();
     }
 }
