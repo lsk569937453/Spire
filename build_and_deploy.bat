@@ -4,7 +4,7 @@ setlocal enabledelayedexpansion
 
 :: =============== 配置部分 ===============
 set DOCKER_IMAGE_NAME=lsk569937453/spire
-set DOCKER_IMAGE_VERSION=0.0.22
+set DOCKER_IMAGE_VERSION=0.0.23
 set RUST_PROJECT_DIR=rust-proxy
 set TARGET=x86_64-unknown-linux-gnu
 set BINARY_NAME=spire
