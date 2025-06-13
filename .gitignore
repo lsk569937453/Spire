@@ -41,3 +41,8 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+logs
+spire
+*.data
+*.old
+*.svg

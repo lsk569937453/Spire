@@ -14,7 +14,7 @@ pub struct HttpAnomalyDetectionParam {
     pub base_anomaly_detection_param: BaseAnomalyDetectionParam,
 }
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "kind")]
 pub enum AnomalyDetectionType {
     Http(HttpAnomalyDetectionParam),
 }

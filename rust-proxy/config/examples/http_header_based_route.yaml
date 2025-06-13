@@ -1,0 +1,25 @@
+log_level: info
+servers:
+  - listen: 8084
+    protocol: http
+    routes:
+      - route_id: test_route
+        forward_to:
+          kind: header
+          targets:
+            - endpoint: http://127.0.0.1:9395
+              header: test
+              match:
+                text: test
+            - endpoint: http://127.0.0.1:9396
+              header: test2
+              match:
+                regex: test2
+            - endpoint: http://127.0.0.1:9397
+              header: test3
+              match:
+                split:
+                  by: ","
+                  matches:
+                    - en-US
+                    - zh-CN

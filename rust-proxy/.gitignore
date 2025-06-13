@@ -17,3 +17,5 @@ temporary
 .vscode
 log
 logs
+*.html
+*.profraw

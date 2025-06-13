@@ -1,0 +1,17 @@
+log_level: info
+servers:
+  - listen: 8084
+    protocol: http
+    routes:
+      - matcher:
+          prefix: /
+          prefix_rewrite: /
+        forward_to:
+          kind: weight
+          targets:
+            - endpoint: http://127.0.0.1:9394
+              weight: 1
+            - endpoint: http://127.0.0.1:9396
+              weight: 2
+            - endpoint: http://127.0.0.1:939
+              weight: 3

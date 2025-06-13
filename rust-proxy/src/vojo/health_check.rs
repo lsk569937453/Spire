@@ -10,10 +10,13 @@ pub struct HttpHealthCheckParam {
     pub path: String,
 }
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "kind")]
 pub enum HealthCheckType {
+    #[serde(rename = "http_get")]
     HttpGet(HttpHealthCheckParam),
+    #[serde(rename = "redis")]
     Redis(BaseHealthCheckParam),
+    #[serde(rename = "mysql")]
     Mysql(BaseHealthCheckParam),
 }
 impl HealthCheckType {

@@ -1,7 +1,8 @@
 use crate::constants::common_constants::GRPC_STATUS_HEADER;
 use crate::constants::common_constants::GRPC_STATUS_OK;
-use crate::proxy::proxy_trait::CheckTrait;
+use crate::proxy::proxy_trait::ChainTrait;
 use crate::proxy::proxy_trait::CommonCheckRequest;
+use crate::proxy::proxy_trait::SpireContext;
 use crate::vojo::app_error::AppError;
 use h2::client;
 use h2::server;
@@ -40,9 +41,7 @@ pub async fn start_task(
     mapping_key: String,
     peer_addr: SocketAddr,
 ) -> Result<(), AppError> {
-    let mut connection = server::handshake(tcp_stream)
-        .await
-        .map_err(|e| AppError(e.to_string()))?;
+    let mut connection = server::handshake(tcp_stream).await?;
     while let Some(request_result) = connection.accept().await {
         if let Ok((request, respond)) = request_result {
             let mapping_key_cloned = mapping_key.clone();
@@ -57,11 +56,8 @@ pub async fn start_task(
                     peer_addr,
                 )
                 .await;
-                if result.is_err() {
-                    error!(
-                        "Grpc request outbound error,the error is {}",
-                        result.unwrap_err()
-                    );
+                if let Err(err) = result {
+                    error!("Grpc request outbound error,the error is {}", err);
                 }
             });
         }
@@ -75,9 +71,7 @@ pub async fn start_tls_task(
     mapping_key: String,
     peer_addr: SocketAddr,
 ) -> Result<(), AppError> {
-    let mut connection = server::handshake(tcp_stream)
-        .await
-        .map_err(|e| AppError(e.to_string()))?;
+    let mut connection = server::handshake(tcp_stream).await?;
     while let Some(request_result) = connection.accept().await {
         if let Ok((request, respond)) = request_result {
             let mapping_key_cloned = mapping_key.clone();
@@ -93,11 +87,8 @@ pub async fn start_tls_task(
                     peer_addr,
                 )
                 .await;
-                if result.is_err() {
-                    error!(
-                        "Grpc request outbound error,the error is {}",
-                        result.unwrap_err()
-                    );
+                if let Err(err) = result {
+                    error!("Grpc request outbound error,the error is {}", err);
                 }
             });
         }
@@ -128,7 +119,7 @@ impl GrpcProxy {
         let port_clone = self.port;
         let addr = SocketAddr::from(([0, 0, 0, 0], port_clone as u16));
         info!("Listening on grpc://{}", addr);
-        let listener = TcpListener::bind(addr).await.unwrap();
+        let listener = TcpListener::bind(addr).await?;
         let mapping_key = self.mapping_key.clone();
         let reveiver = &mut self.channel;
 
@@ -162,26 +153,22 @@ impl GrpcProxy {
         //     .iter()
         //     .map(|s| rustls::Certificate((*s).clone()))
         //     .collect();
-        let certs: Vec<CertificateDer<'_>> = rustls_pemfile::certs(&mut cer_reader)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AppError(e.to_string()))?;
+        let certs: Vec<CertificateDer<'_>> =
+            rustls_pemfile::certs(&mut cer_reader).collect::<Result<Vec<_>, _>>()?;
 
         let mut key_reader = BufReader::new(key_str.as_bytes());
-        let key_der = rustls_pemfile::private_key(&mut key_reader)
-            .map(|key| key.unwrap())
-            .map_err(|e| AppError(e.to_string()))?;
+        let key_der = rustls_pemfile::private_key(&mut key_reader)?.ok_or("key_der is none")?;
 
         let tls_cfg = {
             let cfg = rustls::ServerConfig::builder()
                 .with_no_client_auth()
-                .with_single_cert(certs, key_der)
-                .unwrap();
+                .with_single_cert(certs, key_der)?;
             Arc::new(cfg)
         };
         let tls_acceptor = TlsAcceptor::from(tls_cfg);
 
         info!("Listening on grpc with tls://{}", addr);
-        let listener = TcpListener::bind(addr).await.unwrap();
+        let listener = TcpListener::bind(addr).await?;
         let mapping_key = self.mapping_key.clone();
         let reveiver = &mut self.channel;
 
@@ -212,19 +199,13 @@ async fn copy_io(
 ) -> Result<(), AppError> {
     let mut flow_control = recv_stream.flow_control().clone();
     while let Some(chunk_result) = recv_stream.data().await {
-        let chunk_bytes = chunk_result.map_err(|e| AppError(e.to_string()))?;
+        let chunk_bytes = chunk_result?;
         debug!("Data from outbound: {:?}", chunk_bytes.clone());
-        send_stream
-            .send_data(chunk_bytes.clone(), false)
-            .map_err(|e| AppError(e.to_string()))?;
-        flow_control
-            .release_capacity(chunk_bytes.len())
-            .map_err(|e| AppError(e.to_string()))?;
+        send_stream.send_data(chunk_bytes.clone(), false)?;
+        flow_control.release_capacity(chunk_bytes.len())?;
     }
     if let Ok(Some(header)) = recv_stream.trailers().await {
-        send_stream
-            .send_trailers(header)
-            .map_err(|e| AppError(e.to_string()))?;
+        send_stream.send_trailers(header)?;
     }
     Ok(())
 }
@@ -235,44 +216,43 @@ async fn request_outbound(
     mut inbound_respond: SendResponse<Bytes>,
     mapping_key: String,
     peer_addr: SocketAddr,
-    check_trait: impl CheckTrait,
+    check_trait: impl ChainTrait,
 ) -> Result<(), AppError> {
     debug!("{:?}", inbount_request);
     let (inbound_parts, inbound_body) = inbount_request.into_parts();
 
-    let inbound_headers = inbound_parts.headers.clone();
+    let inbound_headers = inbound_parts.headers;
     let uri = inbound_parts.uri.clone();
+    let mut spire_context = SpireContext::new(port, None);
     let check_result = check_trait
-        .check_before_request(
+        .get_destination(
             shared_config,
             port,
             mapping_key.clone(),
-            inbound_headers,
+            &inbound_headers,
             uri,
             peer_addr,
+            &mut spire_context,
         )
         .await?;
     if check_result.is_none() {
-        return Err(AppError(String::from(
-            "The request has been denied by the proxy!",
-        )));
+        return Err(AppError::from("The request has been denied by the proxy!"));
     }
-    let request_path = check_result.unwrap().request_path;
-    let url = Url::parse(&request_path).map_err(|e| AppError(e.to_string()))?;
+    let request_path = check_result.ok_or("check_result is none")?.request_path;
+    let url = Url::parse(&request_path)?;
     let cloned_url = url.clone();
     let host = cloned_url
         .host()
-        .ok_or(AppError(String::from("Parse host error!")))?;
+        .ok_or(AppError::from("Parse host error!"))?;
     let port = cloned_url
         .port()
-        .ok_or(AppError(String::from("Parse host error!")))?;
+        .ok_or(AppError::from("Parse host error!"))?;
     debug!("The host is {}", host);
 
     let addr = format!("{}:{}", host, port)
-        .to_socket_addrs()
-        .map_err(|e| AppError(e.to_string()))?
+        .to_socket_addrs()?
         .next()
-        .ok_or(AppError(String::from("Parse the domain error!")))?;
+        .ok_or(AppError::from("Parse the domain error!"))?;
     debug!("The addr is {}", addr);
     let host_str = host.to_string();
 
@@ -285,20 +265,11 @@ async fn request_outbound(
             .with_no_client_auth();
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
         let tls_connector = TlsConnector::from(Arc::new(config));
-        let stream = TcpStream::connect(&addr)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
-        let domain = rustls_pki_types::ServerName::try_from(host_str.as_str())
-            .map_err(|e| AppError(e.to_string()))?
-            .to_owned();
+        let stream = TcpStream::connect(&addr).await?;
+        let domain = rustls_pki_types::ServerName::try_from(host_str.as_str())?.to_owned();
         debug!("The domain name is {}", host);
-        let stream = tls_connector
-            .connect(domain, stream)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
-        let (send_request, connection) = client::handshake(stream)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
+        let stream = tls_connector.connect(domain, stream).await?;
+        let (send_request, connection) = client::handshake(stream).await?;
         tokio::spawn(async move {
             let connection_result = connection.await;
             if let Err(err) = connection_result {
@@ -309,12 +280,8 @@ async fn request_outbound(
         });
         send_request
     } else {
-        let tcpstream = TcpStream::connect(addr)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
-        let (send_request, connection) = client::handshake(tcpstream)
-            .await
-            .map_err(|e| AppError(e.to_string()))?;
+        let tcpstream = TcpStream::connect(addr).await?;
+        let (send_request, connection) = client::handshake(tcpstream).await?;
         tokio::spawn(async move {
             connection.await.unwrap();
             debug!("The connection has closed!");
@@ -323,32 +290,23 @@ async fn request_outbound(
     };
 
     debug!("request path is {}", url);
-    let mut send_request = send_request_poll
-        .ready()
-        .await
-        .map_err(|e| AppError(e.to_string()))?;
+    let mut send_request = send_request_poll.ready().await?;
     let request = Request::builder()
         .method(Method::POST)
         .version(Version::HTTP_2)
         .uri(url.to_string())
         .header("content-type", "application/grpc")
         .header("te", "trailers")
-        .body(())
-        .unwrap();
+        .body(())?;
     debug!("Our bound request is {:?}", request);
-    let (response, outbound_send_stream) = send_request
-        .send_request(request, false)
-        .map_err(|e| AppError(e.to_string()))?;
+    let (response, outbound_send_stream) = send_request.send_request(request, false)?;
     tokio::spawn(async {
         if let Err(err) = copy_io(outbound_send_stream, inbound_body).await {
             error!("Copy from inbound to outboud error,the error is {}", err);
         }
     });
 
-    let (head, outboud_response_body) = response
-        .await
-        .map_err(|e| AppError(e.to_string()))?
-        .into_parts();
+    let (head, outboud_response_body) = response.await?.into_parts();
 
     debug!("Received response: {:?}", head);
 
@@ -359,9 +317,7 @@ async fn request_outbound(
         .unwrap_or(false);
     let inbound_response = Response::from_parts(head, ());
 
-    let send_stream = inbound_respond
-        .send_response(inbound_response, is_grpc_status_ok)
-        .map_err(|e| AppError(e.to_string()))?;
+    let send_stream = inbound_respond.send_response(inbound_response, is_grpc_status_ok)?;
 
     tokio::spawn(async {
         if let Err(err) = copy_io(send_stream, outboud_response_body).await {

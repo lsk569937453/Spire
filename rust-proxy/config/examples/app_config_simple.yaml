@@ -1,0 +1,8 @@
+log_level: info
+servers:
+  - listen: 8084
+    protocol: http
+    routes:
+      - match:
+          prefix: /
+        forward_to: http://192.168.0.0:9393

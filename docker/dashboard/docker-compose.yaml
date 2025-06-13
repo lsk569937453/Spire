@@ -1,17 +1,17 @@
 version: "3.9"
 services:
-  silverwind-dashboard:
-    image: lsk569937453/silverwind-dashboard:0.0.7
-    container_name: silverwind-dashboard
+  spire-dashboard:
+    image: lsk569937453/spire-dashboard:0.0.7
+    container_name: spire-dashboard
     ports:
       - "4486:4486"
 
-  silverwind:
-      image: ghcr.io/lsk569937453/silverwind:0.0.20
-      container_name: silverwind
-      ports:
-        - "6980:6980"
-        - "6666:6666"
-        - "7777:7777"
-      environment:
-        ADMIN_PORT: 6980
+  spire:
+    image: ghcr.io/lsk569937453/spire:0.0.20
+    container_name: spire
+    ports:
+      - "6980:6980"
+      - "6666:6666"
+      - "7777:7777"
+    environment:
+      ADMIN_PORT: 6980

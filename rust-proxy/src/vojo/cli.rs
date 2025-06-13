@@ -6,7 +6,6 @@ use std::sync::Mutex;
 #[derive(Parser, Debug, Clone)]
 #[command(name = "Spire", version = "1.0", about = "The Spire API Gateway", long_about = None) ]
 pub struct Cli {
-    /// The config file path
     #[arg(short = 'f', long, default_value = "config.yaml")]
     pub config_path: String,
 }

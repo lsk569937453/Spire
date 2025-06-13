@@ -1,0 +1,12 @@
+log_level: info
+servers:
+  - listen: 8084
+    protocol: http
+    routes:
+      - route_id: test_route
+        matcher:
+          prefix: /
+          prefix_rewrite: /
+        forward_to: http://127.0.0.1:8090
+        middlewares:
+          - kind: forward_headers

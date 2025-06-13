@@ -1,0 +1,12 @@
+services:
+  - listen_port: 6667
+    service_config:
+      server_type: http
+      route_configs:
+        - matcher:
+            prefix: /
+            prefix_rewrite: ssss
+          router:
+            kind: random
+            routes:
+              - endpoint: http://backend:80/
