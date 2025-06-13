@@ -6,7 +6,7 @@ servers:
       - route_id: test_route
         forward_to:
           kind: header
-          routes:
+          targets:
             - endpoint: http://127.0.0.1:9395
               header: test
               match:

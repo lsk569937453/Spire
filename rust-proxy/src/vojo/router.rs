@@ -379,6 +379,7 @@ impl<'de> Deserialize<'de> for HeaderRoutingRule {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeaderBasedRoute {
+    #[serde(rename = "targets")]
     pub routes: Vec<HeaderRoutingRule>,
 }
 
@@ -474,6 +475,7 @@ impl HeaderBasedRoute {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RandomRoute {
+    #[serde(rename = "targets")]
     pub routes: Vec<BaseRoute>,
 }
 
@@ -538,6 +540,7 @@ impl RandomRoute {
 pub struct PollRoute {
     #[serde(skip_deserializing, skip_serializing)]
     pub current_index: i128,
+    #[serde(rename = "targets")]
     pub routes: Vec<BaseRoute>,
 }
 
@@ -599,6 +602,7 @@ impl PollRoute {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WeightBasedRoute {
+    #[serde(rename = "targets")]
     pub routes: Vec<WeightedRouteItem>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -771,7 +775,7 @@ mod tests {
 
         let json = r#"{
         "kind": "poll",
-        "routes": [
+        "targets": [
             {"endpoint": "http://s1"},
             {"endpoint": "http://s2"}
         ]

@@ -7,7 +7,7 @@ servers:
           prefix_rewrite: /
         forward_to:
           kind: weight
-          routes:
+          targets:
             - endpoint: https://httpbin.org/get
               weight: 1
         middlewares:

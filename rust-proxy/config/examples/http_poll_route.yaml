@@ -5,7 +5,7 @@ servers:
       - route_id: test_route
         forward_to:
           kind: poll
-          routes:
+          targets:
             - endpoint: http://127.0.0.1:9394
             - endpoint: http://127.0.0.1:9395
             - endpoint: http://127.0.0.1:9396

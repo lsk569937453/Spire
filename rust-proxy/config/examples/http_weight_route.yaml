@@ -8,7 +8,7 @@ servers:
           prefix_rewrite: /
         forward_to:
           kind: weight
-          routes:
+          targets:
             - endpoint: http://127.0.0.1:9394
               weight: 1
             - endpoint: http://127.0.0.1:9396
