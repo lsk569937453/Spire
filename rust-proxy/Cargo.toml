@@ -1,6 +1,6 @@
 [package]
 name = "spire-proxy"   # crates.io 上唯一的名字
-version = "0.0.28"
+version = "0.0.29"
 authors = ["lsk"]
 license = "Apache-2.0"
 edition = "2024"
