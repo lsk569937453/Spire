@@ -178,9 +178,18 @@ impl Middleware for MiddleWares {
         inbound_headers: HeaderMap,
     ) -> Result<(), AppError> {
         match self {
-            MiddleWares::Cors(mw) => mw.handle_response(req_path, response, inbound_headers).await,
-            MiddleWares::Headers(mw) => mw.handle_response(req_path, response, inbound_headers).await,
-            MiddleWares::Compression(mw) => mw.handle_response(req_path, response, inbound_headers).await,
+            MiddleWares::Cors(mw) => {
+                mw.handle_response(req_path, response, inbound_headers)
+                    .await
+            }
+            MiddleWares::Headers(mw) => {
+                mw.handle_response(req_path, response, inbound_headers)
+                    .await
+            }
+            MiddleWares::Compression(mw) => {
+                mw.handle_response(req_path, response, inbound_headers)
+                    .await
+            }
             _ => Ok(()),
         }
     }
@@ -261,8 +270,8 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_cors_middleware() {
+    #[tokio::test]
+    async fn test_cors_middleware() {
         let cors_config = CorsConfig {
             allowed_origins: CorsAllowedOrigins::All,
             allowed_methods: vec![Method::Get],
@@ -275,7 +284,9 @@ mod tests {
 
         let mut response = Response::builder().body(BoxBody::default()).unwrap();
 
-        let result = middleware.handle_response("", &mut response, HeaderMap::new());
+        let result = middleware
+            .handle_response("", &mut response, HeaderMap::new())
+            .await;
         assert!(result.is_ok());
 
         assert_eq!(
