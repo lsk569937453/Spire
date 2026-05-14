@@ -1,5 +1,5 @@
 [package]
-name = "spire-proxy"   # crates.io 上唯一的名字
+name = "spire-proxy" # crates.io 上唯一的名字
 version = "0.0.29"
 authors = ["lsk"]
 license = "Apache-2.0"
@@ -8,37 +8,16 @@ description = "A high-performance proxy server with control plane, supporting HT
 repository = "https://github.com/lsk569937453/Spire"
 homepage = "https://github.com/lsk569937453/Spire"
 keywords = ["proxy", "http", "https", "grpc", "reverse-proxy"]
-categories = ["network-programming",
- "web-programming",
- "web-programming::http-server"]
+categories = [
+    "network-programming",
+    "web-programming",
+    "web-programming::http-server",
+]
 readme = "README.md"
 
 [[bin]]
 name = "spire"
 path = "src/main.rs"
-
-[profile.dev]
-opt-level = 0
-debug = true
-debug-assertions = true
-overflow-checks = true
-lto = true
-panic = 'unwind'
-incremental = true
-codegen-units = 256
-rpath = false
-
-[profile.release]
-opt-level = 3
-debug = false
-debug-assertions = false
-overflow-checks = false
-lto = false
-panic = 'unwind'
-incremental = false
-codegen-units = 16
-rpath = false
-strip = true
 #debug = true
 # ##Optimize For Size
 
@@ -134,3 +113,26 @@ zstd = "=0.13.3"
 # native-tls = "0.2.11"
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 mimalloc = "=0.1.48"
+
+[profile.dev]
+opt-level = 0
+debug = true
+debug-assertions = true
+overflow-checks = true
+lto = true
+panic = 'unwind'
+incremental = true
+codegen-units = 256
+rpath = false
+
+[profile.release]
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+lto = false
+panic = 'unwind'
+incremental = false
+codegen-units = 16
+rpath = false
+strip = true
