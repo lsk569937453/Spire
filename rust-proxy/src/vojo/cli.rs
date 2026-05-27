@@ -54,6 +54,10 @@ CONFIGURATION:
     Default config file: config.yaml
     Use 'spire validate' to check your config before starting
 
+BUILD WITH PROFILING:
+    cargo build -rF pprof
+        Build release binary with pprof flamegraph support
+
 RESOURCES:
     Documentation: https://github.com/lsk569937453/spire
     Examples:      spire examples --list

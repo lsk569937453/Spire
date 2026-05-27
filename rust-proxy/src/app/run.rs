@@ -24,7 +24,7 @@ use crate::vojo::cli::SharedConfig;
 
 use crate::vojo::cli::Commands;
 use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::{filter, Registry};
+use tracing_subscriber::{Registry, filter};
 
 use crate::configuration_service::app_config_service;
 use crate::vojo::app_error::AppError;
@@ -33,6 +33,16 @@ use crate::control_plane::rest_api::start_control_plane;
 use tracing_subscriber::reload::Handle;
 
 pub async fn main_with_error() -> Result<(), AppError> {
+    #[cfg(feature = "pprof")]
+    tokio::spawn(async {
+        let profiler = pprof::ProfilerGuard::new(30).unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+        if let Ok(report) = profiler.report().build() {
+            let file = std::fs::File::create("flamegraph.svg").unwrap();
+            report.flamegraph(file).unwrap();
+            println!("自动生成火焰图完成");
+        };
+    });
     let (reload_handle, guard) = setup_logger()?;
     rustls::crypto::ring::default_provider()
         .install_default()

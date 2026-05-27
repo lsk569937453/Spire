@@ -21,7 +21,13 @@ path = "src/main.rs"
 #debug = true
 # ##Optimize For Size
 
+[features]
+default = []
+pprof = ["dep:pprof"]
+
 [dependencies]
+pprof = { version = "0.15", features = ["flamegraph", "protobuf"], optional = true }
+
 async-trait = "=0.1.89"
 axum = { version = "=0.8.9", features = ["macros"] }
 base64 = "=0.22.1"
@@ -126,13 +132,17 @@ codegen-units = 256
 rpath = false
 
 [profile.release]
-opt-level = 3
-debug = false
-debug-assertions = false
-overflow-checks = false
-lto = false
-panic = 'unwind'
-incremental = false
-codegen-units = 16
-rpath = false
-strip = true
+# opt-level = 3
+# debug = false
+# debug-assertions = false
+# overflow-checks = false
+# lto = false
+# panic = 'unwind'
+# incremental = false
+# codegen-units = 16
+# rpath = false
+# strip = true
+
+debug = true  # 保留调试信息（perf 能看到函数名）
+strip = false # 不剥离符号
+opt-level = 3 # 保持性能

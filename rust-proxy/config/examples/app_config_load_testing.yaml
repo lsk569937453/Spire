@@ -1,0 +1,13 @@
+# =============================================================================
+# File: app_config_simple.yaml
+# Description: Minimal configuration with single backend forwarding
+# =============================================================================
+# This is the simplest configuration example, showing a single HTTP server
+# that forwards all requests to one backend service.
+
+log_level: info
+servers:
+    - listen: 8084
+      protocol: http
+      routes:
+          - forward_to: http://127.0.0.1:8080
