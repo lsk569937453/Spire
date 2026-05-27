@@ -9,7 +9,6 @@ use crate::proxy::proxy_trait::{CommonCheckRequest, RouterDestination};
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
 use bytes::Bytes;
-use http::HeaderMap;
 use http::{HeaderValue, Uri};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::Method;
@@ -65,9 +64,6 @@ impl HttpProxy {
                         .serve_connection(
                             io,
                             service_fn(move |req: Request<Incoming>| {
-                                let req = req.map(|item| {
-                                    item.map_err(AppError::from).boxed()
-                                });
                                 proxy_adapter(cloned_port,cloned_shared_config.clone(),client_cloned.clone(), req, mapping_key2.clone(), addr)
                             }),
                         ).with_upgrades()
@@ -134,9 +130,6 @@ impl HttpProxy {
                     };
                     let io = TokioIo::new(tls_stream);
                     let service = service_fn(move |req: Request<Incoming>| {
-                        let req = req
-                            .map(|item| item.map_err(AppError::from).boxed());
-
                         proxy_adapter(cloned_port,cloned_shared_config.clone(),client.clone(), req, mapping_key2.clone(), addr)
                     });
                     if let Err(err) = http1::Builder::new().serve_connection(io, service).with_upgrades().await {
@@ -154,14 +147,18 @@ impl HttpProxy {
         Ok(())
     }
 }
-async fn proxy_adapter(
+async fn proxy_adapter<B>(
     port: i32,
     shared_config: SharedConfig,
     client: AppClients,
-    req: Request<BoxBody<Bytes, AppError>>,
+    req: Request<B>,
     mapping_key: String,
     remote_addr: SocketAddr,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
+where
+    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + 'static,
+    AppError: From<B::Error>,
+{
     let result =
         proxy_adapter_with_error(port, shared_config, client, req, mapping_key, remote_addr).await;
     match result {
@@ -173,20 +170,24 @@ async fn proxy_adapter(
             });
             Ok(Response::builder().status(StatusCode::NOT_FOUND).body(
                 Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes()))
-                    .map_err(AppError::from)
+                    .map_err(|e| match e {})
                     .boxed(),
             )?)
         }
     }
 }
-async fn proxy_adapter_with_error(
+async fn proxy_adapter_with_error<B>(
     port: i32,
     shared_config: SharedConfig,
     client: AppClients,
-    req: Request<BoxBody<Bytes, AppError>>,
+    req: Request<B>,
     mapping_key: String,
     remote_addr: SocketAddr,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
+where
+    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + 'static,
+    AppError: From<B::Error>,
+{
     let method = req.method().clone();
     let uri = req.uri().clone();
     let path = uri
@@ -198,7 +199,7 @@ async fn proxy_adapter_with_error(
     let current_time = SystemTime::now();
 
     let Some(s) = metrics::HTTP_REQUEST_DURATION_SECONDS.get() else {
-        return Err(AppError::from("HTTP_REQUEST_DURATION_SECONDS"));
+        return Err(AppError("HTTP_REQUEST_DURATION_SECONDS".to_string()));
     };
     let timer = s
         .with_label_values(&[mapping_key.as_str(), path.as_str(), method.as_str()])
@@ -224,7 +225,7 @@ async fn proxy_adapter_with_error(
             });
 
             let body = Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes()))
-                .map_err(AppError::from)
+                .map_err(|e| match e {})
                 .boxed();
 
             Response::builder()
@@ -234,7 +235,7 @@ async fn proxy_adapter_with_error(
                     error!("Failed to build response: {e}");
                     Response::new(
                         Full::new(Bytes::from_static(b"{\"response_code\":-1}"))
-                            .map_err(AppError::from)
+                            .map_err(|e| match e {})
                             .boxed(),
                     )
                 })
@@ -264,15 +265,19 @@ async fn proxy_adapter_with_error(
     Ok(res)
 }
 
-async fn proxy(
+async fn proxy<B>(
     port: i32,
     shared_config: SharedConfig,
     client: AppClients,
-    mut req: Request<BoxBody<Bytes, AppError>>,
+    mut req: Request<B>,
     mapping_key: String,
     remote_addr: SocketAddr,
     chain_trait: impl ChainTrait,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
+where
+    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + 'static,
+    AppError: From<B::Error>,
+{
     debug!("req: {req:?}");
 
     let inbound_headers = req.headers();
@@ -299,7 +304,7 @@ async fn proxy(
             debug!("Request denied: {denial:?}");
             let mut response = Response::builder().status(denial.status).body(
                 Full::new(Bytes::from(denial.body))
-                    .map_err(AppError::from)
+                    .map_err(|e| match e {})
                     .boxed(),
             )?;
             response.headers_mut().extend(denial.headers);
@@ -309,7 +314,7 @@ async fn proxy(
             debug!("No match found for the request.");
             let response = Response::builder().status(StatusCode::NOT_FOUND).body(
                 Full::new(Bytes::from("Not Found"))
-                    .map_err(AppError::from)
+                    .map_err(|e| match e {})
                     .boxed(),
             )?;
             return Ok(response);
@@ -339,12 +344,21 @@ async fn proxy(
     let mut res = match router_destination {
         RouterDestination::File(ref _s) => {
             let mut parts = req.uri().clone().into_parts();
-            parts.path_and_query = Some(request_path.try_into()?);
-            *req.uri_mut() = Uri::from_parts(parts)?;
+            parts.path_and_query = Some(
+                request_path
+                    .try_into()
+                    .map_err(|e: http::uri::InvalidUri| AppError(format!("{e}")))?,
+            );
+            *req.uri_mut() =
+                Uri::from_parts(parts).map_err(|e: http::uri::InvalidUriParts| {
+                    AppError(format!("{e}"))
+                })?;
             route_file(router_destination, req).await
         }
         RouterDestination::Http(_s) => {
-            *req.uri_mut() = request_path.parse()?;
+            *req.uri_mut() = request_path
+                .parse()
+                .map_err(|e: http::uri::InvalidUri| AppError(format!("{e}")))?;
             let host = req
                 .uri()
                 .host()
@@ -355,18 +369,19 @@ async fn proxy(
             if let Some(mut middlewares) = spire_context.middlewares.clone() {
                 if !middlewares.is_empty() {
                     chain_trait
-                        .handle_before_request(&mut middlewares, remote_addr, &mut req)
+                        .handle_before_request(&mut middlewares, remote_addr, req.headers_mut())
                         .await?;
                 }
             }
             let timeout = check_request.timeout;
+            let req = req.map(|b| b.map_err(|e| AppError::from(e)).boxed());
             let request_future = if request_path.contains("https") {
                 client.http.request_https(req, timeout)
             } else {
                 client.http.request_http(req, timeout)
             };
             let response_result = match request_future.await {
-                Ok(response) => response.map_err(AppError::from),
+                Ok(response) => response.map_err(|e| e.into()),
                 _ => {
                     return Err(AppError(format!(
                         "Request time out,the uri is {request_path}"
@@ -375,14 +390,16 @@ async fn proxy(
             };
             response_result.map(|item| {
                 item.map(|s| s.boxed())
-                    .map(|item: BoxBody<Bytes, hyper::Error>| item.map_err(AppError::from).boxed())
+                    .map(|item: BoxBody<Bytes, hyper::Error>| {
+                        item.map_err(|e: hyper::Error| e.into()).boxed()
+                    })
             })
         }
         RouterDestination::Grpc(s) => {
             info!("The request is grpc!,{request_path}");
             let grpc_client = client
                 .grpc
-                .ok_or(AppError::from(""))?
+                .ok_or(AppError("".to_string()))?
                 .get_client(&s.endpoint)
                 .await?;
 
@@ -403,7 +420,7 @@ async fn proxy(
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(
                     Full::new(Bytes::from(response_json_string))
-                        .map_err(|e| AppError(format!("Failed to create response body: {e}"))) // map_err 的类型是 Infallible，但为保持一致性仍可转换
+                        .map_err(|e| match e {})
                         .boxed(),
                 )?;
 
@@ -425,9 +442,9 @@ async fn proxy(
     res
 }
 
-async fn route_file(
+async fn route_file<B>(
     router_destination: RouterDestination,
-    req: Request<BoxBody<Bytes, AppError>>,
+    req: Request<B>,
 ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     let static_ = Static::new(Path::new(router_destination.get_endpoint().as_str()));
     static_

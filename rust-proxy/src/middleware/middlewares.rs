@@ -12,7 +12,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use http::HeaderMap;
 use http::HeaderValue;
-use http::Request;
 use http::Response;
 use http::StatusCode;
 use http_body_util::combinators::BoxBody;
@@ -90,7 +89,7 @@ pub trait Middleware: Send + Sync {
     fn handle_request(
         &mut self,
         _peer_addr: SocketAddr,
-        _req: &mut Request<BoxBody<Bytes, AppError>>,
+        _headers: &mut HeaderMap,
     ) -> Result<(), AppError> {
         Ok(())
     }
@@ -147,11 +146,11 @@ impl Middleware for MiddleWares {
     fn handle_request(
         &mut self,
         peer_addr: SocketAddr,
-        req: &mut Request<BoxBody<Bytes, AppError>>,
+        headers: &mut HeaderMap,
     ) -> Result<(), AppError> {
         match self {
-            MiddleWares::ForwardHeader(mw) => mw.handle_request(peer_addr, req),
-            MiddleWares::RequestHeaders(mw) => mw.handle_request(peer_addr, req),
+            MiddleWares::ForwardHeader(mw) => mw.handle_request(peer_addr, headers),
+            MiddleWares::RequestHeaders(mw) => mw.handle_request(peer_addr, headers),
 
             _ => Ok(()),
         }
@@ -303,13 +302,13 @@ mod tests {
         let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         let mut middleware = MiddleWares::ForwardHeader(ForwardHeader {});
 
-        let mut request = Request::builder().body(BoxBody::default()).unwrap();
+        let mut headers = HeaderMap::new();
 
-        let result = middleware.handle_request(socket, &mut request);
+        let result = middleware.handle_request(socket, &mut headers);
         assert!(result.is_ok());
 
         assert_eq!(
-            request.headers().get("X-Forwarded-For").unwrap(),
+            headers.get("X-Forwarded-For").unwrap(),
             "127.0.0.1"
         );
     }

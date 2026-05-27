@@ -1,9 +1,7 @@
 use crate::middleware::middlewares::Middleware;
 use crate::vojo::app_error::AppError;
-use bytes::Bytes;
 use http::header::{HeaderName, HeaderValue};
-use http::Request;
-use http_body_util::combinators::BoxBody;
+use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -21,10 +19,8 @@ impl Middleware for RequestHeaders {
     fn handle_request(
         &mut self,
         _peer_addr: SocketAddr,
-        req: &mut Request<BoxBody<Bytes, AppError>>,
+        headers: &mut HeaderMap,
     ) -> Result<(), AppError> {
-        let headers = req.headers_mut();
-
         for key in &self.remove {
             if let Ok(header_name) = HeaderName::from_str(key) {
                 headers.remove(header_name);
@@ -48,11 +44,9 @@ mod tests {
 
     #[test]
     fn test_add_and_remove_headers() {
-        let mut req = Request::new(BoxBody::default());
-        req.headers_mut()
-            .insert("X-Existing-Header", HeaderValue::from_static("present"));
-        req.headers_mut()
-            .insert("X-Header-To-Remove", HeaderValue::from_static("remove-me"));
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Existing-Header", HeaderValue::from_static("present"));
+        headers.insert("X-Header-To-Remove", HeaderValue::from_static("remove-me"));
 
         let mut middleware = RequestHeaders {
             add: {
@@ -65,11 +59,10 @@ mod tests {
 
         let peer_addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
 
-        let result = middleware.handle_request(peer_addr, &mut req);
+        let result = middleware.handle_request(peer_addr, &mut headers);
 
         assert!(result.is_ok());
 
-        let headers = req.headers();
         assert_eq!(headers.get("X-New-Header").unwrap(), "new-value");
         assert!(!headers.contains_key("X-Header-To-Remove"));
         assert!(headers.contains_key("X-Existing-Header"));
@@ -77,7 +70,7 @@ mod tests {
 
     #[test]
     fn test_remove_nonexistent_header() {
-        let mut req = Request::new(BoxBody::default());
+        let mut headers = HeaderMap::new();
 
         let mut middleware = RequestHeaders {
             add: HashMap::new(),
@@ -86,16 +79,16 @@ mod tests {
 
         let peer_addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
 
-        let result = middleware.handle_request(peer_addr, &mut req);
+        let result = middleware.handle_request(peer_addr, &mut headers);
 
         assert!(result.is_ok());
 
-        assert!(req.headers().is_empty());
+        assert!(headers.is_empty());
     }
 
     #[test]
     fn test_invalid_header_name() {
-        let mut req = Request::new(BoxBody::default());
+        let mut headers = HeaderMap::new();
 
         let mut middleware = RequestHeaders {
             add: {
@@ -108,7 +101,7 @@ mod tests {
 
         let peer_addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
 
-        let result = middleware.handle_request(peer_addr, &mut req);
+        let result = middleware.handle_request(peer_addr, &mut headers);
 
         assert!(result.is_err());
         if let Err(e) = result {
@@ -118,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_invalid_header_value() {
-        let mut req = Request::new(BoxBody::default());
+        let mut headers = HeaderMap::new();
 
         let mut middleware = RequestHeaders {
             add: {
@@ -131,7 +124,7 @@ mod tests {
 
         let peer_addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
 
-        let result = middleware.handle_request(peer_addr, &mut req);
+        let result = middleware.handle_request(peer_addr, &mut headers);
 
         assert!(result.is_err());
         if let Err(e) = result {

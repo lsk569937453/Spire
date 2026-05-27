@@ -12,7 +12,6 @@ use crate::vojo::timeout_config::TimeoutConfig;
 use bytes::Bytes;
 use http::HeaderValue;
 use http::Method;
-use http::Request;
 use http::StatusCode;
 use http::header;
 use http::header::HeaderMap;
@@ -106,10 +105,10 @@ impl ChainTrait for CommonCheckRequest {
         middlewares: &mut Vec<MiddleWares>,
 
         peer_addr: SocketAddr,
-        req: &mut Request<BoxBody<Bytes, AppError>>,
+        headers: &mut HeaderMap,
     ) -> Result<(), AppError> {
         for item in middlewares.iter_mut() {
-            item.handle_request(peer_addr, req)?;
+            item.handle_request(peer_addr, headers)?;
         }
         Ok(())
     }
@@ -297,7 +296,7 @@ pub trait ChainTrait {
         &self,
         middlewares: &mut Vec<MiddleWares>,
         peer_addr: SocketAddr,
-        req: &mut Request<BoxBody<Bytes, AppError>>,
+        headers: &mut HeaderMap,
     ) -> Result<(), AppError>;
 }
 
