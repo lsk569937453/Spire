@@ -3,13 +3,13 @@ use http_body_util::combinators::BoxBody;
 
 use crate::vojo::app_error::AppError;
 use hyper::Request;
-use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::ResponseFuture;
+use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use rustls::RootCertStore;
 use std::time::Duration;
-use tokio::time::timeout;
 use tokio::time::Timeout;
+use tokio::time::timeout;
 
 #[derive(Clone)]
 pub struct HttpClients {
@@ -19,6 +19,11 @@ pub struct HttpClients {
 impl HttpClients {
     pub fn new() -> HttpClients {
         let http_client = Client::builder(TokioExecutor::new())
+            .pool_idle_timeout(Duration::from_secs(90))
+            .pool_max_idle_per_host(1024)
+            .http2_adaptive_window(true)
+            .http2_keep_alive_interval(Duration::from_secs(15))
+            .http2_keep_alive_timeout(Duration::from_secs(5))
             .http1_title_case_headers(true)
             .http1_preserve_header_case(true)
             .build_http();
