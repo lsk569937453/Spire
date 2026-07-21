@@ -26,26 +26,25 @@ default = []
 pprof = ["dep:pprof"]
 
 [dependencies]
-pprof = { version = "0.15", features = ["flamegraph", "protobuf"], optional = true }
 
-async-trait = "=0.1.89"
+async-trait = "=0.1.91"
 axum = { version = "=0.8.9", features = ["macros"] }
 base64 = "=0.22.1"
-bytes = "=1.11.1"
-chrono = "=0.4.44"
-clap = { version = "=4.6.1", features = ["derive", "cargo"] }
+bytes = "=1.12.1"
+chrono = "=0.4.45"
+clap = { version = "=4.6.3", features = ["derive", "cargo"] }
 delay_timer = "=0.11.6"
 derive_builder = "=0.20.2"
 flate2 = "=1.1.9"
-futures = { version = "=0.3.32", features = ["thread-pool"] }
-futures-util = { version = "=0.3.32", default-features = false }
-h2 = "=0.4.14"
+futures = { version = "=0.3.33", features = ["thread-pool"] }
+futures-util = { version = "=0.3.33", default-features = false }
+h2 = "=0.4.15"
 home = "=0.5.12"
-http = "=1.4.1"
-http-body = "=1.0.1"
-http-body-util = { version = "=0.1.3" }
+http = "=1.4.2"
+http-body = "=1.1.0"
+http-body-util = { version = "=0.1.4" }
 httpdate = "=1.0.3"
-hyper = { version = "=1.9.0", features = ["full"] }
+hyper = { version = "=1.11.0", features = ["full"] }
 hyper-rustls = { version = "=0.27.9", default-features = false, features = [
     "webpki-roots",
     "native-tokio",
@@ -64,56 +63,57 @@ iprange = "=0.6.7"
 jsonwebtoken = "=10.4.0"
 
 lazy_static = "=1.5.0"
-logroller = { version = "=0.1.10", features = ["tracing"] }
+logroller = { version = "=0.1.12", features = ["tracing"] }
 mime = "=0.3.17"
-mockall = "=0.14.0"
+mockall = "=0.15.0"
 notify = "=8.2.0"
 num_cpus = "=1.17.0"
 oas3 = { version = "=0.22.0", features = ["yaml-spec"] }
 once_cell = "=1.21.4"
 pkcs8 = { version = "=0.11.0", features = ["encryption", "pem", "std"] }
+pprof = { version = "0.15", features = ["flamegraph", "protobuf"], optional = true }
 prometheus = "=0.14.0"
-prost-reflect = { version = "=0.16.4", features = ["serde"] }
-rand = "=0.10.1"
+prost-reflect = { version = "=0.16.5", features = ["serde"] }
+rand = "=0.10.2"
 rcgen = { version = "=0.14.8", default-features = false, features = [
     "pem",
     "crypto",
     "ring",
 ] }
-regex = "=1.12.3"
-rustls = { version = "=0.23.40", default-features = false, features = [
+regex = "=1.13.1"
+rustls = { version = "=0.23.42", default-features = false, features = [
     "ring",
     "tls12",
     "logging",
 ] }
 rustls-pemfile = "=2.2.0"
-rustls-pki-types = "=1.14.1"
-serde = "=1.0.228"
-serde_json = "=1.0.150"
+rustls-pki-types = "=1.15.0"
+serde = "=1.0.229"
+serde_json = "=1.0.151"
 serde_yaml = "=0.9.34"
-serial_test = "=3.4.0"
+serial_test = "=3.5.0"
 sha-1 = "=0.10.1"
 strum_macros = "=0.28.0"
 tempfile = "=3.27.0"
-thiserror = "=2.0.18"
-time = "=0.3.47"
-tokio = { version = "=1.52.3", features = ["full", "tracing"] }
+thiserror = "=2.0.19"
+time = "=0.3.54"
+tokio = { version = "=1.53.1", features = ["full", "tracing"] }
 tokio-rustls = { version = "=0.26.4", default-features = false }
 tokio-util = { version = "=0.7.18", features = ["full", "time"] }
 tonic = "=0.14.6"
 tower = { version = "=0.5.3", features = ["util"] }
-tower-http = { version = "=0.6.11", features = ["full"] }
+tower-http = { version = "=0.7.0", features = ["full"] }
 tracing = "=0.1.44"
 tracing-appender = "=0.2.5"
 tracing-subscriber = { version = "=0.3.23" }
-typetag = "=0.2.22"
+typetag = "=0.2.23"
 url = "=2.5.8"
-uuid = { version = "=1.23.1", features = [
+uuid = { version = "=1.24.0", features = [
     "v4",
     "fast-rng",
     "macro-diagnostics",
 ] }
-webpki-roots = "=1.0.7"
+webpki-roots = "=1.0.9"
 x509-parser = "=0.18.1"
 zstd = "=0.13.3"
 # native-tls = "0.2.11"
