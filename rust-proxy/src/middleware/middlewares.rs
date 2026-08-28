@@ -5,6 +5,7 @@ use crate::middleware::allow_deny_ip::AllowDenyIp;
 use crate::middleware::authentication::Authentication;
 use crate::middleware::circuit_breaker::CircuitBreaker;
 use crate::middleware::cors_config::CorsConfig;
+use crate::middleware::ip_ban::IpBan;
 use crate::middleware::rate_limit::Ratelimit;
 use crate::middleware::request_headers::RequestHeaders;
 use crate::vojo::app_error::AppError;
@@ -61,6 +62,8 @@ pub enum MiddleWares {
     ForwardHeader(ForwardHeader),
     #[serde(rename = "circuit_breaker")]
     CircuitBreaker(#[serde(with = "arc_mutex_serde")] Arc<Mutex<CircuitBreaker>>),
+    #[serde(rename = "ip_ban")]
+    IpBan(#[serde(with = "arc_mutex_serde")] Arc<Mutex<IpBan>>),
     #[serde(rename = "request_headers")]
     RequestHeaders(RequestHeaders),
     #[serde(rename = "compression")]
@@ -77,6 +80,7 @@ impl PartialEq for MiddleWares {
             (Self::Headers(a), Self::Headers(b)) => a == b,
             (Self::ForwardHeader(a), Self::ForwardHeader(b)) => a == b,
             (Self::CircuitBreaker(a), Self::CircuitBreaker(b)) => Arc::ptr_eq(a, b),
+            (Self::IpBan(a), Self::IpBan(b)) => Arc::ptr_eq(a, b),
 
             (Self::RequestHeaders(a), Self::RequestHeaders(b)) => a == b,
             (Self::Compression(a), Self::Compression(b)) => a == b,
@@ -166,6 +170,7 @@ impl Middleware for MiddleWares {
             MiddleWares::Authentication(mw) => mw.check_request(peer_addr, headers),
             MiddleWares::AllowDenyList(mw) => mw.check_request(peer_addr, headers),
             MiddleWares::CircuitBreaker(mw) => mw.check_request(peer_addr, headers),
+            MiddleWares::IpBan(mw) => mw.check_request(peer_addr, headers),
             _ => Ok(CheckResult::Allowed),
         }
     }
@@ -269,6 +274,22 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn test_ip_ban_middleware() {
+        let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let mut middleware: MiddleWares =
+            serde_yaml::from_str("kind: ip_ban\nthreshold: 1\nwindow: 60s\nban_duration: 60s\n")
+                .unwrap();
+
+        let result = middleware.check_request(&socket, None);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_allowed());
+
+        let result = middleware.check_request(&socket, None);
+        assert!(result.is_ok());
+        assert!(!result.unwrap().is_allowed());
+    }
+
     #[tokio::test]
     async fn test_cors_middleware() {
         let cors_config = CorsConfig {
@@ -307,9 +328,6 @@ mod tests {
         let result = middleware.handle_request(socket, &mut headers);
         assert!(result.is_ok());
 
-        assert_eq!(
-            headers.get("X-Forwarded-For").unwrap(),
-            "127.0.0.1"
-        );
+        assert_eq!(headers.get("X-Forwarded-For").unwrap(), "127.0.0.1");
     }
 }

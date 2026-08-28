@@ -1,12 +1,13 @@
 use crate::middleware::circuit_breaker;
+use crate::middleware::ip_ban;
 use crate::middleware::rate_limit;
 use crate::vojo::app_config::AppConfig;
 use axum::response::IntoResponse;
 use axum::response::Response;
+use http::StatusCode;
 use http::header::InvalidHeaderValue;
 use http::header::ToStrError;
 use http::uri::InvalidUriParts;
-use http::StatusCode;
 use prost_reflect::DescriptorError;
 use rustls_pki_types::InvalidDnsNameError;
 use std::sync::PoisonError;
@@ -59,6 +60,7 @@ macro_rules! impl_poison_error_for_app_error {
 }
 impl_poison_error_for_app_error!(rate_limit::Ratelimit, "Rate limit");
 impl_poison_error_for_app_error!(circuit_breaker::CircuitBreaker, "Circuit breaker");
+impl_poison_error_for_app_error!(ip_ban::IpBan, "Ip ban");
 impl From<prost_reflect::prost::DecodeError> for AppError {
     fn from(error: prost_reflect::prost::DecodeError) -> Self {
         AppError(format!("Protobuf decode error: {error}"))

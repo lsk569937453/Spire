@@ -21,7 +21,7 @@ Spire is a high-performance proxy and gateway system written in Rust, designed t
 - **Multi-Protocol Support** - HTTP/1.1, HTTP/2, gRPC, TCP/TLS proxy
 - **Intelligent Routing** - Path-based, weight-based, round-robin, random, header-based routing strategies
 - **Security Authentication** - API Key, Basic Auth, IP whitelist/blacklist, CORS
-- **Traffic Control** - Token bucket rate limiting, circuit breaker protection
+- **Traffic Control** - Token bucket rate limiting, circuit breaker protection, automatic IP banning
 - **Health Checking** - Active/passive health checks with automatic failover
 - **TLS Support** - HTTPS/TLS encrypted connections, ACME auto certificate acquisition
 - **Monitoring Metrics** - Prometheus metrics export
@@ -44,6 +44,7 @@ Spire is a high-performance proxy and gateway system written in Rust, designed t
 - **Authentication** - API Key, Basic Auth
 - **Access Control** - IP whitelist/blacklist
 - **Rate Limiting** - Token bucket algorithm with IP-based limiting
+- **IP Banning** - Automatically ban IPs sending too many requests, with auto-unban and whitelist
 - **Circuit Breaker** - Automatic circuit breaking for failing backends
 - **CORS** - Cross-origin resource sharing configuration
 - **Header Manipulation** - Add/remove/modify request headers
@@ -262,6 +263,7 @@ acme:
 - `cors` - CORS
 - `allow_deny_list` - IP access control
 - `circuit_breaker` - Circuit breaker
+- `ip_ban` - Automatic banning of high-frequency IPs
 
 ## Admin API
 

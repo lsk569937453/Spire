@@ -5,6 +5,7 @@ pub mod compression;
 pub mod cors_config;
 pub mod forward_header;
 pub mod headers;
+pub mod ip_ban;
 pub mod middlewares;
 pub mod rate_limit;
 pub mod request_headers;

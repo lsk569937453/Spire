@@ -19,6 +19,16 @@ pub mod human_duration {
                 .parse::<u64>()
                 .map(|m| Duration::from_secs(m * 60))
                 .map_err(|e| e.to_string())
+        } else if let Some(num_str) = s.strip_suffix('h') {
+            num_str
+                .parse::<u64>()
+                .map(|h| Duration::from_secs(h * 3600))
+                .map_err(|e| e.to_string())
+        } else if let Some(num_str) = s.strip_suffix('d') {
+            num_str
+                .parse::<u64>()
+                .map(|d| Duration::from_secs(d * 86400))
+                .map_err(|e| e.to_string())
         } else {
             s.parse::<u64>()
                 .map(Duration::from_secs)
@@ -66,6 +76,16 @@ mod tests {
         assert_eq!(parse_duration_str("1m"), Ok(Duration::from_secs(60)));
         assert_eq!(parse_duration_str("2m"), Ok(Duration::from_secs(120)));
     }
+    #[test]
+    fn test_parse_hours() {
+        assert_eq!(parse_duration_str("1h"), Ok(Duration::from_secs(3600)));
+        assert_eq!(parse_duration_str("2h"), Ok(Duration::from_secs(7200)));
+    }
+    #[test]
+    fn test_parse_days() {
+        assert_eq!(parse_duration_str("1d"), Ok(Duration::from_secs(86400)));
+        assert_eq!(parse_duration_str("7d"), Ok(Duration::from_secs(604800)));
+    }
 
     #[test]
     fn test_parse_default_as_seconds() {
@@ -76,11 +96,12 @@ mod tests {
     fn test_parse_with_whitespace() {
         assert_eq!(parse_duration_str("  5s  "), Ok(Duration::from_secs(5)));
         assert_eq!(parse_duration_str(" 2m "), Ok(Duration::from_secs(120)));
+        assert_eq!(parse_duration_str(" 3h "), Ok(Duration::from_secs(10800)));
     }
 
     #[test]
     fn test_parse_invalid_format() {
-        assert!(parse_duration_str("10h").is_err());
+        assert!(parse_duration_str("10w").is_err());
         assert!(parse_duration_str("abc").is_err());
         assert!(parse_duration_str("10 s").is_err());
         assert!(parse_duration_str("ms").is_err());
@@ -155,11 +176,11 @@ mod tests {
 
     #[test]
     fn test_deserialization_error() {
-        let json = r#"{"timeout":"2h"}"#;
+        let json = r#"{"timeout":"2w"}"#;
         let result = serde_json::from_str::<TestStruct>(json);
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
-        assert!(err_msg.contains("invalid duration format: '2h'"));
+        assert!(err_msg.contains("invalid duration format: '2w'"));
     }
 
     #[test]

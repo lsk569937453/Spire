@@ -1,0 +1,25 @@
+# =============================================================================
+# File: ip_ban.yaml
+# Description: Automatically ban IPs that send too many requests
+# =============================================================================
+# Counts requests per client IP within a fixed window. When an IP exceeds
+# the threshold it is banned (403 with Retry-After) for ban_duration and
+# automatically unbanned afterwards. Whitelisted IPs/CIDRs are never counted.
+
+log_level: debug
+servers:
+  - listen: 8084
+    protocol: http
+    routes:
+      - matchers:
+          - kind: path
+            value: /api/v1
+        forward_to: http://httpbin.org/
+        middlewares:
+          - kind: ip_ban
+            threshold: 100        # max requests allowed per window
+            window: "1m"          # statistics window (ms/s/m/h/d)
+            ban_duration: "24h"   # how long the ban lasts, auto-unban on expiry
+            whitelist:            # optional: IPs/IPv4 CIDRs exempt from banning
+              - 10.0.0.0/8
+              - 192.168.1.100
