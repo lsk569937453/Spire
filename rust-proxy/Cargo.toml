@@ -27,24 +27,24 @@ pprof = ["dep:pprof"]
 
 [dependencies]
 
-async-trait = "=0.1.91"
+async-trait = "=0.1.92"
 axum = { version = "=0.8.9", features = ["macros"] }
-base64 = "=0.22.1"
+base64 = "=0.23.1"
 bytes = "=1.12.1"
 chrono = "=0.4.45"
-clap = { version = "=4.6.3", features = ["derive", "cargo"] }
+clap = { version = "=4.6.6", features = ["derive", "cargo"] }
 delay_timer = "=0.11.6"
 derive_builder = "=0.20.2"
-flate2 = "=1.1.9"
-futures = { version = "=0.3.33", features = ["thread-pool"] }
-futures-util = { version = "=0.3.33", default-features = false }
-h2 = "=0.4.15"
+flate2 = "=1.1.10"
+futures = { version = "=0.3.34", features = ["thread-pool"] }
+futures-util = { version = "=0.3.34", default-features = false }
+h2 = "=0.4.19"
 home = "=0.5.12"
-http = "=1.4.2"
+http = "=1.5.0"
 http-body = "=1.1.0"
-http-body-util = { version = "=0.1.4" }
+http-body-util = { version = "=0.1.5" }
 httpdate = "=1.0.3"
-hyper = { version = "=1.11.0", features = ["full"] }
+hyper = { version = "=1.11.1", features = ["full"] }
 hyper-rustls = { version = "=0.27.9", default-features = false, features = [
     "webpki-roots",
     "native-tokio",
@@ -58,9 +58,9 @@ instant-acme = { version = "=0.8.5", default-features = false, features = [
     "hyper-rustls",
     "ring",
 ] }
-ipnet = "=2.12.0"
+ipnet = "=2.12.1"
 iprange = "=0.6.7"
-jsonwebtoken = "=10.4.0"
+jsonwebtoken = "=11.0.0"
 
 lazy_static = "=1.5.0"
 logroller = { version = "=0.1.12", features = ["tracing"] }
@@ -75,31 +75,31 @@ pprof = { version = "0.15", features = ["flamegraph", "protobuf"], optional = tr
 prometheus = "=0.14.0"
 prost-reflect = { version = "=0.16.5", features = ["serde"] }
 rand = "=0.10.2"
-rcgen = { version = "=0.14.8", default-features = false, features = [
+rcgen = { version = "=0.14.10", default-features = false, features = [
     "pem",
     "crypto",
     "ring",
 ] }
 regex = "=1.13.1"
-rustls = { version = "=0.23.42", default-features = false, features = [
+rustls = { version = "=0.23.43", default-features = false, features = [
     "ring",
     "tls12",
     "logging",
 ] }
 rustls-pemfile = "=2.2.0"
-rustls-pki-types = "=1.15.0"
+rustls-pki-types = "=1.15.1"
 serde = "=1.0.229"
 serde_json = "=1.0.151"
 serde_yaml = "=0.9.34"
-serial_test = "=3.5.0"
+serial_test = "=4.0.1"
 sha-1 = "=0.10.1"
 strum_macros = "=0.28.0"
 tempfile = "=3.27.0"
-thiserror = "=2.0.19"
-time = "=0.3.54"
+thiserror = "=2.0.20"
+time = "=0.3.55"
 tokio = { version = "=1.53.1", features = ["full", "tracing"] }
 tokio-rustls = { version = "=0.26.4", default-features = false }
-tokio-util = { version = "=0.7.18", features = ["full", "time"] }
+tokio-util = { version = "=0.7.19", features = ["full", "time"] }
 tonic = "=0.14.6"
 tower = { version = "=0.5.3", features = ["util"] }
 tower-http = { version = "=0.7.0", features = ["full"] }
@@ -108,7 +108,7 @@ tracing-appender = "=0.2.5"
 tracing-subscriber = { version = "=0.3.23" }
 typetag = "=0.2.23"
 url = "=2.5.8"
-uuid = { version = "=1.24.0", features = [
+uuid = { version = "=1.26.0", features = [
     "v4",
     "fast-rng",
     "macro-diagnostics",
