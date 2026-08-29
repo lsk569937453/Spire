@@ -290,6 +290,27 @@ mod tests {
         assert!(!result.unwrap().is_allowed());
     }
 
+    #[test]
+    fn test_ip_ban_middleware_with_rules() {
+        let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let mut middleware: MiddleWares = serde_yaml::from_str(
+            "kind: ip_ban\nrules:\n  - threshold: 2\n    window: 60s\n    ban_duration: 60s\n  - threshold: 5\n    window: 24h\n    ban_duration: 24h\n",
+        )
+        .unwrap();
+
+        for _ in 0..2 {
+            let result = middleware.check_request(&socket, None);
+            assert!(result.is_ok());
+            assert!(result.unwrap().is_allowed());
+        }
+
+        // The short-window rule trips on the 3rd request while the long-window
+        // rule has only seen 3 of its 5 allowed requests.
+        let result = middleware.check_request(&socket, None);
+        assert!(result.is_ok());
+        assert!(!result.unwrap().is_allowed());
+    }
+
     #[tokio::test]
     async fn test_cors_middleware() {
         let cors_config = CorsConfig {

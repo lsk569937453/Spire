@@ -43,7 +43,7 @@ spire -f config/examples/<example-file>.yaml
 |------|-------------|
 | [`ratelimit_token_bucket.yaml`](ratelimit_token_bucket.yaml) | Token bucket rate limiting algorithm |
 | [`ratelimit_fixed_window.yaml`](ratelimit_fixed_window.yaml) | Fixed window rate limiting algorithm |
-| [`ip_ban.yaml`](ip_ban.yaml) | Automatically ban IPs exceeding a request threshold, with auto-unban and whitelist |
+| [`ip_ban.yaml`](ip_ban.yaml) | Automatically ban IPs exceeding any rule threshold (multiple window/threshold/ban-duration rules), with auto-unban and whitelist |
 
 ### Advanced Features
 
