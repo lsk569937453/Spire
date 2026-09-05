@@ -1,6 +1,6 @@
 use crate::constants::common_constants::GRPC_STATUS_HEADER;
 use crate::constants::common_constants::GRPC_STATUS_OK;
-use crate::control_plane::cert_loader::load_tls_config;
+use crate::control_plane::cert_loader::load_tls_config_multi;
 use crate::control_plane::cert_loader::watch_for_certificate_changes;
 use crate::proxy::proxy_trait::ChainTrait;
 use crate::proxy::proxy_trait::CommonCheckRequest;
@@ -144,22 +144,20 @@ impl GrpcProxy {
     pub async fn start_tls_proxy(&mut self, domains: Vec<String>) -> Result<(), AppError> {
         let port_clone = self.port;
         let addr = SocketAddr::from(([0, 0, 0, 0], port_clone as u16));
-        let tls_cfg = load_tls_config(domains.first().ok_or(AppError(
-            "Cannot create certificate because the domains list is empty.".to_string(),
-        ))?)?;
+        let tls_cfg = load_tls_config_multi(&domains)?;
 
         let shared_tls_config: Arc<RwLock<ServerConfig>> = Arc::new(RwLock::new(tls_cfg));
         let watcher_config_clone = shared_tls_config.clone();
-        let domain_name = domains.first().ok_or(AppError(
-            "Cannot create certificate because the domains list is empty.".to_string(),
-        ))?;
-        let domain_to_watch = domain_name.to_string();
+        let domains_to_watch = domains.clone();
         tokio::spawn(async move {
-            info!("Starting certificate watcher for domain: {domain_to_watch}");
+            info!(
+                "Starting certificate watcher for domains: {:?}",
+                domains_to_watch
+            );
             if let Err(e) =
-                watch_for_certificate_changes(&domain_to_watch, watcher_config_clone).await
+                watch_for_certificate_changes(domains_to_watch, watcher_config_clone).await
             {
-                error!("Certificate watcher task for domain [{domain_to_watch}] has failed: {e}");
+                error!("Certificate watcher task has failed: {e}");
             }
         });
 

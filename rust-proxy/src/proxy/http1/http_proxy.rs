@@ -1,4 +1,4 @@
-use crate::control_plane::cert_loader::load_tls_config;
+use crate::control_plane::cert_loader::load_tls_config_multi;
 use crate::control_plane::cert_loader::watch_for_certificate_changes;
 use crate::monitor::prometheus_exporter::metrics;
 use crate::proxy::http1::app_clients::AppClients;
@@ -88,21 +88,19 @@ impl HttpProxy {
         let client = AppClients::new(self.shared_config.clone(), self.port).await?;
         let mapping_key_clone1 = self.mapping_key.clone();
 
-        let tls_cfg = load_tls_config(domains.first().ok_or(AppError(
-            "Cannot create certificate because the domains list is empty.".to_string(),
-        ))?)?;
+        let tls_cfg = load_tls_config_multi(&domains)?;
         let shared_tls_config: Arc<RwLock<ServerConfig>> = Arc::new(RwLock::new(tls_cfg));
         let watcher_config_clone = shared_tls_config.clone();
-        let domain_name = domains.first().ok_or(AppError(
-            "Cannot create certificate because the domains list is empty.".to_string(),
-        ))?;
-        let domain_to_watch = domain_name.to_string();
+        let domains_to_watch = domains.clone();
         tokio::spawn(async move {
-            info!("Starting certificate watcher for domain: {domain_to_watch}");
+            info!(
+                "Starting certificate watcher for domains: {:?}",
+                domains_to_watch
+            );
             if let Err(e) =
-                watch_for_certificate_changes(&domain_to_watch, watcher_config_clone).await
+                watch_for_certificate_changes(domains_to_watch, watcher_config_clone).await
             {
-                error!("Certificate watcher task for domain [{domain_to_watch}] has failed: {e}");
+                error!("Certificate watcher task has failed: {e}");
             }
         });
         let reveiver = &mut self.channel;
@@ -113,7 +111,6 @@ impl HttpProxy {
                     Ok((tcp_stream,addr))= listener.accept()=>{
                         let tls_acceptor = {
                             let config_guard = shared_tls_config.read().map_err(|e| AppError(format!("Failed to get read lock on TLS config: {e}")))?;
-                            info!("config_guard is {config_guard:?}");
                             TlsAcceptor::from(Arc::new(config_guard.clone()))
                         };
                 let cloned_shared_config=self.shared_config.clone();
