@@ -3,11 +3,10 @@ use tokio::io;
 use crate::proxy::http1::http_client::HttpClients;
 use crate::vojo::app_error::AppError;
 use bytes::Bytes;
-use http_body_util::{combinators::BoxBody, BodyExt, Full};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::upgrade::OnUpgrade;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use sha1::Digest;
 use tokio::io::AsyncWriteExt;
 
 use crate::proxy::proxy_trait::HandlingResult;

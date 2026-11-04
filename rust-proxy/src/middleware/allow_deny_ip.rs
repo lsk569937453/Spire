@@ -17,7 +17,7 @@ pub struct AllowDenyIp {
 }
 impl Middleware for AllowDenyIp {
     fn check_request(
-        &mut self,
+        &self,
         peer_addr: &SocketAddr,
         _headers_option: Option<&HeaderMap<HeaderValue>>,
     ) -> Result<CheckResult, AppError> {

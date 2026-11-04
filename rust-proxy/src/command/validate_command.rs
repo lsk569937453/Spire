@@ -84,6 +84,9 @@ servers:
         forward_to: http://backend:8080
 "#;
         let result: Result<AppConfig, _> = serde_yaml::from_str(yaml);
-        assert!(result.is_ok(), "Valid config should deserialize successfully");
+        assert!(
+            result.is_ok(),
+            "Valid config should deserialize successfully"
+        );
     }
 }

@@ -6,21 +6,17 @@ use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TY
 use http::{HeaderMap, Response};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use std::io::Write;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum CompressionType {
+    #[default]
     Gzip,
     Zstd,
     #[serde(alias = "both")]
     Both,
-}
-
-impl Default for CompressionType {
-    fn default() -> Self {
-        CompressionType::Gzip
-    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -31,6 +27,11 @@ pub struct Compression {
     pub level: i32,
     #[serde(default = "default_min_size")]
     pub min_size: usize,
+    /// Largest response that may be buffered for compression. Bodies are
+    /// buffered in memory to be compressed, so an unbounded (chunked) or huge
+    /// response must be passed through untouched instead.
+    #[serde(default = "default_max_size")]
+    pub max_size: usize,
     #[serde(default = "default_excluded_types")]
     pub excluded_content_types: Vec<String>,
     #[serde(default)]
@@ -43,6 +44,10 @@ fn default_level() -> i32 {
 
 fn default_min_size() -> usize {
     1024 // 默认最小压缩大小 1KB
+}
+
+fn default_max_size() -> usize {
+    1024 * 1024 // 默认最大压缩大小 1MB
 }
 
 fn default_excluded_types() -> Vec<String> {
@@ -68,6 +73,7 @@ impl Default for Compression {
             compression_type: CompressionType::default(),
             level: default_level(),
             min_size: default_min_size(),
+            max_size: default_max_size(),
             excluded_content_types: default_excluded_types(),
             enabled: true,
         }
@@ -196,6 +202,37 @@ impl Compression {
             return None;
         }
 
+        // The body is collected into memory before being compressed, so only
+        // compress when the size is known up front and within [min_size, max_size].
+        // Without this a single large (or chunked, unknown length) response is
+        // buffered whole: a trivial memory exhaustion vector, and it also breaks
+        // streaming.
+        let content_length = response
+            .headers()
+            .get(CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<usize>().ok());
+        let Some(content_length) = content_length else {
+            debug!(
+                "[Compression] Response has no usable Content-Length, passing it through uncompressed"
+            );
+            return None;
+        };
+        if content_length < self.min_size {
+            debug!(
+                "[Compression] Response of {content_length} bytes is below min_size {}, skipping",
+                self.min_size
+            );
+            return None;
+        }
+        if content_length > self.max_size {
+            debug!(
+                "[Compression] Response of {content_length} bytes exceeds max_size {}, skipping",
+                self.max_size
+            );
+            return None;
+        }
+
         Some(compression_type)
     }
 }
@@ -236,7 +273,7 @@ impl Middleware for Compression {
         debug!("[Compression] Response status: {}", response.status());
 
         // 收集响应体
-        let body = std::mem::replace(response.body_mut(), BoxBody::default());
+        let body = std::mem::take(response.body_mut());
         let collected = body
             .collect()
             .await
@@ -327,8 +364,47 @@ mod tests {
     }
 
     #[test]
+    fn test_should_skip_compression_when_size_is_unknown_or_too_large() {
+        let comp = Compression::default();
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert(ACCEPT_ENCODING, "gzip".parse().unwrap());
+
+        // Unknown length (chunked/streamed): the body must not be buffered.
+        let response = Response::builder()
+            .header(CONTENT_TYPE, "application/json")
+            .body(BoxBody::default())
+            .unwrap();
+        assert_eq!(
+            comp.should_compress_response(&response, &request_headers),
+            None
+        );
+
+        // Larger than max_size: pass through instead of buffering it whole.
+        let response = Response::builder()
+            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_LENGTH, (comp.max_size + 1).to_string())
+            .body(BoxBody::default())
+            .unwrap();
+        assert_eq!(
+            comp.should_compress_response(&response, &request_headers),
+            None
+        );
+
+        // Within [min_size, max_size]: compressed.
+        let response = Response::builder()
+            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_LENGTH, (comp.min_size + 1).to_string())
+            .body(BoxBody::default())
+            .unwrap();
+        assert_eq!(
+            comp.should_compress_response(&response, &request_headers),
+            Some(CompressionType::Gzip)
+        );
+    }
+    #[test]
     fn test_parse_accept_encoding() {
         let comp = Compression::default();
+        assert_eq!(comp.compression_type, CompressionType::Gzip);
 
         // 测试 gzip
         let mut headers = HeaderMap::new();
@@ -338,12 +414,22 @@ mod tests {
             Some(CompressionType::Gzip)
         );
 
-        // 测试 zstd
+        // A gzip-only configuration must not negotiate zstd, even if the
+        // client accepts it.
         headers.insert(ACCEPT_ENCODING, "zstd".parse().unwrap());
+        assert_eq!(comp.parse_accept_encoding(&headers), None);
+
+        // 测试 zstd
+        let comp_zstd = Compression {
+            compression_type: CompressionType::Zstd,
+            ..Default::default()
+        };
         assert_eq!(
-            comp.parse_accept_encoding(&headers),
+            comp_zstd.parse_accept_encoding(&headers),
             Some(CompressionType::Zstd)
         );
+        headers.insert(ACCEPT_ENCODING, "gzip".parse().unwrap());
+        assert_eq!(comp_zstd.parse_accept_encoding(&headers), None);
 
         // 测试两者都支持
         let comp_both = Compression {

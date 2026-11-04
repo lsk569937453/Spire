@@ -7,10 +7,10 @@ use notify::RecursiveMode;
 use notify::Watcher;
 use rcgen::KeyPair;
 use rcgen::{CertificateParams, DistinguishedName};
+use rustls::ServerConfig;
 use rustls::crypto::ring::sign::any_supported_type;
 use rustls::pki_types::PrivateKeyDer;
 use rustls::sign::CertifiedKey;
-use rustls::ServerConfig;
 use rustls_pki_types::PrivatePkcs8KeyDer;
 use std::collections::HashSet;
 use std::fs::File;
@@ -57,13 +57,8 @@ pub fn load_domain_certified_key(domain: &str) -> Result<CertifiedKey, AppError>
         ));
     }
 
-    let cert_file = File::open(&cert_path).map_err(|e| {
-        app_error!(
-            "Failed to open cert file '{}': {}",
-            cert_path.display(),
-            e
-        )
-    })?;
+    let cert_file = File::open(&cert_path)
+        .map_err(|e| app_error!("Failed to open cert file '{}': {}", cert_path.display(), e))?;
     let certs = rustls_pemfile::certs(&mut BufReader::new(cert_file))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| app_error!("Failed to parse certificate file for '{domain}': {e}"))?;
@@ -112,7 +107,9 @@ pub fn load_tls_config_multi(domains: &[String]) -> Result<ServerConfig, AppErro
         let certified_key = match load_domain_certified_key(domain) {
             Ok(certified_key) => certified_key,
             Err(e) => {
-                warn!("Failed to load certificate for '{domain}': {e}. Falling back to a self-signed certificate.");
+                warn!(
+                    "Failed to load certificate for '{domain}': {e}. Falling back to a self-signed certificate."
+                );
                 create_self_signed_certified_key(domain)?
             }
         };
@@ -154,18 +151,15 @@ pub async fn watch_for_certificate_changes(
 
     let mut watcher = match RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res {
-                if matches!(
+            if let Ok(event) = res
+                && matches!(
                     event.kind,
                     notify::EventKind::Modify(_) | notify::EventKind::Create(_)
-                ) && event
-                    .paths
-                    .iter()
-                    .any(|p| watched_files.contains(p))
-                {
-                    info!("Certificate or key file change detected: {:?}", event.kind);
-                    let _ = tx.blocking_send(());
-                }
+                )
+                && event.paths.iter().any(|p| watched_files.contains(p))
+            {
+                info!("Certificate or key file change detected: {:?}", event.kind);
+                let _ = tx.blocking_send(());
             }
         },
         notify::Config::default(),

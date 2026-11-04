@@ -7,10 +7,10 @@ use crate::vojo::app_error::AppError;
 use std::fs::File;
 use std::io::BufReader;
 use std::sync::Arc;
-use time::format_description::well_known::Rfc2822;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc2822;
 use tokio::task::JoinHandle;
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 #[derive(Debug)]
 pub struct CertificateManager {
     config: Arc<AppConfig>,
@@ -93,7 +93,7 @@ impl CertificateManager {
 
         info!("Checking certificate validity: {cert_path:?}");
 
-        let result = match File::open(&cert_path) {
+        match File::open(&cert_path) {
             Ok(file) => {
                 let mut reader = BufReader::new(file);
                 match rustls_pemfile::read_one(&mut reader) {
@@ -131,9 +131,9 @@ impl CertificateManager {
                                             info!(
                                                 "Certificate [{}] is valid for {} more days (Expiration date: {:?})",
                                                 cert_path.display(),
-            remaining_days,
-            expiration_datetime.format(&Rfc2822)
-        );
+                                                remaining_days,
+                                                expiration_datetime.format(&Rfc2822)
+                                            );
                                             false
                                         }
                                     }
@@ -178,8 +178,7 @@ impl CertificateManager {
 
                 true
             }
-        };
-        result
+        }
     }
 
     async fn renew_certificate(domain_config: &String, acme: &AcmeConfig) -> Result<(), AppError> {
@@ -223,8 +222,8 @@ impl CertificateManager {
             .map_err(|e| app_error!("Failed to write private key file to {:?}: {}", key_path, e))?;
 
         info!(
-        "Successfully wrote certificate and private key for domain [{domain_name}] to the local filesystem."
-    );
+            "Successfully wrote certificate and private key for domain [{domain_name}] to the local filesystem."
+        );
 
         Ok(())
     }

@@ -1,6 +1,6 @@
-use async_trait::async_trait;
 use crate::middleware::middlewares::Middleware;
 use crate::vojo::app_error::AppError;
+use async_trait::async_trait;
 use bytes::Bytes;
 use http::HeaderMap;
 use http::Response;
@@ -23,7 +23,7 @@ impl Middleware for StaticResourceHeaders {
         &self,
         req_path: &str,
         response: &mut Response<BoxBody<Bytes, AppError>>,
-        inbound_headers: HeaderMap,
+        _inbound_headers: HeaderMap,
     ) -> Result<(), AppError> {
         self.handle_before_response(req_path, response)
     }

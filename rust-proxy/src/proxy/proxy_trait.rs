@@ -2,6 +2,7 @@ use crate::middleware::cors_config::CorsConfig;
 use crate::middleware::middlewares::Denial;
 use crate::middleware::middlewares::MiddleWares;
 use crate::middleware::middlewares::Middleware;
+use crate::utils::client_ip::resolve_client_ip;
 use crate::vojo::app_config::RouteConfig;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
@@ -10,16 +11,12 @@ use crate::vojo::router::BaseRoute;
 use crate::vojo::router::StaticFileRoute;
 use crate::vojo::timeout_config::TimeoutConfig;
 use bytes::Bytes;
-use http::HeaderValue;
 use http::Method;
-use http::StatusCode;
-use http::header;
 use http::header::HeaderMap;
-use http_body_util::BodyExt;
-use http_body_util::Full;
 use http_body_util::combinators::BoxBody;
 use hyper::Response;
 use hyper::Uri;
+#[cfg(test)]
 use mockall::automock;
 use serde::Deserialize;
 use serde::Serialize;
@@ -29,10 +26,22 @@ use std::path::Path;
 pub struct SpireContext {
     pub port: i32,
     pub middlewares: Option<Vec<MiddleWares>>,
+    /// Route that matched this request. Used as a bounded (low cardinality)
+    /// metrics label — the raw request path must never be used for that, since
+    /// it makes the number of Prometheus series grow without bound.
+    pub route_id: Option<String>,
+    /// Effective client address, after trusted-proxy (`X-Forwarded-For`)
+    /// resolution. Middlewares must see this, not the raw socket peer.
+    pub client_addr: Option<SocketAddr>,
 }
 impl SpireContext {
     pub fn new(port: i32, middlewares: Option<Vec<MiddleWares>>) -> Self {
-        Self { port, middlewares }
+        Self {
+            port,
+            middlewares,
+            route_id: None,
+            client_addr: None,
+        }
     }
     pub fn cors_configed(&self) -> Result<Option<CorsConfig>, AppError> {
         if let Some(middlewares) = &self.middlewares {
@@ -43,6 +52,12 @@ impl SpireContext {
             }
         }
         Ok(None)
+    }
+
+    /// Metrics label for this request: the matched route id, or `-` when no
+    /// route matched.
+    pub fn route_label(&self) -> &str {
+        self.route_id.as_deref().unwrap_or("-")
     }
 }
 pub struct CommonCheckRequest;
@@ -89,12 +104,13 @@ impl ChainTrait for CommonCheckRequest {
         response: &mut Result<Response<BoxBody<Bytes, AppError>>, AppError>,
         inbound_headers: HeaderMap,
     ) -> Result<(), AppError> {
-        for item in middlewares.iter_mut() {
+        for item in middlewares.iter() {
             item.record_outcome(response);
         }
         for item in middlewares.iter() {
             if let Ok(r) = response {
-                item.handle_response(req_path, r, inbound_headers.clone()).await?;
+                item.handle_response(req_path, r, inbound_headers.clone())
+                    .await?;
             }
         }
 
@@ -127,19 +143,25 @@ impl ChainTrait for CommonCheckRequest {
             .path_and_query()
             .ok_or(AppError::from("Path is empty"))?
             .as_str();
-        let mut app_config = shared_config.shared_data.lock()?;
+        // A shared (read) lock: routing never mutates the configuration, so all
+        // in-flight requests can match routes concurrently.
+        let app_config = shared_config.shared_data.read()?;
         let request_timeout_sec = app_config.upstream_timeout_secs.ok_or(AppError::from(
             "Can not find request_timeout_sec  from app config.",
         ))?;
+        let client_addr = SocketAddr::new(
+            resolve_client_ip(peer_addr, headers, app_config.trusted_proxy_nets()),
+            peer_addr.port(),
+        );
+        spire_context.client_addr = Some(client_addr);
         let api_service = app_config
             .api_service_config
-            .get_mut(&port)
+            .get(&port)
             .ok_or(AppError::from(
                 "Can not find config by port from app config.",
             ))?;
-        debug!("api_service_config: {api_service:?}");
-        let mut best_match: Option<(&mut RouteConfig, String, usize)> = None;
-        for item in api_service.route_configs.iter_mut() {
+        let mut best_match: Option<(&RouteConfig, String, usize)> = None;
+        for item in api_service.route_configs.iter() {
             if let Some(rewritten_path) = item.match_and_rewrite(backend_path, method, headers)? {
                 let current_match_len = item
                     .matchers
@@ -165,7 +187,8 @@ impl ChainTrait for CommonCheckRequest {
             }
         }
         if let Some((best_route, rest_path, _)) = best_match {
-            let check_res = best_route.is_allowed(&peer_addr, Some(headers))?;
+            let check_res = best_route.is_allowed(&client_addr, Some(headers))?;
+            spire_context.route_id = Some(best_route.route_id.clone());
             if !check_res.is_allowed() {
                 return Ok(DestinationResult::NotAllowed(
                     check_res
@@ -220,53 +243,12 @@ impl ChainTrait for CommonCheckRequest {
         cors_config: CorsConfig,
         origin: &str,
     ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
-        if cors_config.validate_origin("")? {
-            return Ok(Response::builder().status(StatusCode::FORBIDDEN).body(
-                Full::new(Bytes::from("".to_string()))
-                    .map_err(AppError::from)
-                    .boxed(),
-            )?);
-        }
-        let methods_header = cors_config
-            .allowed_methods
-            .iter()
-            .map(|m| m.as_str())
-            .collect::<Vec<&str>>()
-            .join(", ");
-        let headers_header = cors_config
-            .allowed_headers
-            .iter()
-            .map(|m| m.to_string())
-            .collect::<Vec<String>>()
-            .join(", ");
-
-        let mut builder = Response::builder()
-            .status(StatusCode::NO_CONTENT)
-            .header(header::ACCESS_CONTROL_ALLOW_METHODS, methods_header)
-            .header(header::ACCESS_CONTROL_ALLOW_HEADERS, headers_header)
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin)
-            .header(header::VARY, "Origin");
-
-        if let Some(s) = cors_config.allow_credentials {
-            if s {
-                builder = builder.header(
-                    header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                    HeaderValue::from_static("true"),
-                );
-            }
-        }
-        if let Some(s) = cors_config.max_age {
-            builder = builder.header(header::ACCESS_CONTROL_MAX_AGE, s.to_string());
-        }
-
-        Ok(builder.body(
-            Full::new(Bytes::from("".to_string()))
-                .map_err(AppError::from)
-                .boxed(),
-        )?)
+        // The origin must be the one the browser asked for: echoing a hardcoded
+        // empty value (or the configured list) makes every preflight fail.
+        cors_config.preflight_response(origin)
     }
 }
-#[automock]
+#[cfg_attr(test, automock)]
 pub trait ChainTrait {
     #[allow(clippy::too_many_arguments)]
     async fn get_destination(
@@ -320,8 +302,6 @@ mod tests {
     use http::HeaderName;
     use http::HeaderValue;
     use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::sync::Mutex;
     #[tokio::test]
     async fn test_check_http_route() {
         let mut headers = HeaderMap::new();
@@ -338,12 +318,10 @@ mod tests {
         let mut config_map = HashMap::new();
         config_map.insert(8080, api_service);
 
-        let shared_config = SharedConfig {
-            shared_data: Arc::new(Mutex::new(crate::vojo::app_config::AppConfig {
-                api_service_config: config_map,
-                ..Default::default()
-            })),
-        };
+        let shared_config = SharedConfig::from_app_config(crate::vojo::app_config::AppConfig {
+            api_service_config: config_map,
+            ..Default::default()
+        });
 
         let checker = CommonCheckRequest {};
         let uri = "/api/test/users".parse().unwrap();
@@ -380,12 +358,10 @@ mod tests {
         let mut config_map = HashMap::new();
         config_map.insert(8080, api_service);
 
-        let shared_config = SharedConfig {
-            shared_data: Arc::new(Mutex::new(AppConfig {
-                api_service_config: config_map,
-                ..Default::default()
-            })),
-        };
+        let shared_config = SharedConfig::from_app_config(AppConfig {
+            api_service_config: config_map,
+            ..Default::default()
+        });
 
         let checker = CommonCheckRequest {};
         let uri = "/static/images/test.jpg".parse().unwrap();
@@ -412,12 +388,10 @@ mod tests {
         let mut config_map = HashMap::new();
         config_map.insert(8080, ApiService::default());
 
-        let shared_config = SharedConfig {
-            shared_data: Arc::new(Mutex::new(AppConfig {
-                api_service_config: config_map,
-                ..Default::default()
-            })),
-        };
+        let shared_config = SharedConfig::from_app_config(AppConfig {
+            api_service_config: config_map,
+            ..Default::default()
+        });
 
         let checker = CommonCheckRequest {};
         let uri = "/not/exist/path".parse().unwrap();

@@ -61,7 +61,7 @@ pub struct CircuitBreaker {
 }
 impl Middleware for Arc<Mutex<CircuitBreaker>> {
     fn check_request(
-        &mut self,
+        &self,
         _peer_addr: &SocketAddr,
         _headers: Option<&HeaderMap<HeaderValue>>,
     ) -> Result<CheckResult, AppError> {
@@ -88,7 +88,7 @@ impl Middleware for Arc<Mutex<CircuitBreaker>> {
     }
 
     fn record_outcome(
-        &mut self,
+        &self,
         response_result: &Result<Response<BoxBody<Bytes, AppError>>, AppError>,
     ) {
         let mut lock = match self.lock() {

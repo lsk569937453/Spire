@@ -1,31 +1,34 @@
-FROM library/ubuntu:25.10
-RUN apt-get update &&\
-   apt-get install -y curl
-#    apt-get install -y heaptrack-gui
-#RUN apt-get update &&\
-#    apt-get install -y valgrind
-# 设置时区和字符集
+# Minimal runtime image for Spire.
+#
+# The binary is built outside this image (see .github/workflows/build.yaml) and
+# copied in as ./spire.
+FROM library/ubuntu:24.04
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV TZ=Asia/Shanghai
-ENV LANG=C.UTF-8
-ENV LC_ALL=C.UTF-8
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    tzdata \
-    locales && \
-    # 配置时区（两种方式任选其一）
-    ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
-    dpkg-reconfigure -f noninteractive tzdata && \
-    # 配置字符集
-    sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && \
-    locale-gen en_US.UTF-8 && \
-    # 清理缓存
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-COPY spire /tmp/spire
-COPY app_config.yaml /tmp/app_config.yaml
-RUN chmod go+r /tmp/spire
-WORKDIR "/tmp"
-ENTRYPOINT ["/tmp/spire","-f","/tmp/app_config.yaml"]
-#ENTRYPOINT ["tail", "-f", "/dev/null"]
+# Run as an unprivileged user: a gateway only needs to read its config and write
+# certificates under its own home directory.
+RUN useradd --system --create-home --home-dir /home/spire --shell /usr/sbin/nologin spire
 
+COPY spire /usr/local/bin/spire
+COPY app_config.yaml /etc/spire/config.yaml
+
+RUN chmod 0755 /usr/local/bin/spire \
+    && chown -R spire:spire /etc/spire \
+    && mkdir -p /home/spire/.spire \
+    && chown -R spire:spire /home/spire
+
+USER spire
+WORKDIR /home/spire
+
+# The admin API binds to loopback by default, so the probe runs inside the
+# container. `/health` needs no admin token.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8870/health || exit 1
+
+EXPOSE 6667
+ENTRYPOINT ["/usr/local/bin/spire", "-f", "/etc/spire/config.yaml"]

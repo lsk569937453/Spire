@@ -1,24 +1,11 @@
-[target.aarch64-apple-darwin]
-rustflags = [
-"-C", "link-arg=-undefined",
-"-C", "link-arg=dynamic_lookup",
-'-L /opt/homebrew/opt/libpq/lib -L /opt/homebrew/lib']
-
-
-[target.stable-x86_64-pc-windows-msvc]
-rustflags = [
-"-C", "link-arg=-undefined",
-"-C", "link-arg=dynamic_lookup",
-'-L C:\\Program Files\\MySQL\\MySQL-Connector-C-6.1\\lib\\vs14']
-# [target.stable-x86_64-pc-windows-msvc]
-# rustc-link-search = ["C:\\Program Files\\PostgreSQL\\15\\lib"]
-# rustc-link-lib = ["libpq"]
+# Keep the MSVC C runtime statically linked so released binaries do not require
+# the Visual C++ redistributable.
+#
+# (An older revision of this file also carried `-L` flags pointing at a local
+# MySQL installation and `-Wl,-Bstatic` arguments, which are not valid for the
+# MSVC linker and only worked because those paths happened to be ignored.)
 [target.x86_64-pc-windows-msvc]
-rustflags = [
-  "-C", "target-feature=+crt-static",
-  "-C", "link-arg=-Wl,-Bstatic",
-  "-C", "link-arg=-Wl,-Bdynamic",
-]
+rustflags = ["-C", "target-feature=+crt-static"]
 
 [target.i686-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]

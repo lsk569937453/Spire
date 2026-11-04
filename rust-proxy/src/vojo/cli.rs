@@ -7,7 +7,7 @@ use clap::ValueEnum;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use std::sync::Mutex;
+use std::sync::RwLock;
 #[derive(ValueEnum, Debug, Clone)]
 pub enum InputFormat {
     Openapi,
@@ -115,7 +115,7 @@ For more information: https://github.com/lsk569937453/spire"
         after_help = "\
 EXAMPLES:
     spire examples --list
-        List all 21 available configuration examples with descriptions
+        List all available configuration examples with descriptions
 
     spire examples app_config_simple
         Display the minimal configuration example
@@ -134,7 +134,11 @@ AVAILABLE CATEGORIES:
         http_weight_route, http_random_route, http_poll_route, http_header_based_route
 
     Middleware Features
-        forward_ip_examples, request_headers, http_cors, jwt_auth, middle_wares
+        forward_ip_examples, request_headers, http_cors, jwt_auth, middle_wares,
+        compression, ip_ban
+
+    Security
+        admin_security, jwt_auth, ip_ban
 
     Rate Limiting
         ratelimit_token_bucket, ratelimit_fixed_window
@@ -269,8 +273,12 @@ pub struct ReloadArgs {
     pub host: String,
 
     /// Control plane port
-    #[arg(short, long, default_value = "8081")]
+    #[arg(short, long, default_value = "8870")]
     pub port: u16,
+
+    /// Control plane admin token (required when `admin_token` is configured)
+    #[arg(short, long)]
+    pub token: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -280,22 +288,39 @@ pub struct QueryArgs {
     pub host: String,
 
     /// Control plane port
-    #[arg(short, long, default_value = "8081")]
+    #[arg(short, long, default_value = "8870")]
     pub port: u16,
 
     /// Output format (yaml or json)
     #[arg(short, long, default_value = "yaml")]
     pub format: String,
+
+    /// Control plane admin token (required when `admin_token` is configured)
+    #[arg(short, long)]
+    pub token: Option<String>,
 }
 
 #[derive(Clone)]
 pub struct SharedConfig {
-    pub shared_data: Arc<Mutex<AppConfig>>,
+    /// `RwLock`, not `Mutex`: request routing only needs to *read* the
+    /// configuration, so thousands of in-flight requests can proceed in
+    /// parallel. Only reloads and health-check state updates take the write
+    /// lock.
+    pub shared_data: Arc<RwLock<AppConfig>>,
+    /// File the configuration was loaded from; control plane edits are
+    /// persisted back to exactly this path.
+    pub config_path: Arc<PathBuf>,
 }
 impl SharedConfig {
+    #[allow(dead_code)] // convenience constructor used by tests
     pub fn from_app_config(app_config: AppConfig) -> Self {
+        Self::from_app_config_with_path(app_config, PathBuf::from("config.yaml"))
+    }
+
+    pub fn from_app_config_with_path(app_config: AppConfig, path: impl Into<PathBuf>) -> Self {
         Self {
-            shared_data: Arc::new(Mutex::new(app_config)),
+            shared_data: Arc::new(RwLock::new(app_config)),
+            config_path: Arc::new(path.into()),
         }
     }
 }

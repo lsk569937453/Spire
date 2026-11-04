@@ -91,14 +91,14 @@ impl PartialEq for MiddleWares {
 #[async_trait]
 pub trait Middleware: Send + Sync {
     fn handle_request(
-        &mut self,
+        &self,
         _peer_addr: SocketAddr,
         _headers: &mut HeaderMap,
     ) -> Result<(), AppError> {
         Ok(())
     }
     fn check_request(
-        &mut self,
+        &self,
         _peer_addr: &SocketAddr,
         _headers: Option<&HeaderMap<HeaderValue>>,
     ) -> Result<CheckResult, AppError> {
@@ -108,12 +108,12 @@ pub trait Middleware: Send + Sync {
         &self,
         _req_path: &str,
         _response: &mut Response<BoxBody<Bytes, AppError>>,
-        inbound_headers: HeaderMap,
+        _inbound_headers: HeaderMap,
     ) -> Result<(), AppError> {
         Ok(())
     }
     fn record_outcome(
-        &mut self,
+        &self,
         _response_result: &Result<Response<BoxBody<Bytes, AppError>>, AppError>,
     ) {
     }
@@ -148,7 +148,7 @@ impl CheckResult {
 #[async_trait]
 impl Middleware for MiddleWares {
     fn handle_request(
-        &mut self,
+        &self,
         peer_addr: SocketAddr,
         headers: &mut HeaderMap,
     ) -> Result<(), AppError> {
@@ -161,7 +161,7 @@ impl Middleware for MiddleWares {
     }
 
     fn check_request(
-        &mut self,
+        &self,
         peer_addr: &SocketAddr,
         headers: Option<&HeaderMap<HeaderValue>>,
     ) -> Result<CheckResult, AppError> {
@@ -199,7 +199,7 @@ impl Middleware for MiddleWares {
     }
 
     fn record_outcome(
-        &mut self,
+        &self,
         response_result: &Result<Response<BoxBody<Bytes, AppError>>, AppError>,
     ) {
         if let MiddleWares::CircuitBreaker(mw) = self {
@@ -218,13 +218,12 @@ mod tests {
     use http::header;
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
-    use x509_parser::asn1_rs::Header;
     #[test]
     fn test_rate_limit_middleware() {
         let mut headers = HeaderMap::new();
         headers.insert(header::USER_AGENT, "test-agent".parse().unwrap());
         let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        let mut middleware = MiddleWares::RateLimit(Arc::new(Mutex::new(Ratelimit::TokenBucket(
+        let middleware = MiddleWares::RateLimit(Arc::new(Mutex::new(Ratelimit::TokenBucket(
             TokenBucketRateLimit::default(),
         ))));
 
@@ -241,7 +240,7 @@ mod tests {
         headers.insert(header::AUTHORIZATION, "Bearer test-token".parse().unwrap());
         let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
 
-        let mut middleware = MiddleWares::Authentication(Authentication::Basic(BasicAuth {
+        let middleware = MiddleWares::Authentication(Authentication::Basic(BasicAuth {
             credentials: "test-token".to_string(),
         }));
 
@@ -259,7 +258,7 @@ mod tests {
     #[test]
     fn test_allow_deny_list_middleware() {
         let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        let mut middleware = MiddleWares::AllowDenyList(AllowDenyIp {
+        let middleware = MiddleWares::AllowDenyList(AllowDenyIp {
             rules: vec![AllowDenyItem {
                 policy: AllowType::Allow,
                 value: Some("127.0.0.1".to_string()),
@@ -277,7 +276,7 @@ mod tests {
     #[test]
     fn test_ip_ban_middleware() {
         let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        let mut middleware: MiddleWares =
+        let middleware: MiddleWares =
             serde_yaml::from_str("kind: ip_ban\nthreshold: 1\nwindow: 60s\nban_duration: 60s\n")
                 .unwrap();
 
@@ -293,7 +292,7 @@ mod tests {
     #[test]
     fn test_ip_ban_middleware_with_rules() {
         let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        let mut middleware: MiddleWares = serde_yaml::from_str(
+        let middleware: MiddleWares = serde_yaml::from_str(
             "kind: ip_ban\nrules:\n  - threshold: 2\n    window: 60s\n    ban_duration: 60s\n  - threshold: 5\n    window: 24h\n    ban_duration: 24h\n",
         )
         .unwrap();
@@ -320,16 +319,50 @@ mod tests {
             allow_credentials: Some(true),
             max_age: None,
             options_passthrough: None,
+            ..Default::default()
         };
         let middleware = MiddleWares::Cors(cors_config);
 
         let mut response = Response::builder().body(BoxBody::default()).unwrap();
+        let mut inbound_headers = HeaderMap::new();
+        inbound_headers.insert(header::ORIGIN, "https://app.example.com".parse().unwrap());
 
+        let result = middleware
+            .handle_response("", &mut response, inbound_headers)
+            .await;
+        assert!(result.is_ok());
+
+        // With credentials enabled the origin must be echoed, never `*`.
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "https://app.example.com"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+                .unwrap(),
+            "true"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cors_middleware_without_credentials_uses_wildcard() {
+        let cors_config = CorsConfig {
+            allowed_origins: CorsAllowedOrigins::All,
+            allowed_methods: vec![Method::Get],
+            ..Default::default()
+        };
+        let middleware = MiddleWares::Cors(cors_config);
+
+        let mut response = Response::builder().body(BoxBody::default()).unwrap();
         let result = middleware
             .handle_response("", &mut response, HeaderMap::new())
             .await;
         assert!(result.is_ok());
-
         assert_eq!(
             response
                 .headers()
@@ -339,10 +372,38 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_cors_middleware_does_not_allow_unknown_origin() {
+        let cors_config = CorsConfig {
+            allowed_origins: crate::middleware::cors_config::CorsAllowedOrigins::Origins(vec![
+                "https://example.com".to_string(),
+            ]),
+            allowed_methods: vec![Method::Get],
+            ..Default::default()
+        };
+        let middleware = MiddleWares::Cors(cors_config);
+
+        let mut response = Response::builder().body(BoxBody::default()).unwrap();
+        let mut inbound_headers = HeaderMap::new();
+        inbound_headers.insert(header::ORIGIN, "https://evil.example".parse().unwrap());
+
+        let result = middleware
+            .handle_response("", &mut response, inbound_headers)
+            .await;
+        assert!(result.is_ok());
+        assert!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none(),
+            "a disallowed origin must not get an Access-Control-Allow-Origin header"
+        );
+    }
+
     #[test]
     fn test_forward_header_middleware() {
         let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        let mut middleware = MiddleWares::ForwardHeader(ForwardHeader {});
+        let middleware = MiddleWares::ForwardHeader(ForwardHeader {});
 
         let mut headers = HeaderMap::new();
 

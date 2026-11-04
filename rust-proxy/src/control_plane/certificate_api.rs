@@ -2,9 +2,10 @@ use crate::vojo::acme_client::LetsEntrypt;
 use crate::vojo::app_config::AcmeConfig;
 use crate::vojo::cli::SharedConfig;
 use crate::vojo::{app_error::AppError, base_response::BaseResponse};
+use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::Json;
+#[cfg(test)]
 use mockall::automock;
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -12,19 +13,22 @@ struct LetsEncryptResponse {
     key_perm: String,
     certificate_perm: String,
 }
-#[automock]
+#[cfg_attr(test, automock)]
 pub trait LetsEncryptActions: Send + Sync {
     async fn obtain_certificate(&self, acme: &AcmeConfig) -> Result<(String, String), AppError>;
 }
 pub async fn lets_encrypt_certificate_logic<LEO: LetsEncryptActions>(
     lets_encrypt_object: LEO,
 ) -> Result<impl IntoResponse, AppError> {
-    let certificate_response = lets_encrypt_object
+    let (key_perm, certificate_perm) = lets_encrypt_object
         .obtain_certificate(&AcmeConfig::LetsEncrypt)
         .await?;
     let data = BaseResponse {
         response_code: 0,
-        response_object: certificate_response,
+        response_object: LetsEncryptResponse {
+            key_perm,
+            certificate_perm,
+        },
     };
 
     Ok(Json(data))
@@ -59,8 +63,14 @@ mod tests {
         let (parts, body_data) = res.into_parts();
         let body = to_bytes(body_data, usize::MAX).await.unwrap();
         assert_eq!(parts.status, axum::http::StatusCode::OK);
-        let response = serde_json::from_slice::<BaseResponse<LetsEncryptResponse>>(&body);
-        assert!(response.is_err());
+        let response: BaseResponse<LetsEncryptResponse> =
+            serde_json::from_slice(&body).expect("response must be valid JSON");
+        assert_eq!(response.response_code, 0);
+        assert_eq!(response.response_object.key_perm, "a");
+        assert_eq!(
+            response.response_object.certificate_perm,
+            "mock_certificate_content"
+        );
     }
     #[tokio::test]
     async fn test_lets_encrypt_certificat_error() {

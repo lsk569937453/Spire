@@ -62,7 +62,7 @@ pub async fn handle_convert_command(args: ConvertArgs) -> Result<AppConfig, AppE
                         MatcherRule::Path {
                             value: path_value,
                             match_type,
-                            regex: None,
+                            regex: Default::default(),
                         },
                         MatcherRule::Method { values: methods },
                     ],

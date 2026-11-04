@@ -13,6 +13,7 @@ servers:
           - matchers:
                 - kind: path
                   value: /api/v1
+                  match_type: prefix
+                - kind: method
+                  values: [POST]
             forward_to: http://192.168.0.0:9393
-            methods:
-                - POST

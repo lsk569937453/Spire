@@ -1,6 +1,6 @@
 use prometheus::{
-    labels, opts, register_counter_vec, register_gauge, register_histogram_vec, CounterVec, Gauge,
-    HistogramVec,
+    CounterVec, Gauge, HistogramVec, labels, opts, register_counter_vec, register_gauge,
+    register_histogram_vec,
 };
 use std::sync::OnceLock;
 
@@ -24,40 +24,66 @@ pub mod metrics {
     // Unified initialization
     // --------------------------
 
+    /// Registers the metric vectors.
+    ///
+    /// Labels are deliberately low cardinality: `route` is the matched route id,
+    /// never the raw request path. Using the path (with its query string) as a
+    /// label creates one time series per distinct URL, which grows the process
+    /// memory and the scrape payload without bound.
     pub fn init() -> Result<(), anyhow::Error> {
-        let register_count_vec = register_counter_vec!(
+        match register_counter_vec!(
             "http_requests_total",
             "Total number of HTTP requests.",
-            &["mapping_key", "path", "method", "status"]
-        )?;
-        HTTP_REQUESTS_TOTAL.get_or_init(|| register_count_vec);
+            &["mapping_key", "route", "method", "status"]
+        ) {
+            Ok(metric) => {
+                HTTP_REQUESTS_TOTAL.get_or_init(|| metric);
+            }
+            Err(e) => warn!("Failed to register http_requests_total: {e}"),
+        }
 
-        let register_duration_histogram = register_histogram_vec!(
+        match register_histogram_vec!(
             "http_request_duration_seconds",
             "The HTTP request latencies in seconds.",
-            &["mapping_key", "path", "method"]
-        )?;
-        HTTP_REQUEST_DURATION_SECONDS.get_or_init(|| register_duration_histogram);
+            &["mapping_key", "route", "method"]
+        ) {
+            Ok(metric) => {
+                HTTP_REQUEST_DURATION_SECONDS.get_or_init(|| metric);
+            }
+            Err(e) => warn!("Failed to register http_request_duration_seconds: {e}"),
+        }
 
-        let register_http_counter = register_counter_vec!(
+        match register_counter_vec!(
             opts!("spire_http_requests_total", "Number of HTTP requests made."),
-            &["port", "request_path", "status_code"]
-        )?;
-        HTTP_COUNTER.get_or_init(|| register_http_counter);
+            &["port", "route", "status_code"]
+        ) {
+            Ok(metric) => {
+                HTTP_COUNTER.get_or_init(|| metric);
+            }
+            Err(e) => warn!("Failed to register spire_http_requests_total: {e}"),
+        }
 
-        let register_body_gauge = register_gauge!(opts!(
+        match register_gauge!(opts!(
             "spire_http_response_size_bytes",
             "The HTTP response sizes in bytes.",
             labels! {"handler" => "all",}
-        ))?;
-        HTTP_BODY_GAUGE.get_or_init(|| register_body_gauge);
+        )) {
+            Ok(metric) => {
+                HTTP_BODY_GAUGE.get_or_init(|| metric);
+            }
+            Err(e) => warn!("Failed to register spire_http_response_size_bytes: {e}"),
+        }
 
-        let register_req_histogram = register_histogram_vec!(
+        match register_histogram_vec!(
             "spire_http_request_duration_seconds",
             "The HTTP request latencies in seconds.",
-            &["port", "request_path"]
-        )?;
-        HTTP_REQ_HISTOGRAM.get_or_init(|| register_req_histogram);
+            &["port", "route"]
+        ) {
+            Ok(metric) => {
+                HTTP_REQ_HISTOGRAM.get_or_init(|| metric);
+            }
+            Err(e) => warn!("Failed to register spire_http_request_duration_seconds: {e}"),
+        }
         Ok(())
     }
 }

@@ -1,3 +1,4 @@
+use crate::constants::common_constants::MAX_TRANSCODE_BODY_BYTES;
 use crate::control_plane::cert_loader::load_tls_config_multi;
 use crate::control_plane::cert_loader::watch_for_certificate_changes;
 use crate::middleware::middlewares::MiddleWares;
@@ -23,12 +24,10 @@ use hyper::{Request, Response};
 use hyper_staticfile::Static;
 use hyper_util::rt::TokioIo;
 use rustls::ServerConfig;
-use serde_json::json;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::time::SystemTime;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
@@ -154,7 +153,7 @@ async fn proxy_adapter<B>(
     remote_addr: SocketAddr,
 ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
 where
-    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + 'static,
+    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + Unpin + 'static,
     AppError: From<B::Error>,
 {
     let result =
@@ -162,15 +161,16 @@ where
     match result {
         Ok(res) => Ok(res),
         Err(err) => {
-            error!("The error is {err}.");
-            let json_value = json!({
-                "error": err.to_string(),
-            });
-            Ok(Response::builder().status(StatusCode::NOT_FOUND).body(
-                Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes()))
-                    .map_err(|e| match e {})
-                    .boxed(),
-            )?)
+            // Never leak internal error details (config paths, upstream
+            // addresses, ...) to the client: log them, answer with 502.
+            error!("Failed to handle request: {err}.");
+            let body = Full::new(Bytes::from_static(b"{\"error\":\"bad gateway\"}"))
+                .map_err(|e| match e {})
+                .boxed();
+            Ok(Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(body)?)
         }
     }
 }
@@ -183,7 +183,7 @@ async fn proxy_adapter_with_error<B>(
     remote_addr: SocketAddr,
 ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
 where
-    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + 'static,
+    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + Unpin + 'static,
     AppError: From<B::Error>,
 {
     let method = req.method().clone();
@@ -194,14 +194,8 @@ where
         .unwrap_or("/")
         .to_string();
 
-    let current_time = SystemTime::now();
-
-    let Some(s) = metrics::HTTP_REQUEST_DURATION_SECONDS.get() else {
-        return Err(AppError("HTTP_REQUEST_DURATION_SECONDS".to_string()));
-    };
-    let timer = s
-        .with_label_values(&[mapping_key.as_str(), path.as_str(), method.as_str()])
-        .start_timer();
+    let started = std::time::Instant::now();
+    let mut spire_context = SpireContext::new(port, None);
 
     let res = match proxy(
         port,
@@ -211,58 +205,59 @@ where
         mapping_key.clone(),
         remote_addr,
         CommonCheckRequest {},
+        &mut spire_context,
     )
     .await
     {
         Ok(resp) => resp,
         Err(err) => {
-            error!("The error is {err}.");
-            let json_value = json!({
-                "response_code": -1,
-                "response_object": err.to_string(),
-            });
-
-            let body = Full::new(Bytes::copy_from_slice(json_value.to_string().as_bytes()))
+            error!("Proxy error for {method} {path}: {err}");
+            let body = Full::new(Bytes::from_static(b"{\"error\":\"bad gateway\"}"))
                 .map_err(|e| match e {})
                 .boxed();
-
             Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(body)
-                .unwrap_or_else(|e| {
-                    error!("Failed to build response: {e}");
-                    Response::new(
-                        Full::new(Bytes::from_static(b"{\"response_code\":-1}"))
-                            .map_err(|e| match e {})
-                            .boxed(),
-                    )
-                })
+                .status(StatusCode::BAD_GATEWAY)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(body)?
         }
     };
-    timer.observe_duration();
+
+    // Metrics are strictly best effort: a missing/unregistered collector must
+    // never change the response the client receives. Labels are bounded: the
+    // matched route id, never the raw path (which would create one time series
+    // per URL and grow the process without limit).
+    let route_label = spire_context.route_label().to_string();
+    if let Some(histogram) = metrics::HTTP_REQUEST_DURATION_SECONDS.get() {
+        histogram
+            .with_label_values(&[mapping_key.as_str(), route_label.as_str(), method.as_str()])
+            .observe(started.elapsed().as_secs_f64());
+    }
     let status = res.status();
-    if let Some(s) = metrics::HTTP_REQUESTS_TOTAL.get() {
-        s.with_label_values(&[
-            mapping_key.as_str(),
-            &path,
-            method.as_str(),
-            status.as_str(),
-        ])
-        .inc();
+    if let Some(counter) = metrics::HTTP_REQUESTS_TOTAL.get() {
+        counter
+            .with_label_values(&[
+                mapping_key.as_str(),
+                route_label.as_str(),
+                method.as_str(),
+                status.as_str(),
+            ])
+            .inc();
     }
 
-    let elapsed_time_res = current_time.elapsed()?;
-    info!(
-        "{} - -  \"{} {} HTTP/1.1\" {}  \"-\" \"-\"  {:?}",
+    // Access log: debug level, because at info level it costs a formatted line
+    // per request and is one of the first things to show up in profiles.
+    debug!(
+        "{} - -  \"{} {} HTTP/1.1\" {}  {:?}",
         remote_addr,
         method,
         path,
         status.as_u16(),
-        elapsed_time_res
+        started.elapsed()
     );
     Ok(res)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn proxy<B>(
     port: i32,
     shared_config: SharedConfig,
@@ -271,18 +266,16 @@ async fn proxy<B>(
     mapping_key: String,
     remote_addr: SocketAddr,
     chain_trait: impl ChainTrait,
+    spire_context: &mut SpireContext,
 ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
 where
-    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + 'static,
+    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + Unpin + 'static,
     AppError: From<B::Error>,
 {
-    debug!("req: {req:?}");
-
     let inbound_headers = req.headers();
     let cloned_headers = inbound_headers.clone();
     let method = req.method();
     let uri = req.uri().clone();
-    let mut spire_context = SpireContext::new(port, None);
     let handling_result = chain_trait
         .get_destination(
             shared_config.clone(),
@@ -292,10 +285,13 @@ where
             inbound_headers,
             uri,
             remote_addr,
-            &mut spire_context,
+            spire_context,
         )
         .await?;
     debug!("The get_destination is {handling_result:?}");
+    // Middlewares must see the resolved client address (behind a trusted proxy
+    // the socket peer is the load balancer), not the raw peer.
+    let client_addr = spire_context.client_addr.unwrap_or(remote_addr);
     let handling_result = match handling_result {
         DestinationResult::Matched(hr) => hr,
         DestinationResult::NotAllowed(denial) => {
@@ -324,19 +320,25 @@ where
         && req
             .headers()
             .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD)
+        && let Some(cors_config) = spire_context.cors_configed()?
     {
-        if let Some(cors_config) = spire_context.cors_configed()? {
-            return chain_trait.handle_preflight(cors_config, "");
-        }
+        // Echo the origin the browser actually asked for.
+        let origin = req
+            .headers()
+            .get(header::ORIGIN)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        return chain_trait.handle_preflight(cors_config, &origin);
     }
-    let is_websocket_upgrade = inbound_headers.contains_key(CONNECTION)
-        && inbound_headers.contains_key(SEC_WEBSOCKET_KEY);
+    let is_websocket_upgrade =
+        inbound_headers.contains_key(CONNECTION) && inbound_headers.contains_key(SEC_WEBSOCKET_KEY);
     if is_websocket_upgrade {
         debug!("The request has been updated to websocket,the req is {req:?}!");
         apply_request_middlewares(
             &chain_trait,
             spire_context.middlewares.clone(),
-            remote_addr,
+            client_addr,
             req.headers_mut(),
         )
         .await?;
@@ -354,10 +356,8 @@ where
                     .try_into()
                     .map_err(|e: http::uri::InvalidUri| AppError(format!("{e}")))?,
             );
-            *req.uri_mut() =
-                Uri::from_parts(parts).map_err(|e: http::uri::InvalidUriParts| {
-                    AppError(format!("{e}"))
-                })?;
+            *req.uri_mut() = Uri::from_parts(parts)
+                .map_err(|e: http::uri::InvalidUriParts| AppError(format!("{e}")))?;
             route_file(router_destination, req).await
         }
         RouterDestination::Http(_s) => {
@@ -374,22 +374,25 @@ where
             apply_request_middlewares(
                 &chain_trait,
                 spire_context.middlewares.clone(),
-                remote_addr,
+                client_addr,
                 req.headers_mut(),
             )
             .await?;
             let timeout = check_request.timeout;
-            let req = req.map(|b| b.map_err(|e| AppError::from(e)).boxed());
-            let request_future = if request_path.contains("https") {
+            let req = req.map(|b| b.map_err(AppError::from).boxed());
+            // Decide on the *scheme*, not by looking for the substring "https"
+            // somewhere in the path (a query string like `?next=https://...`
+            // used to flip the transport).
+            let request_future = if request_path.starts_with("https://") {
                 client.http.request_https(req, timeout)
             } else {
                 client.http.request_http(req, timeout)
             };
             let response_result = match request_future.await {
-                Ok(response) => response.map_err(|e| e.into()),
-                _ => {
+                Ok(response) => response.map_err(|e| AppError(e.to_string())),
+                Err(_elapsed) => {
                     return Err(AppError(format!(
-                        "Request time out,the uri is {request_path}"
+                        "Upstream request timed out after {timeout} ms: {request_path}"
                     )));
                 }
             };
@@ -401,17 +404,37 @@ where
             })
         }
         RouterDestination::Grpc(s) => {
-            info!("The request is grpc!,{request_path}");
+            debug!("The request is grpc!,{request_path}");
             let grpc_client = client
                 .grpc
-                .ok_or(AppError("".to_string()))?
+                .ok_or(AppError(
+                    "No gRPC client configured for this listener".to_string(),
+                ))?
                 .get_client(&s.endpoint)
                 .await?;
 
-            let body_bytes = req.collect().await?.to_bytes();
+            // Buffered body, so it must be bounded: an unbounded collect() is a
+            // trivial memory exhaustion vector.
+            let (_parts, mut body) = req.into_parts();
+            let mut buffered = bytes::BytesMut::new();
+            while let Some(frame) = body.frame().await {
+                let frame = frame.map_err(AppError::from)?;
+                let Some(data) = frame.data_ref() else {
+                    continue;
+                };
+                if buffered.len() + data.len() > MAX_TRANSCODE_BODY_BYTES {
+                    return Err(AppError(format!(
+                        "Request body exceeds the {MAX_TRANSCODE_BODY_BYTES} byte limit"
+                    )));
+                }
+                buffered.extend_from_slice(data);
+            }
+            let body_bytes = buffered.freeze();
             let parts: Vec<&str> = request_path.split('/').filter(|s| !s.is_empty()).collect();
             if parts.len() < 2 {
-                return Err(AppError(request_path.to_string()));
+                return Err(AppError(format!(
+                    "Invalid gRPC target path, expected '/<service>/<method>': {request_path}"
+                )));
             }
             let service_name = parts[0].to_string();
             let method_name = parts[1].to_string();
@@ -432,17 +455,12 @@ where
             Ok(response)
         }
     };
-    if let Some(mut middlewares) = spire_context.middlewares {
-        if !middlewares.is_empty() {
-            chain_trait
-                .handle_before_response(
-                    &mut middlewares,
-                    request_path,
-                    &mut res,
-                    cloned_headers.clone(),
-                )
-                .await?;
-        }
+    if let Some(middlewares) = spire_context.middlewares.as_mut()
+        && !middlewares.is_empty()
+    {
+        chain_trait
+            .handle_before_response(middlewares, request_path, &mut res, cloned_headers.clone())
+            .await?;
     }
     res
 }
@@ -456,12 +474,12 @@ async fn apply_request_middlewares(
     peer_addr: SocketAddr,
     headers: &mut HeaderMap,
 ) -> Result<(), AppError> {
-    if let Some(mut middlewares) = middlewares {
-        if !middlewares.is_empty() {
-            chain_trait
-                .handle_before_request(&mut middlewares, peer_addr, headers)
-                .await?;
-        }
+    if let Some(mut middlewares) = middlewares
+        && !middlewares.is_empty()
+    {
+        chain_trait
+            .handle_before_request(&mut middlewares, peer_addr, headers)
+            .await?;
     }
     Ok(())
 }
@@ -478,7 +496,9 @@ async fn route_file<B>(
         .map(|item| {
             item.map(|body| {
                 body.boxed()
-                    .map_err(|_| -> AppError { unreachable!() })
+                    // A read error while streaming a file must surface as an
+                    // error response, never as a panic in the request task.
+                    .map_err(|e| AppError(format!("Failed to stream file: {e}")))
                     .boxed()
             })
         })
@@ -509,9 +529,7 @@ mod tests {
     #[test]
     fn test_http_proxy_creation() {
         let (_, rx) = mpsc::channel(1);
-        let shared_config = SharedConfig {
-            shared_data: Arc::new(Mutex::new(AppConfig::default())),
-        };
+        let shared_config = SharedConfig::from_app_config(AppConfig::default());
 
         let proxy = HttpProxy {
             port: 8080,
@@ -526,9 +544,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_proxy_adapter_error_handling() {
-        let shared_config = SharedConfig {
-            shared_data: Arc::new(Mutex::new(AppConfig::default())),
-        };
+        // `proxy_adapter` reads the global metrics registry, which the app
+        // bootstrap normally initializes. Without it every request would be
+        // answered with 404 instead of reaching the proxy logic.
+        let _ = crate::monitor::prometheus_exporter::metrics::init();
+
+        let shared_config = SharedConfig::from_app_config(AppConfig::default());
         let client = AppClients::new(shared_config.clone(), 3302).await.unwrap();
 
         let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
@@ -554,7 +575,8 @@ mod tests {
 
         assert!(result.is_ok());
         let response = result.unwrap();
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // Unroutable/failed upstream requests are gateway errors, not 404s.
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     }
     #[tokio::test]
     async fn test_options_preflight_request() {
@@ -568,33 +590,31 @@ mod tests {
             HeaderValue::from_static("POST"),
         );
 
-        let shared_config = SharedConfig {
-            shared_data: Arc::new(Mutex::new(AppConfig {
-                api_service_config: HashMap::from([(
-                    8080,
-                    ApiService {
-                        listen_port: 8080,
-                        route_configs: vec![RouteConfig {
-                            router: Router::Random(RandomRoute {
-                                routes: vec![BaseRoute {
-                                    endpoint: "http://127.0.0.1:9394".to_string(),
-                                    ..Default::default()
-                                }],
-                            }),
-                            matchers: vec![MatcherRule::Path {
-                                value: "/".to_string(),
-                                match_type: crate::vojo::matcher::PathMatchType::Exact,
-                                regex: None,
+        let shared_config = SharedConfig::from_app_config(AppConfig {
+            api_service_config: HashMap::from([(
+                8080,
+                ApiService {
+                    listen_port: 8080,
+                    route_configs: vec![RouteConfig {
+                        router: Router::Random(RandomRoute {
+                            routes: vec![BaseRoute {
+                                endpoint: "http://127.0.0.1:9394".to_string(),
+                                ..Default::default()
                             }],
-
-                            ..Default::default()
+                        }),
+                        matchers: vec![MatcherRule::Path {
+                            value: "/".to_string(),
+                            match_type: crate::vojo::matcher::PathMatchType::Exact,
+                            regex: Default::default(),
                         }],
+
                         ..Default::default()
-                    },
-                )]),
-                ..Default::default()
-            })),
-        };
+                    }],
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        });
         let client = AppClients::new(shared_config.clone(), 8080).await.unwrap();
 
         let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
@@ -614,6 +634,7 @@ mod tests {
             "test".to_string(),
             remote_addr,
             CommonCheckRequest {},
+            &mut SpireContext::new(8080, None),
         )
         .await;
         println!("result is {result:?}");
@@ -657,6 +678,7 @@ mod tests {
             "test".to_string(),
             remote_addr,
             mock_chain_trait,
+            &mut SpireContext::new(8080, None),
         )
         .await;
         println!("result is {result:?}");
@@ -720,6 +742,7 @@ mod tests {
             "test".to_string(),
             remote_addr,
             mock_chain_trait,
+            &mut SpireContext::new(8080, None),
         )
         .await;
         println!("result is {result:?}");
@@ -774,6 +797,7 @@ mod tests {
             "test".to_string(),
             remote_addr,
             mock_chain_trait,
+            &mut SpireContext::new(8080, None),
         )
         .await;
         println!("result is {result:?}");
@@ -835,7 +859,7 @@ mod tests {
             matchers: vec![MatcherRule::Path {
                 value: "/tungate".to_string(),
                 match_type: PathMatchType::Prefix,
-                regex: None,
+                regex: Default::default(),
             }],
             router: Router::Random(RandomRoute::new(vec![format!("http://{upstream}")])),
             middlewares: Some(vec![
@@ -893,6 +917,7 @@ mod tests {
             "test".to_string(),
             remote_addr,
             CommonCheckRequest {},
+            &mut SpireContext::new(8080, None),
         )
         .await
         .expect("websocket upgrade request should be proxied");
@@ -932,6 +957,7 @@ mod tests {
             "test".to_string(),
             remote_addr,
             CommonCheckRequest {},
+            &mut SpireContext::new(8080, None),
         )
         .await
         .expect("plain http request should be proxied");

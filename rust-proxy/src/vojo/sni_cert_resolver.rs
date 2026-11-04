@@ -1,4 +1,3 @@
-use rustls::crypto::ring::sign::any_supported_type;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign;
 use std::collections::HashMap;
@@ -28,7 +27,8 @@ impl SniCertResolver {
         is_default: bool,
     ) {
         let certified_key = Arc::new(certified_key);
-        self.certs.insert(domain.to_lowercase(), certified_key.clone());
+        self.certs
+            .insert(domain.to_lowercase(), certified_key.clone());
 
         if is_default {
             self.default_cert = Some(certified_key);
@@ -67,6 +67,7 @@ impl ResolvesServerCert for SniCertResolver {
 mod tests {
     use super::*;
     use rustls::crypto::ring;
+    use rustls::crypto::ring::sign::any_supported_type;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
     fn self_signed_certified_key(
@@ -82,10 +83,7 @@ mod tests {
         let certs = vec![cert.der().clone()];
         let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
         let signing_key = any_supported_type(&key).unwrap();
-        (
-            sign::CertifiedKey::new(certs.clone(), signing_key),
-            certs,
-        )
+        (sign::CertifiedKey::new(certs.clone(), signing_key), certs)
     }
 
     #[test]

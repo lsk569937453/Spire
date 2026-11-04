@@ -1,7 +1,7 @@
 use crate::middleware::middlewares::Middleware;
 use crate::vojo::app_error::AppError;
-use http::header::{HeaderName, HeaderValue};
 use http::HeaderMap;
+use http::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -17,7 +17,7 @@ pub struct RequestHeaders {
 
 impl Middleware for RequestHeaders {
     fn handle_request(
-        &mut self,
+        &self,
         _peer_addr: SocketAddr,
         headers: &mut HeaderMap,
     ) -> Result<(), AppError> {
@@ -48,7 +48,7 @@ mod tests {
         headers.insert("X-Existing-Header", HeaderValue::from_static("present"));
         headers.insert("X-Header-To-Remove", HeaderValue::from_static("remove-me"));
 
-        let mut middleware = RequestHeaders {
+        let middleware = RequestHeaders {
             add: {
                 let mut add_headers = HashMap::new();
                 add_headers.insert("X-New-Header".to_string(), "new-value".to_string());
@@ -72,7 +72,7 @@ mod tests {
     fn test_remove_nonexistent_header() {
         let mut headers = HeaderMap::new();
 
-        let mut middleware = RequestHeaders {
+        let middleware = RequestHeaders {
             add: HashMap::new(),
             remove: vec!["X-Nonexistent-Header".to_string()],
         };
@@ -90,7 +90,7 @@ mod tests {
     fn test_invalid_header_name() {
         let mut headers = HeaderMap::new();
 
-        let mut middleware = RequestHeaders {
+        let middleware = RequestHeaders {
             add: {
                 let mut add_headers = HashMap::new();
                 add_headers.insert("Invalid Header Name".to_string(), "value".to_string());
@@ -113,7 +113,7 @@ mod tests {
     fn test_invalid_header_value() {
         let mut headers = HeaderMap::new();
 
-        let mut middleware = RequestHeaders {
+        let middleware = RequestHeaders {
             add: {
                 let mut add_headers = HashMap::new();
                 add_headers.insert("X-Valid-Header".to_string(), "Invalid\r\nValue".to_string());

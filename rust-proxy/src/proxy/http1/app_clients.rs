@@ -13,7 +13,7 @@ impl AppClients {
         let http_client = HttpClients::new();
 
         let grpc_configs = {
-            let lock = shared_config.shared_data.lock()?;
+            let lock = shared_config.shared_data.read()?;
             if let Some(api_service) = lock.api_service_config.get(&port) {
                 extract_grpc_configs(api_service)?
             } else {
@@ -27,7 +27,9 @@ impl AppClients {
             match GrpcClients::new(grpc_configs).await {
                 Ok(clients) => Some(clients),
                 Err(e) => {
-                    error!("Failed to initialize gRPC clients for port {port}, proceeding without them. Error: {e}");
+                    error!(
+                        "Failed to initialize gRPC clients for port {port}, proceeding without them. Error: {e}"
+                    );
                     None
                 }
             }

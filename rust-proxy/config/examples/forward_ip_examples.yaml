@@ -21,9 +21,7 @@ servers:
           - kind: path
             value: /
             match_type: prefix
-        forward_to:
-          kind: single
-          target: http://192.168.1.100:8080
+        forward_to: http://192.168.1.100:8080
         middlewares:
           - kind: forward_headers
 
@@ -119,8 +117,7 @@ servers:
 #            value: /secure
 #            match_type: prefix
 #        forward_to:
-#          kind: single
-#          target: http://192.168.1.100:8080
+#          forward_to: http://192.168.1.100:8080
 #        middlewares:
 #          - kind: forward_headers
 #          - kind: rate_limit
@@ -149,8 +146,7 @@ servers:
 #            value: /api
 #            match_type: prefix
 #        forward_to:
-#          kind: single
-#          target: http://192.168.1.100:8080
+#          forward_to: http://192.168.1.100:8080
 #        middlewares:
 #          - kind: forward_headers
 
@@ -186,8 +182,7 @@ servers:
 #            value: /api/v1
 #            match_type: prefix
 #        forward_to:
-#          kind: single
-#          target: http://192.168.1.100:8001
+#          forward_to: http://192.168.1.100:8001
 #        middlewares:
 #          - kind: forward_headers
 #      - route_id: api-v2
@@ -196,8 +191,7 @@ servers:
 #            value: /api/v2
 #            match_type: prefix
 #        forward_to:
-#          kind: single
-#          target: http://192.168.1.100:8002
+#          forward_to: http://192.168.1.100:8002
 #        middlewares:
 #          - kind: forward_headers
 
@@ -212,8 +206,7 @@ servers:
 #            value: /protected
 #            match_type: prefix
 #        forward_to:
-#          kind: single
-#          target: http://192.168.1.100:8080
+#          forward_to: http://192.168.1.100:8080
 #        middlewares:
 #          - kind: forward_headers
 #          - kind: circuit_breaker

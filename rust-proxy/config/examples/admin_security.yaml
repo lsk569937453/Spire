@@ -1,0 +1,55 @@
+# =============================================================================
+# File: admin_security.yaml
+# Description: Control plane hardening and trusted proxy configuration
+# =============================================================================
+# The control plane (admin API) can read and rewrite the whole configuration.
+# It therefore binds to loopback by default and should always be protected by a
+# token when it is exposed:
+#
+#   admin_listen: 0.0.0.0     # opt in explicitly
+#   admin_token:  <secret>    # required for anything non-loopback
+#
+# `trusted_proxies` lists the load balancers in front of Spire. Only requests
+# coming from one of these CIDRs have their X-Forwarded-For / X-Real-IP honoured;
+# everything else is treated as a direct client, so IP based rate limiting,
+# IP banning and allow/deny lists cannot be bypassed by spoofing those headers.
+
+log_level: info
+admin_listen: 127.0.0.1
+admin_port: 8870
+admin_token: change-me
+trusted_proxies:
+  - 10.0.0.0/8
+  - 192.168.0.0/16
+
+servers:
+  - listen: 8080
+    protocol: http
+    routes:
+      - route_id: api
+        matchers:
+          - kind: path
+            value: /api
+            match_type: prefix
+        forward_to: http://127.0.0.1:9393/
+        middlewares:
+          # Per client IP (also per real client when behind a trusted proxy).
+          - kind: rate_limit
+            limiter: token_bucket
+            capacity: 100
+            rate_per_unit: 50
+            unit:
+              kind: Second
+            scope:
+              kind: IP
+          - kind: allow_deny_list
+            rules:
+              - policy: deny
+                value: 203.0.113.0/24
+          - kind: ip_ban
+            rules:
+              - threshold: 100
+                window: 10s
+                ban_duration: 10m
+            whitelist:
+              - 127.0.0.1

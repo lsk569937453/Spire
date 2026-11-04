@@ -7,6 +7,7 @@ use crate::proxy::tcp::tcp_proxy::TcpProxy;
 use crate::vojo::app_config::ServiceType;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -16,23 +17,50 @@ pub async fn init(shared_config: SharedConfig) -> Result<(), AppError> {
         let mut health_check = HealthCheck::from_shared_config(cloned_config);
         health_check.start_health_check_loop().await;
     });
-    let mut app_config = shared_config.shared_data.lock()?;
-    let mut certificate_manager = CertificateManager::new(Arc::new(app_config.clone()));
-    certificate_manager.start_renewal_task();
 
-    for (_, item) in app_config.api_service_config.iter_mut() {
-        let port = item.listen_port;
-        let server_type = item.server_type.clone();
+    {
+        let app_config = shared_config.shared_data.read()?;
+        let mut certificate_manager = CertificateManager::new(Arc::new(app_config.clone()));
+        drop(app_config);
+        certificate_manager.start_renewal_task();
+    }
+
+    // Take the write lock only for the bookkeeping below, and release it before
+    // awaiting anything: a std lock guard must not be held across an `.await`.
+    let services: Vec<(i32, ServiceType, mpsc::Sender<()>, mpsc::Receiver<()>)> = {
+        let mut app_config = shared_config.shared_data.write()?;
+        let mut services = Vec::with_capacity(app_config.api_service_config.len());
+        for item in app_config.api_service_config.values_mut() {
+            let (sender, receiver) = mpsc::channel::<()>(1000);
+            item.sender = sender.clone();
+            services.push((item.listen_port, item.server_type.clone(), sender, receiver));
+        }
+        services
+    };
+
+    // Pre-flight the ports so that a listener that cannot be bound fails the
+    // whole startup instead of being logged and silently never serving traffic.
+    for (port, _server_type, _sender, _receiver) in &services {
+        let addr = SocketAddr::from(([0, 0, 0, 0], *port as u16));
+        match tokio::net::TcpListener::bind(addr).await {
+            // Released immediately; the proxy binds it for real right after.
+            Ok(listener) => drop(listener),
+            Err(e) => {
+                return Err(app_error!(
+                    "Failed to bind listener on {addr} (configured under 'servers'): {e}"
+                ));
+            }
+        }
+    }
+
+    for (port, server_type, _sender, receiver) in services {
         let mapping_key = format!("{port}-{server_type}");
-        let (sender, receiver) = mpsc::channel::<()>(1000);
-        item.sender = sender;
         let cloned_config = shared_config.clone();
-
         tokio::task::spawn(async move {
             if let Err(err) =
                 start_proxy(cloned_config, port, receiver, server_type, mapping_key).await
             {
-                error!("init error:error is [{err}]");
+                error!("Proxy on port {port} stopped: {err}");
             }
         });
     }
@@ -62,7 +90,7 @@ pub async fn start_proxy(
             mapping_key: mapping_key.clone(),
         };
         let domains = {
-            let config = shared_config.shared_data.lock()?;
+            let config = shared_config.shared_data.write()?;
             config
                 .api_service_config
                 .get(&port)
@@ -98,7 +126,7 @@ pub async fn start_proxy(
             channel,
         };
         let domains = {
-            let config = shared_config.shared_data.lock()?;
+            let config = shared_config.shared_data.write()?;
             config
                 .api_service_config
                 .get(&port)
@@ -140,9 +168,26 @@ mod tests {
         let result = proxy_task.await.expect("Proxy task panicked");
         assert!(result.is_ok(), "Expected Ok, got {result:?}");
     }
+    /// Builds a config with one HTTPS/HTTP2TLS service on `port`.
+    fn https_shared_config(port: i32, server_type: ServiceType) -> SharedConfig {
+        SharedConfig::from_app_config(AppConfig {
+            api_service_config: HashMap::from([(
+                port,
+                ApiService {
+                    listen_port: port,
+                    server_type: server_type.clone(),
+                    domain_config: vec!["localhost".to_string()],
+                    route_configs: vec![],
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        })
+    }
+
     #[tokio::test]
     async fn test_start_proxy_https_success() {
-        let shared_config = SharedConfig::from_app_config(AppConfig::default());
+        let shared_config = https_shared_config(8081, ServiceType::Https);
         let (tx, rx) = mpsc::channel(1);
 
         let proxy_task = tokio::spawn(start_proxy(
@@ -152,14 +197,17 @@ mod tests {
             ServiceType::Https,
             "test-https".to_string(),
         ));
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        let cc = tx.send(()).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = tx.send(()).await;
         let result = proxy_task.await.expect("Proxy task panicked");
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "the HTTPS listener should start and stop cleanly, got {result:?}"
+        );
     }
 
     #[tokio::test]
-    async fn test_start_proxy_https_missing_cert() {
+    async fn test_start_proxy_https_missing_domains() {
         let shared_config = SharedConfig::from_app_config(AppConfig::default());
         let (_tx, rx) = mpsc::channel(1); // tx not used as it should fail before listening
 
@@ -174,7 +222,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
-            AppError("Private key (key_str) is missing for TLS service on port 8082".to_string())
+            AppError("Missing 'domains' configuration for HTTPS service on port 8082".to_string())
         );
     }
 
@@ -234,7 +282,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_start_proxy_grpc_tls_missing_key() {
+    async fn test_start_proxy_grpc_tls_missing_domains() {
         let shared_config = SharedConfig::from_app_config(AppConfig::default());
         let (_tx, rx) = mpsc::channel(1);
 
@@ -249,7 +297,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
-            AppError("Private key (key_str) is missing for TLS service on port 8086".to_string())
+            AppError("Missing 'domains' configuration for HTTPS service on port 8086".to_string())
         );
     }
 
@@ -271,7 +319,7 @@ mod tests {
         let init_result = init(shared_config.clone()).await;
         assert!(init_result.is_ok());
         {
-            let app_config_guard = shared_config.shared_data.lock().unwrap();
+            let app_config_guard = shared_config.shared_data.read().unwrap();
             for (_, port, service_conf) in &services_to_init {
                 let api_service = app_config_guard
                     .api_service_config

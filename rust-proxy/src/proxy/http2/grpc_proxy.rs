@@ -6,29 +6,135 @@ use crate::proxy::proxy_trait::ChainTrait;
 use crate::proxy::proxy_trait::CommonCheckRequest;
 use crate::proxy::proxy_trait::SpireContext;
 use crate::vojo::app_error::AppError;
-use h2::client;
-use h2::server;
-use h2::server::SendResponse;
 use h2::RecvStream;
 use h2::SendStream;
-use http::version::Version;
+use h2::client;
+use h2::client::SendRequest;
+use h2::server;
+use h2::server::SendResponse;
 use http::Response;
+use http::version::Version;
 use http::{Method, Request};
 use hyper::body::Bytes;
 
 use crate::vojo::cli::SharedConfig;
 use rustls::ServerConfig;
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use std::sync::RwLock;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsConnector;
-use tokio_rustls::{rustls, TlsAcceptor};
+use tokio_rustls::server::TlsStream;
+use tokio_rustls::{TlsAcceptor, rustls};
 use url::Url;
+
+/// Pool of upstream HTTP/2 connections, keyed by `scheme://host:port`.
+///
+/// The previous implementation performed a fresh TCP (or TLS) handshake, a fresh
+/// DNS lookup and rebuilt the whole `rustls::ClientConfig` for *every* gRPC
+/// request, which removes most of the benefit of multiplexed HTTP/2. Connections
+/// are now opened once and reused; `SendRequest::ready` detects closed
+/// connections (GOAWAY, reset) and triggers a reconnect.
+pub struct GrpcUpstreamPool {
+    senders: tokio::sync::Mutex<HashMap<String, SendRequest<Bytes>>>,
+    tls_config: Arc<rustls::ClientConfig>,
+}
+
+impl GrpcUpstreamPool {
+    pub fn new() -> Self {
+        let mut root_cert_store = rustls::RootCertStore::empty();
+        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let mut tls_config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
+        tls_config.alpn_protocols = vec![b"h2".to_vec()];
+
+        Self {
+            senders: tokio::sync::Mutex::new(HashMap::new()),
+            tls_config: Arc::new(tls_config),
+        }
+    }
+
+    async fn send_request_for(&self, url: &Url) -> Result<SendRequest<Bytes>, AppError> {
+        let host = url
+            .host_str()
+            .ok_or(AppError::from("Parse host error!"))?
+            .to_string();
+        // `port()` is None for `https://host/path`; fall back to the scheme's
+        // default port instead of failing.
+        let port = url
+            .port_or_known_default()
+            .ok_or(AppError::from("Parse port error!"))?;
+        let is_https = url.scheme() == "https";
+        let key = format!(
+            "{}://{host}:{port}",
+            if is_https { "https" } else { "http" }
+        );
+
+        {
+            let senders = self.senders.lock().await;
+            if let Some(sender) = senders.get(&key) {
+                match sender.clone().ready().await {
+                    Ok(ready) => return Ok(ready),
+                    // Connection is gone (GOAWAY/reset); drop it and reconnect.
+                    Err(_) => debug!("Upstream gRPC connection {key} is closed, reconnecting"),
+                }
+            }
+        }
+        self.senders.lock().await.remove(&key);
+
+        // Async DNS: `to_socket_addrs()` used to block a tokio worker thread.
+        let addr = tokio::net::lookup_host((host.as_str(), port))
+            .await
+            .map_err(|e| AppError(format!("Failed to resolve {host}:{port}: {e}")))?
+            .next()
+            .ok_or(AppError(format!("Failed to resolve {host}:{port}")))?;
+
+        let tcp_stream = TcpStream::connect(addr)
+            .await
+            .map_err(|e| AppError(format!("Failed to connect to {addr}: {e}")))?;
+
+        // The two handshakes yield different connection types, so the driver
+        // future has to be spawned inside the branches (only `SendRequest` is
+        // common to both).
+        let send_request = if is_https {
+            let tls_connector = TlsConnector::from(self.tls_config.clone());
+            let domain = rustls_pki_types::ServerName::try_from(host.as_str())?.to_owned();
+            let tls_stream = tls_connector
+                .connect(domain, tcp_stream)
+                .await
+                .map_err(|e| AppError(format!("TLS handshake with {host} failed: {e}")))?;
+            let (send_request, connection) = client::handshake(tls_stream).await?;
+            tokio::spawn(async move {
+                if let Err(err) = connection.await {
+                    error!("gRPC upstream connection closed with error: {err}");
+                }
+            });
+            send_request
+        } else {
+            let (send_request, connection) = client::handshake(tcp_stream).await?;
+            tokio::spawn(async move {
+                if let Err(err) = connection.await {
+                    error!("gRPC upstream connection closed with error: {err}");
+                }
+            });
+            send_request
+        };
+
+        self.senders.lock().await.insert(key, send_request.clone());
+        Ok(send_request)
+    }
+}
+
+impl Default for GrpcUpstreamPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct GrpcProxy {
     pub port: i32,
     pub channel: mpsc::Receiver<()>,
@@ -41,12 +147,14 @@ pub async fn start_task(
     tcp_stream: TcpStream,
     mapping_key: String,
     peer_addr: SocketAddr,
+    pool: Arc<GrpcUpstreamPool>,
 ) -> Result<(), AppError> {
     let mut connection = server::handshake(tcp_stream).await?;
     while let Some(request_result) = connection.accept().await {
         if let Ok((request, respond)) = request_result {
             let mapping_key_cloned = mapping_key.clone();
             let cloned_config = shared_config.clone();
+            let pool = pool.clone();
             tokio::spawn(async move {
                 let result = request_outbound_adapter(
                     port,
@@ -55,6 +163,7 @@ pub async fn start_task(
                     respond,
                     mapping_key_cloned,
                     peer_addr,
+                    pool,
                 )
                 .await;
                 if let Err(err) = result {
@@ -71,12 +180,14 @@ pub async fn start_tls_task(
     tcp_stream: TlsStream<TcpStream>,
     mapping_key: String,
     peer_addr: SocketAddr,
+    pool: Arc<GrpcUpstreamPool>,
 ) -> Result<(), AppError> {
     let mut connection = server::handshake(tcp_stream).await?;
     while let Some(request_result) = connection.accept().await {
         if let Ok((request, respond)) = request_result {
             let mapping_key_cloned = mapping_key.clone();
             let cloned_config = shared_config.clone();
+            let pool = pool.clone();
 
             tokio::spawn(async move {
                 let result = request_outbound_adapter(
@@ -86,6 +197,7 @@ pub async fn start_tls_task(
                     respond,
                     mapping_key_cloned,
                     peer_addr,
+                    pool,
                 )
                 .await;
                 if let Err(err) = result {
@@ -103,6 +215,7 @@ async fn request_outbound_adapter(
     inbound_respond: SendResponse<Bytes>,
     mapping_key: String,
     peer_addr: SocketAddr,
+    pool: Arc<GrpcUpstreamPool>,
 ) -> Result<(), AppError> {
     request_outbound(
         port,
@@ -112,6 +225,7 @@ async fn request_outbound_adapter(
         mapping_key,
         peer_addr,
         CommonCheckRequest {},
+        pool,
     )
     .await
 }
@@ -123,6 +237,7 @@ impl GrpcProxy {
         let listener = TcpListener::bind(addr).await?;
         let mapping_key = self.mapping_key.clone();
         let reveiver = &mut self.channel;
+        let pool = Arc::new(GrpcUpstreamPool::new());
 
         loop {
             let accept_future = listener.accept();
@@ -130,8 +245,9 @@ impl GrpcProxy {
                accept_result=accept_future=>{
                 let cloned_port=self.port;
                 let cloned_config=self.shared_config.clone();
+                let pool = pool.clone();
                 if let Ok((socket, peer_addr))=accept_result{
-                    tokio::spawn(start_task(cloned_port,cloned_config,socket, mapping_key.clone(), peer_addr));
+                    tokio::spawn(start_task(cloned_port,cloned_config,socket, mapping_key.clone(), peer_addr, pool));
                 }
                },
                _=reveiver.recv()=>{
@@ -165,6 +281,7 @@ impl GrpcProxy {
         let listener = TcpListener::bind(addr).await?;
         let mapping_key = self.mapping_key.clone();
         let reveiver = &mut self.channel;
+        let pool = Arc::new(GrpcUpstreamPool::new());
 
         loop {
             let accept_future = listener.accept();
@@ -176,11 +293,11 @@ impl GrpcProxy {
                 };
                 let cloned_port=self.port;
                 let cloned_config=self.shared_config.clone();
-                if let Ok((tcp_stream, peer_addr))=accept_result{
-                    if let Ok(tls_streams) = tls_acceptor.accept(tcp_stream).await {
-                        tokio::spawn(start_tls_task(cloned_port,cloned_config,tls_streams, mapping_key.clone(), peer_addr));
+                let pool = pool.clone();
+                if let Ok((tcp_stream, peer_addr))=accept_result
+                    && let Ok(tls_streams) = tls_acceptor.accept(tcp_stream).await {
+                        tokio::spawn(start_tls_task(cloned_port,cloned_config,tls_streams, mapping_key.clone(), peer_addr, pool));
                     }
-                }
                },
                _=reveiver.recv()=>{
                 info!("close the socket!");
@@ -207,6 +324,7 @@ async fn copy_io(
     }
     Ok(())
 }
+#[allow(clippy::too_many_arguments)]
 async fn request_outbound(
     port: i32,
     shared_config: SharedConfig,
@@ -215,6 +333,7 @@ async fn request_outbound(
     mapping_key: String,
     peer_addr: SocketAddr,
     check_trait: impl ChainTrait,
+    pool: Arc<GrpcUpstreamPool>,
 ) -> Result<(), AppError> {
     debug!("{inbount_request:?}");
     let (inbound_parts, inbound_body) = inbount_request.into_parts();
@@ -243,57 +362,12 @@ async fn request_outbound(
         .ok_or("check_result is none")?
         .request_path;
     let url = Url::parse(request_path)?;
-    let cloned_url = url.clone();
-    let host = cloned_url
-        .host()
-        .ok_or(AppError::from("Parse host error!"))?;
-    let port = cloned_url
-        .port()
-        .ok_or(AppError::from("Parse host error!"))?;
-    debug!("The host is {host}");
+    debug!("The target is {url}");
 
-    let addr = format!("{host}:{port}")
-        .to_socket_addrs()?
-        .next()
-        .ok_or(AppError::from("Parse the domain error!"))?;
-    debug!("The addr is {addr}");
-    let host_str = host.to_string();
+    // One pooled connection per upstream authority instead of a fresh TCP/TLS
+    // handshake, DNS lookup and rustls config per request.
+    let mut send_request = pool.send_request_for(&url).await?;
 
-    let send_request_poll = if request_path.clone().contains("https") {
-        let mut root_cert_store = rustls::RootCertStore::empty();
-        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-        let mut config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth();
-        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-        let tls_connector = TlsConnector::from(Arc::new(config));
-        let stream = TcpStream::connect(&addr).await?;
-        let domain = rustls_pki_types::ServerName::try_from(host_str.as_str())?.to_owned();
-        debug!("The domain name is {host}");
-        let stream = tls_connector.connect(domain, stream).await?;
-        let (send_request, connection) = client::handshake(stream).await?;
-        tokio::spawn(async move {
-            let connection_result = connection.await;
-            if let Err(err) = connection_result {
-                error!("Cause error in grpc https connection,the error is {err}.");
-            } else {
-                debug!("The connection has closed!");
-            }
-        });
-        send_request
-    } else {
-        let tcpstream = TcpStream::connect(addr).await?;
-        let (send_request, connection) = client::handshake(tcpstream).await?;
-        tokio::spawn(async move {
-            connection.await;
-            debug!("The connection has closed!");
-        });
-        send_request
-    };
-
-    debug!("request path is {url}");
-    let mut send_request = send_request_poll.ready().await?;
     let request = Request::builder()
         .method(Method::POST)
         .version(Version::HTTP_2)

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct BaseHealthCheckParam {
     pub timeout: i32,
     pub interval: i32,

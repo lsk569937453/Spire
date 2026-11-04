@@ -19,9 +19,11 @@ pub async fn handle_query_command(args: QueryArgs) -> Result<(), String> {
         .build_http();
 
     // Build GET request
-    let request = Request::builder()
-        .method(hyper::Method::GET)
-        .uri(&url)
+    let mut builder = Request::builder().method(hyper::Method::GET).uri(&url);
+    if let Some(token) = args.token.as_deref() {
+        builder = builder.header("Authorization", format!("Bearer {token}"));
+    }
+    let request = builder
         .body(Full::new(Bytes::new()))
         .map_err(|e| format!("Failed to build request: {}", e))?;
 
@@ -63,6 +65,7 @@ mod tests {
             port: 8081,
             host: "127.0.0.1".to_string(),
             format: "yaml".to_string(),
+            token: None,
         };
         let expected = "http://127.0.0.1:8081/appConfig";
         let actual = format!("http://{}:{}{}", args.host, args.port, APP_CONFIG_ENDPOINT);

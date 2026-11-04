@@ -1,41 +1,117 @@
-use crate::constants::common_constants::DEFAULT_TEMPORARY_DIR;
+use crate::constants::common_constants::MAX_ADMIN_BODY_BYTES;
 use crate::control_plane::certificate_api::lets_encrypt_certificate;
 use crate::vojo::app_config::ApiService;
 use crate::vojo::app_config::AppConfig;
 use crate::vojo::app_config::RouteConfig;
-use axum::middleware::Next;
-use std::time::Instant;
-
-use crate::vojo::app_error::AppError;
-use crate::vojo::base_response::BaseResponse;
-use crate::vojo::cli::SharedConfig;
+use axum::Json;
+use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::Request;
 use axum::extract::State;
+use axum::http::StatusCode;
+use axum::middleware::Next;
+use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::delete;
 use axum::routing::put;
 use axum::routing::{get, post};
-use axum::Json;
-use axum::Router;
 use http::header;
 use prometheus::{Encoder, TextEncoder};
-use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
+use std::sync::OnceLock;
+use std::time::Instant;
+use subtle::ConstantTimeEq;
 use tokio::io::AsyncWriteExt;
-use tower_http::cors::CorsLayer;
+use tokio::sync::Mutex;
+
+use crate::vojo::app_error::AppError;
+use crate::vojo::base_response::BaseResponse;
+use crate::vojo::cli::SharedConfig;
+
+/// Serialises concurrent writes to the configuration file.
+fn save_lock() -> &'static Mutex<()> {
+    static SAVE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    SAVE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.ct_eq(right).into()
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "missing or invalid admin token" })),
+    )
+        .into_response()
+}
+
+/// Requires `Authorization: Bearer <admin_token>` (or `X-Admin-Token`) whenever
+/// `admin_token` is configured.
+///
+/// The control plane can read and rewrite the whole configuration, so it must
+/// never be reachable without credentials — binding to loopback is the default,
+/// this token is the second line of defence.
+#[allow(clippy::result_large_err)]
+async fn require_admin_token(
+    State(shared_config): State<SharedConfig>,
+    req: Request,
+    next: Next,
+) -> Result<Response, Response> {
+    let expected = {
+        let config = shared_config
+            .shared_data
+            .read()
+            .map_err(|_| unauthorized())?;
+        config.admin_token.clone()
+    };
+
+    let Some(expected) = expected else {
+        // No token configured: only acceptable because the default bind address
+        // is loopback. Warn loudly if that is not the case.
+        return Ok(next.run(req).await);
+    };
+
+    let provided = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::to_string)
+        .or_else(|| {
+            req.headers()
+                .get("x-admin-token")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        });
+
+    match provided {
+        Some(provided) if constant_time_eq(provided.as_bytes(), expected.as_bytes()) => {
+            Ok(next.run(req).await)
+        }
+        _ => Err(unauthorized()),
+    }
+}
+
+async fn health() -> impl IntoResponse {
+    (StatusCode::OK, "ok")
+}
 
 async fn get_app_config(
     State(shared_config): State<SharedConfig>,
-) -> Result<impl axum::response::IntoResponse, AppError> {
-    let app_config = shared_config.shared_data.lock()?.clone();
+) -> Result<impl IntoResponse, AppError> {
+    let app_config = shared_config.shared_data.read()?.clone();
     Ok(Json(BaseResponse {
         response_code: 0,
         response_object: app_config,
     }))
 }
 
-async fn get_prometheus_metrics() -> Result<impl axum::response::IntoResponse, AppError> {
+async fn get_prometheus_metrics() -> Result<impl IntoResponse, AppError> {
     let metric_families = prometheus::gather();
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
@@ -44,220 +120,186 @@ async fn get_prometheus_metrics() -> Result<impl axum::response::IntoResponse, A
         .unwrap_or_default();
     Ok((
         axum::http::StatusCode::OK,
-        String::from_utf8(buffer).unwrap_or(String::from("value")),
+        String::from_utf8(buffer).unwrap_or_default(),
     ))
 }
+
+async fn read_body(req: Request) -> Result<bytes::Bytes, AppError> {
+    let (_, body) = req.into_parts();
+    // Bounded: `usize::MAX` here was a one-request memory exhaustion vector.
+    Ok(axum::body::to_bytes(body, MAX_ADMIN_BODY_BYTES).await?)
+}
+
 async fn post_app_config(
     State(shared_config): State<SharedConfig>,
     req: Request,
-) -> Result<impl axum::response::IntoResponse, AppError> {
-    post_app_config_with_error(shared_config, req).await
-}
-async fn post_app_config_with_error(
-    shared_config: SharedConfig,
-    req: Request,
-) -> Result<impl axum::response::IntoResponse, AppError> {
-    let (_, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX).await?;
+) -> Result<impl IntoResponse, AppError> {
+    let bytes = read_body(req).await?;
     let api_service: ApiService = serde_yaml::from_slice(&bytes)?;
-    let current_type = api_service.server_type.clone();
     let port = api_service.listen_port;
-    // if current_type == ServiceType::Https || current_type == ServiceType::Http2Tls {
-    //     validate_tls_config(api_service.cert_str.clone(), api_service.key_str.clone())?;
-    // }
-    let mut rw_global_lock = shared_config.shared_data.lock()?;
-    match rw_global_lock
-        .api_service_config
-        .iter_mut()
-        .find(|(_, item)| item.listen_port == api_service.listen_port)
-    {
-        Some((_, data)) => data.route_configs.push(
-            api_service
-                .route_configs
-                .first()
-                .ok_or(AppError::from("The route is empty!"))?
-                .clone(),
-        ),
-        None => {
-            rw_global_lock.api_service_config.insert(port, api_service);
-        }
+
+    let app_config = {
+        let mut config = shared_config.shared_data.write()?;
+        match config
+            .api_service_config
+            .iter_mut()
+            .find(|(_, item)| item.listen_port == port)
+        {
+            Some((_, data)) => data.route_configs.push(
+                api_service
+                    .route_configs
+                    .first()
+                    .ok_or(AppError::from("The route is empty!"))?
+                    .clone(),
+            ),
+            None => {
+                config.api_service_config.insert(port, api_service);
+            }
+        };
+        config.clone()
     };
-    let app_config = rw_global_lock.clone();
-    tokio::spawn(async {
-        if let Err(err) = save_config_to_file(app_config).await {
-            error!("Save file error,the error is {err}!");
-        }
-    });
-    let data = BaseResponse {
+
+    persist(&shared_config, &app_config).await?;
+
+    Ok(Json(BaseResponse {
         response_code: 0,
         response_object: 0,
-    };
-    let json_str = serde_yaml::to_string(&data)?;
-
-    let response = Response::builder()
-        .status(axum::http::StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(json_str)?;
-
-    Ok(response)
+    }))
 }
 
 async fn delete_route(
     State(shared_config): State<SharedConfig>,
     axum::extract::Path(route_id): axum::extract::Path<String>,
-) -> Result<impl axum::response::IntoResponse, AppError> {
-    delete_route_with_error(shared_config, route_id).await
-}
-async fn delete_route_with_error(
-    shared_config: SharedConfig,
-    route_id: String,
-) -> Result<String, AppError> {
-    let mut rw_global_lock = shared_config.shared_data.lock()?;
-    let mut api_services = HashMap::new();
-    for (port, mut api_service) in rw_global_lock.clone().api_service_config {
-        api_service
-            .route_configs
-            .retain(|route| route.route_id != route_id);
-        if !api_service.route_configs.is_empty() {
-            api_services.insert(port, api_service);
+) -> Result<impl IntoResponse, AppError> {
+    let app_config = {
+        let mut config = shared_config.shared_data.write()?;
+        let mut removed = false;
+        for api_service in config.api_service_config.values_mut() {
+            let before = api_service.route_configs.len();
+            api_service
+                .route_configs
+                .retain(|route| route.route_id != route_id);
+            removed |= before != api_service.route_configs.len();
         }
-    }
-    rw_global_lock.api_service_config = api_services;
-
-    let app_config = rw_global_lock.clone();
-    tokio::spawn(async {
-        if let Err(err) = save_config_to_file(app_config).await {
-            error!("Save file error,the error is {err}!");
+        if !removed {
+            return Err(AppError(format!("Can not find the route '{route_id}'")));
         }
-    });
+        // A listener whose routes all disappeared is kept (with no routes) so
+        // that the set of listen ports stays stable across a reload.
+        config.clone()
+    };
 
-    let data = BaseResponse {
+    persist(&shared_config, &app_config).await?;
+
+    Ok(Json(BaseResponse {
         response_code: 0,
         response_object: 0,
-    };
-    let json_str = serde_yaml::to_string(&data)?;
-    Ok(json_str)
+    }))
 }
-async fn put_routex(
+
+async fn put_route(
     State(shared_config): State<SharedConfig>,
     req: Request,
-) -> Result<impl axum::response::IntoResponse, AppError> {
-    put_route_with_error(shared_config, req).await
-}
-async fn put_route_with_error(
-    shared_config: SharedConfig,
-    req: Request,
-) -> Result<String, AppError> {
-    let (_, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX).await?;
+) -> Result<impl IntoResponse, AppError> {
+    let bytes = read_body(req).await?;
     let route: RouteConfig = serde_yaml::from_slice(&bytes)?;
-    let mut rw_global_lock = shared_config.shared_data.lock()?;
 
-    let old_route = rw_global_lock
-        .api_service_config
-        .iter_mut()
-        .flat_map(|(_, item)| item.route_configs.iter_mut())
-        .find(|r| r.route_id == route.route_id)
-        .ok_or(AppError::from("Can not find the route by route id!"))?;
+    let app_config = {
+        let mut config = shared_config.shared_data.write()?;
+        let old_route = config
+            .api_service_config
+            .values_mut()
+            .flat_map(|item| item.route_configs.iter_mut())
+            .find(|r| r.route_id == route.route_id)
+            .ok_or(AppError::from("Can not find the route by route id!"))?;
+        *old_route = route;
+        config.clone()
+    };
 
-    *old_route = route;
+    persist(&shared_config, &app_config).await?;
 
-    let app_config = rw_global_lock.clone();
-    tokio::spawn(async {
-        if let Err(err) = save_config_to_file(app_config).await {
-            error!("Save file error,the error is {err}!");
-        }
-    });
-    let data = BaseResponse {
+    Ok(Json(BaseResponse {
         response_code: 0,
         response_object: 0,
-    };
-    Ok(serde_yaml::to_string(&data)?)
+    }))
 }
+
 async fn reload_config(
     State(shared_config): State<SharedConfig>,
     req: Request,
-) -> Result<impl axum::response::IntoResponse, AppError> {
-    reload_config_with_error(shared_config, req).await
-}
-
-async fn reload_config_with_error(
-    shared_config: SharedConfig,
-    req: Request,
-) -> Result<impl axum::response::IntoResponse, AppError> {
-    let (_, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX).await?;
+) -> Result<impl IntoResponse, AppError> {
+    let bytes = read_body(req).await?;
     let new_config: AppConfig = serde_yaml::from_slice(&bytes)?;
 
-    // Get current config for port validation
-    let current_config = shared_config.shared_data.lock()?.clone();
+    let app_config = {
+        let mut config = shared_config.shared_data.write()?;
 
-    // Validate: port count must match
-    let current_ports: std::collections::BTreeSet<i32> = current_config
-        .api_service_config
-        .keys()
-        .copied()
-        .collect();
-    let new_ports: std::collections::BTreeSet<i32> = new_config
-        .api_service_config
-        .keys()
-        .copied()
-        .collect();
-
-    if current_ports != new_ports {
-        return Err(AppError(format!(
-            "Port mismatch: current ports {:?} do not match new ports {:?}. \
-            The reload operation requires the exact same set of listen ports.",
-            current_ports, new_ports
-        )));
-    }
-
-    // Update the shared config
-    let mut rw_global_lock = shared_config.shared_data.lock()?;
-    *rw_global_lock = new_config.clone();
-
-    // Save to file asynchronously
-    let app_config = rw_global_lock.clone();
-    tokio::spawn(async {
-        if let Err(err) = save_config_to_file(app_config).await {
-            error!("Save file error,the error is {err}!");
+        // The reload keeps the existing listeners, so the set of ports must not
+        // change (otherwise the new services would silently never be served).
+        let current_ports: std::collections::BTreeSet<i32> =
+            config.api_service_config.keys().copied().collect();
+        let new_ports: std::collections::BTreeSet<i32> =
+            new_config.api_service_config.keys().copied().collect();
+        if current_ports != new_ports {
+            return Err(AppError(format!(
+                "Port mismatch: current ports {:?} do not match new ports {:?}. \
+                The reload operation requires the exact same set of listen ports.",
+                current_ports, new_ports
+            )));
         }
-    });
 
-    let data = BaseResponse {
+        // Keep the live shutdown channels: they belong to the running listeners,
+        // not to the file the operator just uploaded.
+        let mut new_config = new_config;
+        for (port, service) in new_config.api_service_config.iter_mut() {
+            if let Some(running) = config.api_service_config.get(port) {
+                service.sender = running.sender.clone();
+            }
+        }
+        *config = new_config;
+        config.clone()
+    };
+
+    persist(&shared_config, &app_config).await?;
+
+    Ok(Json(BaseResponse {
         response_code: 0,
         response_object: "Configuration reloaded successfully",
-    };
-    let json_str = serde_yaml::to_string(&data)?;
-
-    let response = Response::builder()
-        .status(axum::http::StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(json_str)?;
-
-    Ok(response)
+    }))
 }
 
-async fn save_config_to_file(app_config: AppConfig) -> Result<(), AppError> {
-    let mut data = app_config;
-    tokio::fs::create_dir_all(DEFAULT_TEMPORARY_DIR).await?;
-    let file_path = Path::new(DEFAULT_TEMPORARY_DIR).join("new_spire_config.yml");
+/// Writes the configuration back to the file it was loaded from.
+///
+/// * the file is written to a temporary sibling and then renamed, so a crash can
+///   never leave a truncated configuration behind;
+/// * route ids are preserved (they used to be blanked, which made `PUT /route`
+///   and `DELETE /route/{id}` unusable after a restart).
+async fn persist(shared_config: &SharedConfig, app_config: &AppConfig) -> Result<(), AppError> {
+    let _guard = save_lock().lock().await;
+    save_config_to_file(app_config, shared_config.config_path.as_path()).await
+}
 
-    let mut f = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&file_path)
-        .await?;
-    data.api_service_config
-        .iter_mut()
-        .for_each(|(_, api_service)| {
-            api_service.route_configs.iter_mut().for_each(|route| {
-                route.route_id = "".to_string();
-            });
-        });
-    let api_service_str = serde_yaml::to_string(&data)?;
-    f.write_all(api_service_str.as_bytes()).await?;
+async fn save_config_to_file(app_config: &AppConfig, path: &Path) -> Result<(), AppError> {
+    let serialized = serde_yaml::to_string(app_config)?;
+
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    let tmp_path = path.with_extension("yaml.tmp");
+    {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp_path)
+            .await?;
+        file.write_all(serialized.as_bytes()).await?;
+        file.sync_all().await?;
+    }
+    tokio::fs::rename(&tmp_path, path).await?;
     Ok(())
 }
 
@@ -280,33 +322,77 @@ async fn print_request_response(req: Request<axum::body::Body>, next: Next) -> R
 
     response
 }
+
 pub fn get_router(shared_config: SharedConfig) -> Router {
-    axum::Router::new()
+    // Every route here can read or rewrite the configuration, so the token check
+    // applies to all of them.
+    let protected = axum::Router::new()
         .route("/appConfig", get(get_app_config).post(post_app_config))
+        // Documented alias for the read endpoint.
+        .route("/config", get(get_app_config))
         .route("/metrics", get(get_prometheus_metrics))
         .route("/route/{id}", delete(delete_route))
-        .route("/route", put(put_routex))
+        .route("/route", put(put_route))
         .route("/letsEncryptCertificate", post(lets_encrypt_certificate))
         .route("/reload", post(reload_config))
+        .layer(axum::middleware::from_fn_with_state(
+            shared_config.clone(),
+            require_admin_token,
+        ));
+
+    axum::Router::new()
+        // Liveness probe: stays unauthenticated (it exposes nothing) so that
+        // container/load-balancer health checks work without a token.
+        .route("/health", get(health))
+        .merge(protected)
         .layer(axum::middleware::from_fn(print_request_response))
-        .layer(CorsLayer::permissive())
+        .layer(DefaultBodyLimit::max(MAX_ADMIN_BODY_BYTES))
         .with_state(shared_config)
 }
-pub async fn start_control_plane(port: i32, shared_config: SharedConfig) -> Result<(), AppError> {
-    let app = get_router(shared_config);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port as u16));
+pub async fn start_control_plane(
+    port: i32,
+    shared_config: SharedConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(), AppError> {
+    let listen = shared_config.shared_data.read()?.admin_listen_addr();
+    let ip: IpAddr = listen
+        .parse()
+        .map_err(|e| AppError(format!("Invalid admin_listen address '{listen}': {e}")))?;
+    let addr = SocketAddr::new(ip, port as u16);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    let app = get_router(shared_config.clone());
+
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| AppError(format!("Failed to bind control plane on {addr}: {e}")))?;
+    info!("Control plane listening on http://{addr}");
+
+    if !ip.is_loopback() {
+        let token_configured = shared_config
+            .shared_data
+            .read()
+            .map(|config| config.admin_token.is_some())
+            .unwrap_or(false);
+        if !token_configured {
+            warn!(
+                "The control plane is exposed on {addr} without an 'admin_token'. \
+                 Anyone who can reach this port can read and rewrite the whole configuration."
+            );
+        }
+    }
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await?;
     Ok(())
 }
+
 #[cfg(test)]
 mod tests {
+    use crate::control_plane::rest_api::Router;
     use crate::control_plane::rest_api::get_router;
     use crate::control_plane::rest_api::save_config_to_file;
-    use crate::control_plane::rest_api::Router;
-    use crate::control_plane::rest_api::DEFAULT_TEMPORARY_DIR;
     use crate::vojo::app_config::ApiService;
     use crate::vojo::app_config::RouteConfig;
 
@@ -316,12 +402,15 @@ mod tests {
     use crate::vojo::cli::SharedConfig;
     use axum::body::Body;
     use axum::extract::Request;
-    use http::header;
     use http::StatusCode;
+    use http::header;
     use std::collections::HashMap;
+    use tempfile::TempDir;
     use tower::ServiceExt;
-    fn setup() -> (Router, SharedConfig) {
-        let _ = std::fs::remove_dir_all(DEFAULT_TEMPORARY_DIR);
+
+    fn setup() -> (Router, SharedConfig, TempDir) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config_path = dir.path().join("config.yaml");
 
         let initial_route = RouteConfig {
             route_id: "route1".to_string(),
@@ -342,17 +431,23 @@ mod tests {
             ..Default::default()
         };
 
-        let shared_config = SharedConfig::from_app_config(app_config);
+        let shared_config = SharedConfig::from_app_config_with_path(app_config, config_path);
 
-        (get_router(shared_config.clone()), shared_config)
+        (get_router(shared_config.clone()), shared_config, dir)
     }
 
-    fn cleanup() {
-        let _ = std::fs::remove_dir_all(DEFAULT_TEMPORARY_DIR);
+    fn setup_with_token(token: &str) -> (Router, SharedConfig, TempDir) {
+        let (_router, shared_config, dir) = setup();
+        {
+            let mut config = shared_config.shared_data.write().unwrap();
+            config.admin_token = Some(token.to_string());
+        }
+        (get_router(shared_config.clone()), shared_config, dir)
     }
+
     #[tokio::test]
     async fn test_get_app_config_success() {
-        let (router, shared_config) = setup();
+        let (router, shared_config, _dir) = setup();
 
         let request = Request::builder()
             .uri("/appConfig")
@@ -366,18 +461,46 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        println!("{}", String::from_utf8_lossy(&body));
-        let body_response: BaseResponse<AppConfig> = serde_yaml::from_slice(&body).unwrap();
+        let body_response: BaseResponse<AppConfig> = serde_json::from_slice(&body).unwrap();
 
-        let expected_config = shared_config.shared_data.lock().unwrap().clone();
+        let expected_config = shared_config.shared_data.read().unwrap().clone();
         assert_eq!(body_response.response_object, expected_config);
+    }
 
-        cleanup();
+    #[tokio::test]
+    async fn test_config_is_not_served_without_the_admin_token() {
+        let (router, _shared_config, _dir) = setup_with_token("s3cret");
+
+        let request = Request::builder()
+            .uri("/appConfig")
+            .method("GET")
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let wrong_token = Request::builder()
+            .uri("/appConfig")
+            .method("GET")
+            .header(header::AUTHORIZATION, "Bearer wrong")
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(wrong_token).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let request = Request::builder()
+            .uri("/appConfig")
+            .method("GET")
+            .header(header::AUTHORIZATION, "Bearer s3cret")
+            .body(Body::empty())
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn test_post_app_config_new_service() {
-        let (router, shared_config) = setup();
+        let (router, shared_config, _dir) = setup();
 
         let new_route = RouteConfig {
             route_id: "new_route".to_string(),
@@ -400,30 +523,16 @@ mod tests {
             .unwrap();
 
         let response = router.oneshot(request).await.unwrap();
-        let responsexx = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        println!("{}", String::from_utf8_lossy(&responsexx));
-        // assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
 
-        let locked_config = shared_config.shared_data.lock().unwrap();
+        let locked_config = shared_config.shared_data.read().unwrap();
         assert_eq!(locked_config.api_service_config.len(), 2);
         assert!(locked_config.api_service_config.contains_key(&9090));
-        assert_eq!(
-            locked_config
-                .api_service_config
-                .get(&9090)
-                .unwrap()
-                .listen_port,
-            9090
-        );
-
-        cleanup();
     }
 
     #[tokio::test]
     async fn test_post_app_config_add_route_to_existing_service() {
-        let (router, shared_config) = setup();
+        let (router, shared_config, _dir) = setup();
 
         let new_route = RouteConfig {
             route_id: "route2".to_string(),
@@ -448,27 +557,30 @@ mod tests {
         let response = router.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let locked_config = shared_config.shared_data.lock().unwrap();
+        let locked_config = shared_config.shared_data.read().unwrap();
         let service_8080 = locked_config.api_service_config.get(&8080).unwrap();
         assert_eq!(service_8080.route_configs.len(), 2);
-        assert!(service_8080
-            .route_configs
-            .iter()
-            .any(|r| r.route_id == "route1"));
-        assert!(service_8080
-            .route_configs
-            .iter()
-            .any(|r| r.route_id == "route2"));
-
-        cleanup();
+        assert!(
+            service_8080
+                .route_configs
+                .iter()
+                .any(|r| r.route_id == "route1")
+        );
+        assert!(
+            service_8080
+                .route_configs
+                .iter()
+                .any(|r| r.route_id == "route2")
+        );
     }
 
     #[tokio::test]
     async fn test_put_route_success() {
-        let (router, shared_config) = setup();
+        let (router, shared_config, _dir) = setup();
 
         let updated_route = RouteConfig {
             route_id: "route1".to_string(), // Same ID
+            path_rewrite: Some("/rewritten".to_string()),
             ..Default::default()
         };
 
@@ -484,16 +596,15 @@ mod tests {
         let response = router.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let locked_config = shared_config.shared_data.lock().unwrap();
+        let locked_config = shared_config.shared_data.read().unwrap();
         let service_8080 = locked_config.api_service_config.get(&8080).unwrap();
-        let _route = service_8080.route_configs.first().unwrap();
-
-        cleanup();
+        let route = service_8080.route_configs.first().unwrap();
+        assert_eq!(route.path_rewrite.as_deref(), Some("/rewritten"));
     }
 
     #[tokio::test]
     async fn test_put_route_not_found() {
-        let (router, _) = setup();
+        let (router, _shared_config, _dir) = setup();
 
         let non_existent_route = RouteConfig {
             route_id: "non-existent-route".to_string(),
@@ -517,13 +628,11 @@ mod tests {
             .unwrap();
         let error_message = String::from_utf8(body.to_vec()).unwrap();
         assert!(error_message.contains("Can not find the route by route id!"));
-
-        cleanup();
     }
 
     #[tokio::test]
     async fn test_delete_route_success() {
-        let (router, shared_config) = setup();
+        let (router, shared_config, _dir) = setup();
 
         let request = Request::builder()
             .uri("/route/route1")
@@ -534,15 +643,15 @@ mod tests {
         let response = router.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let locked_config = shared_config.shared_data.lock().unwrap();
-        assert!(locked_config.api_service_config.is_empty());
-
-        cleanup();
+        let locked_config = shared_config.shared_data.read().unwrap();
+        // The listener is kept (with no routes) so the port set stays stable.
+        let service = locked_config.api_service_config.get(&8080).unwrap();
+        assert!(service.route_configs.is_empty());
     }
 
     #[tokio::test]
     async fn test_get_prometheus_metrics_success() {
-        let (router, _) = setup();
+        let (router, _shared_config, _dir) = setup();
 
         let counter = prometheus::IntCounter::new("test_metric", "A test metric").unwrap();
         prometheus::register(Box::new(counter.clone())).unwrap();
@@ -567,13 +676,77 @@ mod tests {
         assert!(body_str.contains("test_metric 1"));
 
         prometheus::unregister(Box::new(counter)).unwrap();
-        cleanup();
     }
+
     #[tokio::test]
-    async fn test_save_config_to_file_success() {
-        let app_config = AppConfig::default();
-        let res = save_config_to_file(app_config).await;
-        println!("{res:?}");
-        assert!(res.is_ok());
+    async fn test_health_endpoint() {
+        let (router, _shared_config, _dir) = setup();
+        let request = Request::builder()
+            .uri("/health")
+            .method("GET")
+            .body(Body::empty())
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_save_config_to_file_keeps_route_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+
+        let app_config = AppConfig {
+            api_service_config: HashMap::from([(
+                8080,
+                ApiService {
+                    listen_port: 8080,
+                    route_configs: vec![RouteConfig {
+                        route_id: "keep-me".to_string(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+
+        save_config_to_file(&app_config, &path).await.unwrap();
+
+        let written = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(
+            written.contains("keep-me"),
+            "route ids must survive a persist, got: {written}"
+        );
+
+        // No temporary file may be left behind.
+        assert!(!path.with_extension("yaml.tmp").exists());
+
+        // And it must round-trip.
+        let reparsed: AppConfig = serde_yaml::from_str(&written).unwrap();
+        assert_eq!(reparsed, app_config);
+    }
+
+    #[tokio::test]
+    async fn test_reload_rejects_port_changes() {
+        let (router, _shared_config, _dir) = setup();
+
+        let mut new_config = AppConfig::default();
+        new_config.api_service_config.insert(
+            1234,
+            ApiService {
+                listen_port: 1234,
+                ..Default::default()
+            },
+        );
+        let yaml_body = serde_yaml::to_string(&new_config).unwrap();
+
+        let request = Request::builder()
+            .uri("/reload")
+            .method("POST")
+            .body(Body::from(yaml_body))
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

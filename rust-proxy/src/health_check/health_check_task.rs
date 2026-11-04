@@ -12,13 +12,13 @@ use futures;
 use futures::FutureExt;
 use http::Request;
 use http::StatusCode;
-use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
 use http_body_util::Full;
+use http_body_util::combinators::BoxBody;
 use hyper::Response;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task::JoinSet;
 use tokio::time::sleep;
 
@@ -47,7 +47,12 @@ impl HttpClientTrait for HealthCheckClient {
             .await??
             .map(|b| b.boxed())
             .map(|item: BoxBody<Bytes, hyper::Error>| {
-                item.map_err(|_| -> AppError { unreachable!() }).boxed()
+                // A body error is a real failure (upstream reset, TLS error);
+                // turning it into a panic would take down the health check task.
+                item.map_err(|e: hyper::Error| -> AppError {
+                    AppError(format!("Health check response body error: {e}"))
+                })
+                .boxed()
             });
         Ok(fut)
     }
@@ -120,9 +125,9 @@ impl HealthCheck {
     }
 
     async fn do_health_check(&mut self) -> Result<(), AppError> {
-        let app_config = self.shared_config.shared_data.lock()?.clone();
+        let app_config = self.shared_config.shared_data.read()?.clone();
         let mut route_list = HashMap::new();
-        for (_, service_config) in app_config.api_service_config.iter() {
+        for service_config in app_config.api_service_config.values() {
             for route in &service_config.route_configs {
                 if route.health_check.is_none() || route.liveness_config.is_none() {
                     continue;
@@ -197,7 +202,6 @@ async fn do_http_health_check<HC: HttpClientTrait + Send + Sync + 'static>(
     let mut set = JoinSet::new();
     for item in route_list {
         let http_client_shared = http_health_check_client.clone();
-        let host_option = Url::parse(item.endpoint.as_str());
 
         let host = match Url::parse(&item.endpoint) {
             Ok(url) => url,
@@ -230,7 +234,7 @@ async fn do_http_health_check<HC: HttpClientTrait + Send + Sync + 'static>(
     while let Some(response_result1) = set.join_next().await {
         match response_result1 {
             Ok((res, route, base_route)) => {
-                let mut lock = shared_config.shared_data.lock()?;
+                let mut lock = shared_config.shared_data.write()?;
                 let shared_route = lock
                     .api_service_config
                     .iter_mut()

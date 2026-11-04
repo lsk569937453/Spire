@@ -86,7 +86,7 @@ async fn check(
     _mapping_key: String,
     remote_addr: SocketAddr,
 ) -> Result<bool, AppError> {
-    let app_config = shared_config.shared_data.lock()?.clone();
+    let app_config = shared_config.shared_data.read()?.clone();
     let api_service = &app_config
         .api_service_config
         .get(&port)
@@ -106,7 +106,7 @@ async fn get_route_cluster(
     shared_config: SharedConfig,
     port: i32,
 ) -> Result<String, AppError> {
-    let app_config = shared_config.shared_data.lock()?.clone();
+    let app_config = shared_config.shared_data.read()?.clone();
     let value = app_config
         .api_service_config
         .get(&port)
@@ -118,7 +118,7 @@ async fn get_route_cluster(
     if service_config_clone.is_empty() {
         return Err(AppError::from("The len of routes is 0"));
     }
-    let mut route = service_config_clone
+    let route = service_config_clone
         .first()
         .ok_or("service_config_clone is empty")?
         .router
@@ -134,8 +134,7 @@ mod tests {
     use crate::vojo::router::WeightedRouteItem;
     use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr};
-
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::AtomicI32;
 
     fn create_mock_shared_config(
         port: i32,
@@ -145,7 +144,7 @@ mod tests {
         let header_based = WeightBasedRoute {
             routes: vec![WeightedRouteItem {
                 weight: 1,
-                index: 0,
+                index: AtomicI32::new(0),
                 endpoint: "http://www.baidu.com".to_string(),
                 ..Default::default()
             }],
@@ -163,12 +162,10 @@ mod tests {
         let mut api_service_config = HashMap::new();
         api_service_config.insert(port, api_service);
 
-        SharedConfig {
-            shared_data: Arc::new(Mutex::new(AppConfig {
-                api_service_config,
-                ..Default::default()
-            })),
-        }
+        SharedConfig::from_app_config(AppConfig {
+            api_service_config,
+            ..Default::default()
+        })
     }
 
     #[tokio::test]
@@ -204,12 +201,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_route_cluster_no_service() {
-        let shared_config = SharedConfig {
-            shared_data: Arc::new(Mutex::new(AppConfig {
-                api_service_config: HashMap::new(),
-                ..Default::default()
-            })),
-        };
+        let shared_config = SharedConfig::from_app_config(AppConfig {
+            api_service_config: HashMap::new(),
+            ..Default::default()
+        });
 
         let result = get_route_cluster("test_key".to_string(), shared_config, 8080).await;
         assert!(result.is_err());

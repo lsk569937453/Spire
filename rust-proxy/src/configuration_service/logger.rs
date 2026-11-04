@@ -1,17 +1,17 @@
 use chrono::DateTime;
 use chrono::Local;
 
-use logroller::{Compression, LogRollerBuilder, Rotation, RotationAge, TimeZone};
+use logroller::{LogRollerBuilder, Rotation, RotationAge, TimeZone};
 use std::path::Path;
 use tracing::level_filters::LevelFilter;
 use tracing_appender::non_blocking::NonBlockingBuilder;
+use tracing_subscriber::Layer;
+use tracing_subscriber::Registry;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::reload::Handle;
-use tracing_subscriber::Layer;
-use tracing_subscriber::Registry;
 use tracing_subscriber::{filter, reload};
 
 struct LocalTime;
@@ -87,10 +87,4 @@ pub fn setup_logger_with_path(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::{fs, thread, time::Duration};
-    use tempfile::tempdir;
-    use tracing::Subscriber;
-    use tracing::{debug, error, event, info, trace, warn, Level};
-}
+mod tests {}

@@ -1,5 +1,4 @@
 use crate::configuration_service::logger::setup_logger;
-use delay_timer::anyhow::anyhow;
 #[cfg(not(target_env = "msvc"))]
 use mimalloc::MiMalloc;
 
@@ -43,10 +42,10 @@ pub async fn main_with_error() -> Result<(), AppError> {
             println!("自动生成火焰图完成");
         };
     });
-    let (reload_handle, guard) = setup_logger()?;
+    let (reload_handle, _guard) = setup_logger()?;
     rustls::crypto::ring::default_provider()
         .install_default()
-        .map_err(|e| AppError::from("Failed to install rustls crypto provider"))?;
+        .map_err(|_e| AppError::from("Failed to install rustls crypto provider"))?;
 
     let cli = Cli::parse();
     info!("CLI arguments parsed: {cli:?}");
@@ -116,25 +115,84 @@ async fn run_app(
 ) -> Result<(), AppError> {
     let config = load_config(&cli).await?;
     info!("Configuration loaded successfully.");
-    println!("Full configuration: {config:?}");
+    // Never dump the configuration at default log levels: it contains TLS keys,
+    // API keys and JWT secrets.
+    debug!("Full configuration: {config:?}");
     reconfigure_logger(&reload_handle, &config);
     info!("Logger reconfigured to level: {}", config.get_log_level());
     metrics::init().map_err(|e| AppError(e.to_string()))?;
     let admin_port = config.admin_port.unwrap_or(DEFAULT_ADMIN_PORT);
-    let shared_config = SharedConfig::from_app_config(config);
+    let shared_config = SharedConfig::from_app_config_with_path(config, &cli.config_path);
 
     app_config_service::init(shared_config.clone()).await?;
     info!("Configuration service initialized.");
 
     info!("Starting control plane on port {admin_port}...");
-    start_control_plane(admin_port, shared_config).await?;
+    start_control_plane(admin_port, shared_config.clone(), shutdown_signal()).await?;
+
+    // The control plane has stopped: ask every proxy listener to stop as well.
+    shutdown_listeners(&shared_config).await;
 
     info!("Application shut down gracefully. ");
     Ok(())
 }
 
+/// Waits for `SIGINT` (Ctrl+C) or `SIGTERM` (docker stop / k8s rollout).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            error!("Failed to listen for Ctrl+C: {e}");
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(e) => {
+                error!("Failed to listen for SIGTERM: {e}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => debug!("Ctrl+C received"),
+        _ = terminate => debug!("SIGTERM received"),
+    }
+    info!("Shutdown signal received, draining listeners...");
+}
+
+/// Stops every proxy listener through its shutdown channel.
+async fn shutdown_listeners(shared_config: &SharedConfig) {
+    let senders = {
+        let Ok(config) = shared_config.shared_data.read() else {
+            return;
+        };
+        config
+            .api_service_config
+            .values()
+            .map(|service| service.sender.clone())
+            .collect::<Vec<_>>()
+    };
+
+    for sender in senders {
+        // The receivers stop accepting as soon as the control plane returns.
+        let _ = sender.send(()).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+}
+
 async fn load_config(cli: &Cli) -> Result<AppConfig, AppError> {
-    let config_str = tokio::fs::read_to_string(&cli.config_path).await?;
+    let config_str = tokio::fs::read_to_string(&cli.config_path)
+        .await
+        .map_err(|e| AppError(format!("Failed to read '{}': {e}", cli.config_path)))?;
     let config: AppConfig = serde_yaml::from_str(&config_str)?;
     Ok(config)
 }

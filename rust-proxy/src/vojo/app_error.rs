@@ -1,7 +1,3 @@
-use crate::middleware::circuit_breaker;
-use crate::middleware::ip_ban;
-use crate::middleware::rate_limit;
-use crate::vojo::app_config::AppConfig;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use http::StatusCode;
@@ -10,7 +6,6 @@ use http::header::ToStrError;
 use http::uri::InvalidUriParts;
 use prost_reflect::DescriptorError;
 use rustls_pki_types::InvalidDnsNameError;
-use std::sync::PoisonError;
 use std::time::SystemTimeError;
 use thiserror::Error;
 use tonic::Status;
@@ -49,18 +44,14 @@ impl From<&str> for AppError {
         AppError(s.to_string())
     }
 }
-macro_rules! impl_poison_error_for_app_error {
-    ($inner_type:ty, $name:literal) => {
-        impl From<std::sync::PoisonError<std::sync::MutexGuard<'_, $inner_type>>> for AppError {
-            fn from(error: std::sync::PoisonError<std::sync::MutexGuard<'_, $inner_type>>) -> Self {
-                AppError(format!("{} mutex error: {}", $name, error))
-            }
-        }
-    };
+/// Any poisoned mutex/RwLock inside the gateway is a bug, never a normal
+/// condition: surface it as an error instead of unwrapping (which would panic
+/// the connection task).
+impl<T> From<std::sync::PoisonError<T>> for AppError {
+    fn from(error: std::sync::PoisonError<T>) -> Self {
+        AppError(format!("lock poisoned: {error}"))
+    }
 }
-impl_poison_error_for_app_error!(rate_limit::Ratelimit, "Rate limit");
-impl_poison_error_for_app_error!(circuit_breaker::CircuitBreaker, "Circuit breaker");
-impl_poison_error_for_app_error!(ip_ban::IpBan, "Ip ban");
 impl From<prost_reflect::prost::DecodeError> for AppError {
     fn from(error: prost_reflect::prost::DecodeError) -> Self {
         AppError(format!("Protobuf decode error: {error}"))
@@ -209,11 +200,6 @@ impl From<http::Error> for AppError {
         AppError(format!("HTTP error: {error}"))
     }
 }
-impl From<PoisonError<std::sync::MutexGuard<'_, AppConfig>>> for AppError {
-    fn from(error: PoisonError<std::sync::MutexGuard<'_, AppConfig>>) -> Self {
-        AppError(format!("Mutex error: {error}"))
-    }
-}
 impl From<serde_json::Error> for AppError {
     fn from(error: serde_json::Error) -> Self {
         AppError(format!("JSON error: {error}"))
@@ -222,6 +208,7 @@ impl From<serde_json::Error> for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vojo::app_config::AppConfig;
 
     use std::io::ErrorKind;
     use std::sync::Arc;
@@ -254,7 +241,10 @@ mod tests {
         bad_parts.scheme = Some("http".parse().unwrap());
         bad_parts.authority = None;
 
-        bad_parts.path_and_query = Some("foo/bar".parse().unwrap());
+        // A path and query always starts with '/'; "foo/bar" itself fails to
+        // parse, which is what made this test panic instead of exercising the
+        // `From<InvalidUriParts>` conversion.
+        bad_parts.path_and_query = Some("/foo/bar".parse().unwrap());
         http::Uri::from_parts(bad_parts).unwrap_err()
     }
 
@@ -523,7 +513,7 @@ mod tests {
         assert!(handle.join().is_err());
 
         let original_error = app_config_data.lock().unwrap_err();
-        let expected_message = format!("Mutex error: {original_error}");
+        let expected_message = format!("lock poisoned: {original_error}");
         let app_error: AppError = original_error.into();
         assert_eq!(app_error.0, expected_message);
     }

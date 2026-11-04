@@ -1,12 +1,24 @@
-services:
-  - listen_port: 6667
-    service_config:
-      server_type: http
-      route_configs:
-        - matcher:
-            prefix: /
-            prefix_rewrite: ssss
-          router:
-            kind: random
-            routes:
-              - endpoint: http://backend:80/
+# Benchmark configuration for Spire (used by docs/benchmarks.md and the
+# docker-compose file next to it).
+#
+# It proxies port 6667 round-robin to the echo backend started by the compose
+# file. Keep this in sync with the current configuration schema — it is what the
+# published throughput numbers were measured with.
+log_level: info
+# The admin API is only used locally by the benchmark scripts.
+admin_listen: 127.0.0.1
+admin_port: 8870
+
+servers:
+  - listen: 6667
+    protocol: http
+    routes:
+      - route_id: benchmark
+        matchers:
+          - kind: path
+            value: /
+            match_type: prefix
+        forward_to:
+          kind: poll
+          targets:
+            - endpoint: http://backend:80/

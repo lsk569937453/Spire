@@ -7,21 +7,22 @@ use crate::vojo::anomaly_detection::AnomalyDetectionType;
 use crate::vojo::app_error::AppError;
 use crate::vojo::health_check::HealthCheckType;
 use crate::vojo::matcher::MatcherRule;
-use crate::vojo::router::deserialize_router;
 use crate::vojo::router::Router;
+use crate::vojo::router::deserialize_router;
 use crate::vojo::timeout_config::TimeoutConfig;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::Method;
-use regex::Regex;
+use ipnet::IpNet;
 use serde::Deserializer;
 use serde::Serializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::OnceLock;
 use tokio::sync::mpsc;
 use tracing_subscriber::filter::LevelFilter;
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub acme: AcmeConfig,
@@ -29,9 +30,24 @@ pub struct AppConfig {
     pub health_check_log_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub admin_port: Option<i32>,
+    /// Address the control plane binds to. Defaults to loopback because the
+    /// admin API can read and rewrite the whole configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_listen: Option<String>,
+    /// Bearer token required by the control plane. Strongly recommended
+    /// whenever `admin_listen` is not a loopback address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_token: Option<String>,
+    /// CIDR ranges of reverse proxies / load balancers whose
+    /// `X-Forwarded-For` / `X-Real-IP` headers are trusted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_proxies: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_level: Option<LogLevel>,
-    #[serde(skip_serializing_if = "Option::is_none", default = "default_upstream_timeout")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default = "default_upstream_timeout"
+    )]
     pub upstream_timeout_secs: Option<i32>,
     #[serde(
         rename = "servers",
@@ -39,6 +55,29 @@ pub struct AppConfig {
         serialize_with = "serialize_api_service_config"
     )]
     pub api_service_config: HashMap<i32, ApiService>,
+    /// Parsed form of `trusted_proxies`, built once per configuration.
+    #[serde(skip)]
+    pub(crate) trusted_proxy_nets: OnceLock<Vec<IpNet>>,
+}
+
+/// Never print the admin token into logs.
+impl core::fmt::Debug for AppConfig {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AppConfig")
+            .field("acme", &self.acme)
+            .field("health_check_log_enabled", &self.health_check_log_enabled)
+            .field("admin_port", &self.admin_port)
+            .field("admin_listen", &self.admin_listen)
+            .field(
+                "admin_token",
+                &self.admin_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("trusted_proxies", &self.trusted_proxies)
+            .field("log_level", &self.log_level)
+            .field("upstream_timeout_secs", &self.upstream_timeout_secs)
+            .field("servers", &self.api_service_config)
+            .finish()
+    }
 }
 
 fn default_upstream_timeout() -> Option<i32> {
@@ -50,10 +89,14 @@ impl Default for AppConfig {
         Self {
             health_check_log_enabled: Some(false),
             admin_port: Some(DEFAULT_ADMIN_PORT),
+            admin_listen: None,
+            admin_token: None,
+            trusted_proxies: None,
             log_level: None,
             api_service_config: Default::default(),
             acme: AcmeConfig::default(),
             upstream_timeout_secs: Some(5000),
+            trusted_proxy_nets: OnceLock::new(),
         }
     }
 }
@@ -132,33 +175,31 @@ fn default_route_id() -> String {
 
 impl RouteConfig {
     pub fn match_and_rewrite(
-        &mut self,
+        &self,
         path: &str,
         method: &Method,
         headers: &HeaderMap<HeaderValue>,
     ) -> Result<Option<String>, AppError> {
-        if self
+        if !self
             .matchers
-            .iter_mut()
+            .iter()
             .all(|rule| rule.matches(method, path, headers))
         {
-        } else {
             return Ok(None);
         }
         if let Some(rewrite_template) = &self.path_rewrite {
-            let path_pattern = self.matchers.iter().find_map(|m| match m {
+            // Reuse the regex the path matcher has already compiled instead of
+            // compiling the same pattern again on every request.
+            if let Some(re) = self.matchers.iter().find_map(|m| m.path_regex()) {
+                let rewritten_path = re.replace(path, rewrite_template.as_str());
+                return Ok(Some(rewritten_path.into_owned()));
+            }
+            if let Some(pattern) = self.matchers.iter().find_map(|m| match m {
                 MatcherRule::Path { value, .. } => Some(value),
                 _ => None,
-            });
-            if let Some(pattern) = path_pattern {
-                if let Ok(re) = Regex::new(pattern) {
-                    let rewritten_path = re.replace(path, rewrite_template.as_str());
-                    return Ok(Some(rewritten_path.into_owned()));
-                }
-
-                if let Some(stripped_path) = path.strip_prefix(pattern) {
-                    return Ok(Some(format!("{rewrite_template}{stripped_path}")));
-                }
+            }) && let Some(stripped_path) = path.strip_prefix(pattern.as_str())
+            {
+                return Ok(Some(format!("{rewrite_template}{stripped_path}")));
             }
 
             Ok(Some(path.to_string()))
@@ -168,12 +209,12 @@ impl RouteConfig {
     }
 
     pub fn is_allowed(
-        &mut self,
+        &self,
         peer_addr: &SocketAddr,
         headers_option: Option<&HeaderMap<HeaderValue>>,
     ) -> Result<CheckResult, AppError> {
-        if let Some(middlewares) = &mut self.middlewares {
-            for middleware in middlewares.iter_mut() {
+        if let Some(middlewares) = &self.middlewares {
+            for middleware in middlewares.iter() {
                 let check_res = middleware.check_request(peer_addr, headers_option)?;
                 if !check_res.is_allowed() {
                     return Ok(check_res);
@@ -193,8 +234,13 @@ pub enum ServiceType {
     Https,
     #[serde(rename = "tcp")]
     Tcp,
-    #[serde(rename = "tls")]
+    /// HTTP/2 (h2c) and gRPC.
+    ///
+    /// The protocol name `tls` is kept as an accepted alias because that is what
+    /// older configurations used, but `http2` is the documented name.
+    #[serde(rename = "http2", alias = "tls")]
     Http2,
+    #[serde(rename = "http2tls", alias = "Http2Tls")]
     Http2Tls,
 }
 
@@ -212,7 +258,7 @@ pub struct ApiService {
     #[serde(skip_deserializing, skip_serializing)]
     pub sender: mpsc::Sender<()>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(tag = "kind", rename_all = "PascalCase")]
 pub enum AcmeConfig {
     #[default]
@@ -222,6 +268,20 @@ pub enum AcmeConfig {
         eab_kid: String,
         eab_hmac_key: String,
     },
+}
+
+/// Never print the ACME EAB key into logs.
+impl core::fmt::Debug for AcmeConfig {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            AcmeConfig::LetsEncrypt => f.write_str("LetsEncrypt"),
+            AcmeConfig::ZeroSsl { eab_kid, .. } => f
+                .debug_struct("ZeroSsl")
+                .field("eab_kid", eab_kid)
+                .field("eab_hmac_key", &"<redacted>")
+                .finish(),
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for ApiService {
@@ -288,6 +348,27 @@ impl AppConfig {
             None => LevelFilter::OFF,
         }
     }
+
+    /// Parsed `trusted_proxies` CIDRs (cached: parsing them per request would be
+    /// wasteful, and an invalid entry must not be able to panic the proxy).
+    pub fn trusted_proxy_nets(&self) -> &[IpNet] {
+        self.trusted_proxy_nets.get_or_init(|| {
+            let mut nets = Vec::new();
+            for entry in self.trusted_proxies.iter().flatten() {
+                match entry.parse::<IpNet>() {
+                    Ok(net) => nets.push(net),
+                    Err(e) => error!("Invalid trusted_proxies entry '{entry}': {e}"),
+                }
+            }
+            nets
+        })
+    }
+
+    pub fn admin_listen_addr(&self) -> String {
+        self.admin_listen
+            .clone()
+            .unwrap_or_else(|| crate::constants::common_constants::DEFAULT_ADMIN_LISTEN.to_string())
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LogLevel {
@@ -306,7 +387,7 @@ pub enum LogLevel {
 #[cfg(test)]
 mod tests {
 
-    use std::time::SystemTime;
+    use std::sync::atomic::{AtomicI32, AtomicUsize};
 
     use super::*;
     use crate::middleware::authentication::ApiKeyAuth;
@@ -347,19 +428,19 @@ mod tests {
             routes: vec![
                 WeightedRouteItem {
                     weight: 1,
-                    index: 0,
+                    index: AtomicI32::new(0),
                     endpoint: "http://127.0.0.1:9394".to_string(),
                     ..Default::default()
                 },
                 WeightedRouteItem {
                     weight: 2,
-                    index: 0,
+                    index: AtomicI32::new(0),
                     endpoint: "http://127.0.0.1:9396".to_string(),
                     ..Default::default()
                 },
                 WeightedRouteItem {
                     weight: 3,
-                    index: 0,
+                    index: AtomicI32::new(0),
                     endpoint: "http://127.0.0.1:9395".to_string(),
                     ..Default::default()
                 },
@@ -395,7 +476,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
-            current_index: 0,
+            current_index: AtomicUsize::new(0),
         };
         let route = RouteConfig {
             route_id: "test_route".to_string(),
@@ -449,6 +530,7 @@ mod tests {
             HeaderBasedRoute {
                 routes: vec![
                     HeaderRoutingRule {
+                        match_regex: Default::default(),
                         header_key: "test".to_string(),
                         header_value_mapping_type:
                             crate::vojo::router::HeaderValueMappingType::Text("test".to_string()),
@@ -456,6 +538,7 @@ mod tests {
                         ..Default::default()
                     },
                     HeaderRoutingRule {
+                        match_regex: Default::default(),
                         header_key: "test".to_string(),
                         header_value_mapping_type:
                             crate::vojo::router::HeaderValueMappingType::Text("test".to_string()),
@@ -463,6 +546,7 @@ mod tests {
                         ..Default::default()
                     },
                     HeaderRoutingRule {
+                        match_regex: Default::default(),
                         header_key: "test".to_string(),
                         header_value_mapping_type:
                             crate::vojo::router::HeaderValueMappingType::Text("test".to_string()),
@@ -491,7 +575,7 @@ mod tests {
         let header_based = WeightBasedRoute {
             routes: vec![WeightedRouteItem {
                 weight: 1,
-                index: 0,
+                index: AtomicI32::new(0),
                 endpoint: "http://127.0.0.1:9393".to_string(),
                 ..Default::default()
             }],
@@ -501,7 +585,7 @@ mod tests {
             matchers: vec![MatcherRule::Path {
                 value: "/".to_string(),
                 match_type: crate::vojo::matcher::PathMatchType::Exact,
-                regex: None,
+                regex: Default::default(),
             }],
             router: Router::WeightBased(header_based),
 
@@ -529,8 +613,7 @@ mod tests {
                             value: "192.168.0.1".to_string(),
                         }),
                         unit: TimeUnit::Second,
-                        current_count: 10,
-                        last_update_time: SystemTime::now(),
+                        ..Default::default()
                     },
                 )))),
                 MiddleWares::AllowDenyList(AllowDenyIp {
@@ -547,6 +630,7 @@ mod tests {
 
                     max_age: Some(3600),
                     options_passthrough: Some(true),
+                    ..Default::default()
                 }),
             ]),
             ..Default::default()
@@ -586,11 +670,11 @@ mod tests {
 
     #[test]
     fn test_route_matching() {
-        let mut route = RouteConfig {
+        let route = RouteConfig {
             matchers: vec![MatcherRule::Path {
                 value: "/api/test".to_string(),
                 match_type: crate::vojo::matcher::PathMatchType::Exact,
-                regex: None,
+                regex: Default::default(),
             }],
             path_rewrite: Some("/v1/test".to_string()),
             ..Default::default()
@@ -609,16 +693,16 @@ mod tests {
 
     #[test]
     fn test_route_host_matching() {
-        let mut route = RouteConfig {
+        let route = RouteConfig {
             matchers: vec![
                 MatcherRule::Path {
                     value: "/api/test".to_string(),
                     match_type: crate::vojo::matcher::PathMatchType::Exact,
-                    regex: None,
+                    regex: Default::default(),
                 },
                 MatcherRule::Host {
                     value: "example.com".to_string(),
-                    regex: None,
+                    regex: Default::default(),
                 },
             ],
             path_rewrite: Some("/v1/test".to_string()),
@@ -662,7 +746,7 @@ mod tests {
             router: Router::WeightBased(WeightBasedRoute {
                 routes: vec![WeightedRouteItem {
                     weight: 1,
-                    index: 0,
+                    index: AtomicI32::new(0),
                     endpoint: "http://example.com".to_string(),
                     ..Default::default()
                 }],

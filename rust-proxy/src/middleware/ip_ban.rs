@@ -227,10 +227,7 @@ impl IpBan {
             .counters
             .iter()
             .min_by_key(|(_, counters)| {
-                counters
-                    .iter()
-                    .map(|(window_start, _)| *window_start)
-                    .min()
+                counters.iter().map(|(window_start, _)| *window_start).min()
             })
             .map(|(ip, _)| *ip)
         {
@@ -262,7 +259,7 @@ fn deny(retry_after_secs: u64) -> Denial {
 }
 impl Middleware for Arc<Mutex<IpBan>> {
     fn check_request(
-        &mut self,
+        &self,
         peer_addr: &SocketAddr,
         _headers: Option<&HeaderMap<HeaderValue>>,
     ) -> Result<CheckResult, AppError> {
@@ -298,7 +295,7 @@ mod tests {
     }
     #[test]
     fn allows_requests_up_to_threshold() {
-        let mut ip_ban = ban_for(3, "60s", "60s");
+        let ip_ban = ban_for(3, "60s", "60s");
         let socket = peer("192.168.1.10");
         for _ in 0..3 {
             let result = ip_ban.check_request(&socket, None).unwrap();
@@ -307,7 +304,7 @@ mod tests {
     }
     #[test]
     fn bans_ip_when_threshold_exceeded() {
-        let mut ip_ban = ban_for(3, "60s", "60s");
+        let ip_ban = ban_for(3, "60s", "60s");
         let socket = peer("192.168.1.10");
         for _ in 0..3 {
             assert!(ip_ban.check_request(&socket, None).unwrap().is_allowed());
@@ -321,7 +318,7 @@ mod tests {
     }
     #[test]
     fn banned_ip_keeps_being_denied() {
-        let mut ip_ban = ban_for(1, "60s", "60s");
+        let ip_ban = ban_for(1, "60s", "60s");
         let socket = peer("192.168.1.10");
         assert!(ip_ban.check_request(&socket, None).unwrap().is_allowed());
         for _ in 0..5 {
@@ -330,7 +327,7 @@ mod tests {
     }
     #[test]
     fn auto_unbans_after_ban_duration() {
-        let mut ip_ban = ban_for(1, "60s", "100ms");
+        let ip_ban = ban_for(1, "60s", "100ms");
         let socket = peer("192.168.1.10");
         assert!(ip_ban.check_request(&socket, None).unwrap().is_allowed());
         assert!(!ip_ban.check_request(&socket, None).unwrap().is_allowed());
@@ -339,7 +336,7 @@ mod tests {
     }
     #[test]
     fn window_expiry_resets_counter() {
-        let mut ip_ban = ban_for(2, "200ms", "60s");
+        let ip_ban = ban_for(2, "200ms", "60s");
         let socket = peer("192.168.1.10");
         assert!(ip_ban.check_request(&socket, None).unwrap().is_allowed());
         assert!(ip_ban.check_request(&socket, None).unwrap().is_allowed());
@@ -350,7 +347,7 @@ mod tests {
     }
     #[test]
     fn each_ip_is_tracked_independently() {
-        let mut ip_ban = ban_for(1, "60s", "60s");
+        let ip_ban = ban_for(1, "60s", "60s");
         let first = peer("192.168.1.10");
         let second = peer("192.168.1.11");
         assert!(ip_ban.check_request(&first, None).unwrap().is_allowed());
@@ -359,7 +356,7 @@ mod tests {
     }
     #[test]
     fn whitelisted_ip_is_never_banned() {
-        let mut ip_ban = ban_from_yaml(
+        let ip_ban = ban_from_yaml(
             "threshold: 1\nwindow: 60s\nban_duration: 60s\nwhitelist:\n  - 192.168.0.0/16\n  - 10.0.0.5\n",
         );
         let cidr_socket = peer("192.168.1.10");
@@ -383,7 +380,7 @@ mod tests {
     }
     #[test]
     fn invalid_whitelist_fails_the_check() {
-        let mut ip_ban = ban_from_yaml(
+        let ip_ban = ban_from_yaml(
             "threshold: 1\nwindow: 60s\nban_duration: 60s\nwhitelist:\n  - not-an-ip\n",
         );
         let socket = peer("192.168.1.10");
@@ -391,7 +388,7 @@ mod tests {
     }
     #[test]
     fn short_window_rule_bans_before_long_window_rule() {
-        let mut ip_ban = ban_from_yaml(
+        let ip_ban = ban_from_yaml(
             "rules:\n  - threshold: 2\n    window: 200ms\n    ban_duration: 60s\n  - threshold: 5\n    window: 60s\n    ban_duration: 60s\n",
         );
         let socket = peer("192.168.1.10");
@@ -404,7 +401,7 @@ mod tests {
     }
     #[test]
     fn short_window_reset_keeps_long_window_counting() {
-        let mut ip_ban = ban_from_yaml(
+        let ip_ban = ban_from_yaml(
             "rules:\n  - threshold: 2\n    window: 100ms\n    ban_duration: 100ms\n  - threshold: 3\n    window: 60s\n    ban_duration: 60s\n",
         );
         let socket = peer("192.168.1.10");
@@ -498,7 +495,8 @@ whitelist:
     }
     #[test]
     fn rejects_mixing_rules_with_legacy_fields() {
-        let config = "rules:\n  - threshold: 2\n    window: 1m\n    ban_duration: 10m\nthreshold: 5\n";
+        let config =
+            "rules:\n  - threshold: 2\n    window: 1m\n    ban_duration: 10m\nthreshold: 5\n";
         assert!(serde_yaml::from_str::<IpBan>(config).is_err());
     }
     #[test]

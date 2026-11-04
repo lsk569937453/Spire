@@ -1,11 +1,14 @@
-use async_trait::async_trait;
 use crate::middleware::middlewares::Middleware;
 use crate::vojo::app_error::AppError;
+use async_trait::async_trait;
 use bytes::Bytes;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::Response;
+use http::StatusCode;
 use http::header;
+use http_body_util::BodyExt;
+use http_body_util::Full;
 use http_body_util::combinators::BoxBody;
 use regex::Regex;
 use serde::Deserialize;
@@ -19,8 +22,9 @@ use serde::de::value::SeqAccessDeserializer;
 use serde::ser::SerializeSeq;
 use std::fmt;
 use std::fmt::Display;
+use std::sync::OnceLock;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CorsConfig {
     pub allowed_origins: CorsAllowedOrigins,
     pub allowed_methods: Vec<Method>,
@@ -28,7 +32,37 @@ pub struct CorsConfig {
     pub allow_credentials: Option<bool>,
     pub max_age: Option<i32>,
     pub options_passthrough: Option<bool>,
+    /// Compiled form of `allowed_origins`, built on first use (never per
+    /// request) and shared by clones.
+    #[serde(skip)]
+    pub(crate) origin_patterns: OnceLock<Vec<Option<Regex>>>,
 }
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self {
+            allowed_origins: CorsAllowedOrigins::All,
+            allowed_methods: Vec::new(),
+            allowed_headers: None,
+            allow_credentials: None,
+            max_age: None,
+            options_passthrough: None,
+            origin_patterns: OnceLock::new(),
+        }
+    }
+}
+
+impl PartialEq for CorsConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.allowed_origins == other.allowed_origins
+            && self.allowed_methods == other.allowed_methods
+            && self.allowed_headers == other.allowed_headers
+            && self.allow_credentials == other.allow_credentials
+            && self.max_age == other.max_age
+            && self.options_passthrough == other.options_passthrough
+    }
+}
+
 #[async_trait]
 impl Middleware for CorsConfig {
     async fn handle_response(
@@ -37,7 +71,10 @@ impl Middleware for CorsConfig {
         response: &mut Response<BoxBody<Bytes, AppError>>,
         inbound_headers: HeaderMap,
     ) -> Result<(), AppError> {
-        self.handle_before_response(response)
+        let request_origin = inbound_headers
+            .get(header::ORIGIN)
+            .and_then(|value| value.to_str().ok());
+        self.apply_cors_headers(response, request_origin)
     }
 }
 
@@ -114,81 +151,188 @@ impl Display for CorsAllowedOrigins {
         }
     }
 }
-impl CorsAllowedOrigins {
-    pub fn is_all(&self) -> bool {
-        match self {
-            CorsAllowedOrigins::All => true,
-            CorsAllowedOrigins::Origins(_) => false,
-        }
-    }
-}
 impl CorsConfig {
-    pub fn validate_origin(&self, origin: &str) -> Result<bool, AppError> {
+    /// True when `origin` is allowed by `allowed_origins`.
+    ///
+    /// Patterns are matched once-compiled: a pattern without regex
+    /// metacharacters is compared literally, anything else is compiled as an
+    /// anchored regex (`^(?:pattern)$`) so that a pattern like
+    /// `https://example.com` can never match `https://example.com.attacker.tld`.
+    pub fn is_origin_allowed(&self, origin: &str) -> bool {
         match &self.allowed_origins {
-            CorsAllowedOrigins::All => Ok(self.allow_credentials.unwrap_or(true)),
-            CorsAllowedOrigins::Origins(allowed_origins) => {
-                for allowed_origin in allowed_origins {
-                    let regex = Regex::new(allowed_origin.as_str())?;
-                    if regex.is_match(origin) {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
+            CorsAllowedOrigins::All => true,
+            CorsAllowedOrigins::Origins(patterns) => {
+                let compiled = self.origin_patterns.get_or_init(|| {
+                    patterns
+                        .iter()
+                        .map(|pattern| compile_origin_pattern(pattern))
+                        .collect()
+                });
+                patterns
+                    .iter()
+                    .zip(compiled.iter())
+                    .any(|(raw, regex)| match regex {
+                        Some(regex) => regex.is_match(origin),
+                        None => raw == origin,
+                    })
             }
         }
     }
-    pub fn handle_before_response(
+
+    /// Builds the response to a CORS preflight (`OPTIONS` + `Origin` +
+    /// `Access-Control-Request-Method`) request.
+    ///
+    /// `origin` must be the *actual* request origin: echoing it back is the only
+    /// valid behaviour when `allow_credentials` is enabled.
+    pub fn preflight_response(
+        &self,
+        origin: &str,
+    ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
+        let empty_body = || Full::new(Bytes::new()).map_err(AppError::from).boxed();
+
+        if !self.is_origin_allowed(origin) {
+            debug!("[CORS] Preflight from disallowed origin '{origin}'");
+            return Ok(Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(empty_body())?);
+        }
+
+        let methods_header = self
+            .allowed_methods
+            .iter()
+            .map(|m| m.as_str())
+            .collect::<Vec<&str>>()
+            .join(", ");
+        let headers_header = self
+            .allowed_headers
+            .as_ref()
+            .map(|item| item.to_string())
+            .unwrap_or_default();
+
+        let mut builder = Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .header(header::ACCESS_CONTROL_ALLOW_METHODS, methods_header)
+            .header(header::VARY, "Origin");
+
+        if origin.is_empty() {
+            builder = builder.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+        } else {
+            builder = builder.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        }
+        if !headers_header.is_empty() {
+            builder = builder.header(header::ACCESS_CONTROL_ALLOW_HEADERS, headers_header);
+        }
+        if self.allow_credentials == Some(true) {
+            builder = builder.header(
+                header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                HeaderValue::from_static("true"),
+            );
+        }
+        if let Some(max_age) = self.max_age
+            && max_age > 0
+        {
+            builder = builder.header(header::ACCESS_CONTROL_MAX_AGE, max_age.to_string());
+        }
+
+        Ok(builder.body(empty_body())?)
+    }
+
+    /// Adds the CORS headers to a normal (non-preflight) response.
+    ///
+    /// When `allowed_origins` is a whitelist, the request's `Origin` is echoed
+    /// back — writing the whole list into `Access-Control-Allow-Origin` (the old
+    /// behaviour) is invalid and browsers reject it.
+    pub fn apply_cors_headers(
         &self,
         response: &mut Response<BoxBody<Bytes, AppError>>,
+        request_origin: Option<&str>,
     ) -> Result<(), AppError> {
+        let allow_origin = match &self.allowed_origins {
+            CorsAllowedOrigins::All => {
+                if self.allow_credentials == Some(true) {
+                    request_origin.map(|origin| origin.to_string())
+                } else {
+                    Some("*".to_string())
+                }
+            }
+            CorsAllowedOrigins::Origins(_) => request_origin
+                .filter(|origin| self.is_origin_allowed(origin))
+                .map(|origin| origin.to_string()),
+        };
+
+        let Some(allow_origin) = allow_origin else {
+            debug!("[CORS] Origin not allowed, not adding CORS headers");
+            return Ok(());
+        };
+
         let headers = response.headers_mut();
-        let origin = self.allowed_origins.to_string();
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
-            HeaderValue::from_str(origin.as_str())?,
+            HeaderValue::from_str(allow_origin.as_str())?,
         );
+        // Only a wildcard origin may be cached for every requester; an echoed
+        // origin makes the response vary on the Origin request header.
+        if allow_origin != "*" {
+            headers.append(header::VARY, HeaderValue::from_static("Origin"));
+        }
 
         let methods = self
             .allowed_methods
             .iter()
-            .map(|m| m.as_str().to_uppercase())
-            .collect::<Vec<String>>()
+            .map(|m| m.as_str())
+            .collect::<Vec<&str>>()
             .join(", ");
-        info!("methods: {methods}");
-        headers.insert(
-            header::ACCESS_CONTROL_ALLOW_METHODS,
-            HeaderValue::from_str(&methods)?,
-        );
+        if !methods.is_empty() {
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_METHODS,
+                HeaderValue::from_str(&methods)?,
+            );
+        }
         if let Some(cors_headers) = &self.allowed_headers {
             headers.insert(
                 header::ACCESS_CONTROL_ALLOW_HEADERS,
                 HeaderValue::from_str(&cors_headers.to_string())?,
             );
         }
-        if let Some(allow_credentials) = self.allow_credentials {
-            if allow_credentials {
-                headers.insert(
-                    header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-                    HeaderValue::from_static("true"),
-                );
-            }
+        if self.allow_credentials == Some(true) {
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                HeaderValue::from_static("true"),
+            );
         }
-        if let Some(max_age) = self.max_age {
-            if max_age > 0 {
-                headers.insert(
-                    header::ACCESS_CONTROL_MAX_AGE,
-                    HeaderValue::from_str(&max_age.to_string())?,
-                );
-            }
+        if let Some(max_age) = self.max_age
+            && max_age > 0
+        {
+            headers.insert(
+                header::ACCESS_CONTROL_MAX_AGE,
+                HeaderValue::from_str(&max_age.to_string())?,
+            );
         }
-
-        if !self.allowed_origins.is_all() {
-            headers.append(header::VARY, HeaderValue::from_static("Origin"));
-        }
-
         Ok(())
     }
 }
+
+/// Returns `Some(anchored regex)` for patterns that use regex syntax, `None` for
+/// plain strings that should be compared literally.
+fn compile_origin_pattern(pattern: &str) -> Option<Regex> {
+    let has_meta = pattern.chars().any(|c| {
+        matches!(
+            c,
+            '^' | '$' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\'
+        )
+    });
+    if !has_meta {
+        return None;
+    }
+    match Regex::new(&format!("^(?:{pattern})$")) {
+        Ok(regex) => Some(regex),
+        Err(e) => {
+            error!("Invalid CORS origin pattern '{pattern}': {e}");
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Method {
     #[serde(rename = "GET")]
@@ -341,14 +485,94 @@ mod tests {
         let config = CorsConfig {
             allowed_origins: CorsAllowedOrigins::Origins(vec!["http://localhost:\\d+".to_string()]),
             allowed_methods: vec![Method::Get],
-            allowed_headers: None,
-            allow_credentials: Some(true),
-            max_age: None,
-            options_passthrough: None,
+            ..Default::default()
         };
 
-        assert!(config.validate_origin("http://localhost:3000").unwrap());
-        assert!(!config.validate_origin("http://example.com").unwrap());
+        assert!(config.is_origin_allowed("http://localhost:3000"));
+        assert!(!config.is_origin_allowed("http://example.com"));
+    }
+
+    #[test]
+    fn test_origin_pattern_is_anchored() {
+        let config = CorsConfig {
+            allowed_origins: CorsAllowedOrigins::Origins(vec!["https://example.com".to_string()]),
+            ..Default::default()
+        };
+
+        assert!(config.is_origin_allowed("https://example.com"));
+        // Suffix that merely contains the configured origin used to match.
+        assert!(!config.is_origin_allowed("https://example.com.attacker.tld"));
+    }
+
+    #[test]
+    fn test_wildcard_allows_every_origin() {
+        let config = CorsConfig {
+            allowed_origins: CorsAllowedOrigins::All,
+            ..Default::default()
+        };
+        assert!(config.is_origin_allowed("https://anything.example"));
+    }
+
+    #[test]
+    fn test_preflight_echoes_request_origin() {
+        let config = CorsConfig {
+            allowed_origins: CorsAllowedOrigins::Origins(vec!["https://example.com".to_string()]),
+            allowed_methods: vec![Method::Get, Method::Post],
+            allow_credentials: Some(true),
+            ..Default::default()
+        };
+
+        let response = config.preflight_response("https://example.com").unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "https://example.com"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+                .unwrap(),
+            "true"
+        );
+    }
+
+    #[test]
+    fn test_preflight_rejects_unknown_origin() {
+        let config = CorsConfig {
+            allowed_origins: CorsAllowedOrigins::Origins(vec!["https://example.com".to_string()]),
+            allowed_methods: vec![Method::Get],
+            allow_credentials: Some(true),
+            ..Default::default()
+        };
+
+        let response = config.preflight_response("https://evil.example").unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_wildcard_preflight_with_credentials_is_not_forbidden() {
+        // Regression test: a wildcard origin with credentials used to answer
+        // every preflight with 403.
+        let config = CorsConfig {
+            allowed_origins: CorsAllowedOrigins::All,
+            allowed_methods: vec![Method::Get],
+            allow_credentials: Some(true),
+            ..Default::default()
+        };
+
+        let response = config.preflight_response("https://example.com").unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "https://example.com"
+        );
     }
 
     #[test]

@@ -17,6 +17,11 @@ extern crate tracing;
 #[tokio::main]
 async fn main() {
     if let Err(e) = main_with_error().await {
-        eprint!("{}", e);
+        // A fatal startup error must be visible to supervisors (systemd,
+        // docker, kubernetes) — printing and returning normally used to exit
+        // with status 0, so an orchestrator would consider a dead gateway
+        // "healthy" and never restart it.
+        eprintln!("Fatal error: {e}");
+        std::process::exit(1);
     }
 }

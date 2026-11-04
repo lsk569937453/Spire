@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 pub struct ForwardHeader {}
 impl Middleware for ForwardHeader {
     fn handle_request(
-        &mut self,
+        &self,
         peer_addr: SocketAddr,
         headers: &mut HeaderMap,
     ) -> Result<(), AppError> {

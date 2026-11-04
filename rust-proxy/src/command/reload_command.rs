@@ -32,10 +32,14 @@ pub async fn handle_reload_command(args: ReloadArgs) -> Result<(), String> {
         .build_http();
 
     // Build POST request
-    let request = Request::builder()
+    let mut builder = Request::builder()
         .method(hyper::Method::POST)
         .uri(&url)
-        .header("Content-Type", "application/yaml")
+        .header("Content-Type", "application/yaml");
+    if let Some(token) = args.token.as_deref() {
+        builder = builder.header("Authorization", format!("Bearer {token}"));
+    }
+    let request = builder
         .body(Full::new(Bytes::from(content)))
         .map_err(|e| format!("Failed to build request: {}", e))?;
 
@@ -77,6 +81,7 @@ mod tests {
             port: 8081,
             host: "127.0.0.1".to_string(),
             config: "config.yaml".to_string(),
+            token: None,
         };
         let expected = "http://127.0.0.1:8081/reload";
         let actual = format!("http://{}:{}{}", args.host, args.port, RELOAD_ENDPOINT);
