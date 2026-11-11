@@ -154,10 +154,12 @@ impl ChainTrait for CommonCheckRequest {
         let request_timeout_ms = app_config.upstream_timeout_ms.ok_or(AppError::from(
             "Can not find upstream_timeout_ms from app config.",
         ))?;
+        // Absent config = derive from the detected memory limit at startup;
+        // an explicit value always wins.
         let global_concurrency_limit = app_config
             .upstream_concurrency_limit
-            .unwrap_or(10000)
-            .max(1) as usize;
+            .map(|limit| (limit.max(1)) as usize)
+            .unwrap_or_else(crate::proxy::concurrency::endpoint_default);
         let client_addr = SocketAddr::new(
             resolve_client_ip(peer_addr, headers, app_config.trusted_proxy_nets()),
             peer_addr.port(),

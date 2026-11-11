@@ -68,7 +68,7 @@ spire -f config/examples/<example-file>.yaml
 | `admin_port` | int | `9999` | Admin API port |
 | `health_check_log_enabled` | bool | `false` | Enable health check logging |
 | `upstream_timeout_ms` | int | `5000` | Upstream timeout in milliseconds (alias: `upstream_timeout_secs`) |
-| `upstream_concurrency_limit` | int | `10000` | Global fallback for the per-endpoint concurrency limit |
+| `upstream_concurrency_limit` | int | *auto-derived* | Global fallback for the per-endpoint concurrency limit; absent = derived from the cgroup memory limit (`mem × 50% ÷ 64 KiB` global guard, `min(10000, global ÷ 4)` per endpoint) |
 | `servers` | array | `[]` | Server configurations |
 
 ### Server Configuration

@@ -18,6 +18,8 @@ use crate::vojo::cli::Cli;
 use clap::Parser;
 
 use crate::constants::common_constants::DEFAULT_ADMIN_PORT;
+use crate::proxy::concurrency;
+use crate::utils::memory_limit;
 use crate::vojo::app_config::AppConfig;
 use crate::vojo::cli::SharedConfig;
 
@@ -121,6 +123,35 @@ async fn run_app(
     reconfigure_logger(&reload_handle, &config);
     info!("Logger reconfigured to level: {}", config.get_log_level());
     metrics::init().map_err(|e| AppError(e.to_string()))?;
+    // Size the concurrency memory guard from the memory this process is
+    // actually allowed to use (cgroup limit in containers, host RAM on bare
+    // metal) — unless the operator configured an explicit limit.
+    if config.upstream_concurrency_limit.is_none() {
+        let (mem_bytes, source) = match memory_limit::detect_memory_limit_bytes() {
+            Some((bytes, source)) => (bytes, source.as_str()),
+            None => (0, "not detected, using conservative defaults"),
+        };
+        let derived = concurrency::init_derived_limits(
+            (mem_bytes > 0).then_some(mem_bytes),
+        );
+        metrics::set_memory_limit_bytes(mem_bytes as f64);
+        metrics::set_upstream_global_permits(derived.global_permits as f64);
+        info!(
+            "[ConcurrencyLimit] derived from memory: {} ({source}); budget {:.0}% => {}B/request; \
+             global memory guard = {} permits, endpoint default limit = {}",
+            mem_bytes,
+            derived.budget_fraction * 100.0,
+            derived.per_request_estimate_bytes,
+            derived.global_permits,
+            derived.endpoint_default,
+        );
+    } else {
+        info!(
+            "[ConcurrencyLimit] upstream_concurrency_limit configured explicitly: {}; \
+             global memory guard stays at the conservative default",
+            config.upstream_concurrency_limit.unwrap_or_default()
+        );
+    }
     let admin_port = config.admin_port.unwrap_or(DEFAULT_ADMIN_PORT);
     let shared_config = SharedConfig::from_app_config_with_path(config, &cli.config_path);
 

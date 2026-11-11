@@ -14,6 +14,7 @@
 //! nothing.
 
 use crate::monitor::prometheus_exporter::metrics;
+use crate::proxy::concurrency::UpstreamPermit;
 use crate::vojo::app_error::AppError;
 use bytes::Bytes;
 use http_body::Body;
@@ -25,7 +26,6 @@ use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
 use std::time::Instant;
-use tokio::sync::OwnedSemaphorePermit;
 use tokio::time::Sleep;
 
 /// Labels shared by every metrics call a wrapper makes.
@@ -129,7 +129,7 @@ pub struct PermitBody {
 }
 
 struct Release {
-    permit: OwnedSemaphorePermit,
+    permit: UpstreamPermit,
     labels: UpstreamLabels,
     body_started: Instant,
 }
@@ -139,7 +139,7 @@ impl PermitBody {
     /// histogram covers headers → last frame.
     pub fn new(
         inner: BoxBody<Bytes, AppError>,
-        permit: OwnedSemaphorePermit,
+        permit: UpstreamPermit,
         labels: UpstreamLabels,
         body_started: Instant,
     ) -> Self {
@@ -261,16 +261,23 @@ mod tests {
 
     #[tokio::test]
     async fn permit_body_releases_exactly_once() {
+        use crate::proxy::concurrency::UpstreamPermit;
         let _ = crate::monitor::prometheus_exporter::metrics::init();
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
-        let permit = semaphore.clone().try_acquire_owned().unwrap();
-        assert_eq!(semaphore.available_permits(), 0);
+        let endpoint_sem = Arc::new(tokio::sync::Semaphore::new(1));
+        let global_sem = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = UpstreamPermit::from_parts(
+            endpoint_sem.clone().try_acquire_owned().unwrap(),
+            global_sem.clone().try_acquire_owned().unwrap(),
+        );
+        assert_eq!(endpoint_sem.available_permits(), 0);
+        assert_eq!(global_sem.available_permits(), 0);
 
         let mut body = PermitBody::new(full_body("abc"), permit, labels(), Instant::now());
         // First frame of a Full body is also its last; drop releases anyway.
         let frame = body.frame().await;
         assert!(frame.expect("frame expected").is_ok());
         drop(body);
-        assert_eq!(semaphore.available_permits(), 1, "permit must be back");
+        assert_eq!(endpoint_sem.available_permits(), 1, "permit must be back");
+        assert_eq!(global_sem.available_permits(), 1, "permit must be back");
     }
 }

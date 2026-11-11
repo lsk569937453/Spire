@@ -56,13 +56,11 @@ pub struct AppConfig {
     )]
     pub upstream_timeout_ms: Option<i32>,
     /// Global fallback for the per-endpoint concurrency limit (see the
-    /// route-level `concurrency` config). High by default: it exists as the
-    /// last-resort bound that keeps in-flight requests (and therefore memory)
-    /// finite even when nothing else is configured.
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        default = "default_upstream_concurrency_limit"
-    )]
+    /// route-level `concurrency` config). Absent (`null`) means "derive it
+    /// at startup from the detected container memory limit"; an explicit
+    /// value always wins. The derived value is deliberately not stored back
+    /// into this field so reloads and persistence keep the operator's intent.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_concurrency_limit: Option<i32>,
     #[serde(
         rename = "servers",
@@ -103,10 +101,6 @@ fn default_upstream_timeout() -> Option<i32> {
     Some(5000)
 }
 
-fn default_upstream_concurrency_limit() -> Option<i32> {
-    Some(10000)
-}
-
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -119,7 +113,8 @@ impl Default for AppConfig {
             api_service_config: Default::default(),
             acme: AcmeConfig::default(),
             upstream_timeout_ms: Some(5000),
-            upstream_concurrency_limit: default_upstream_concurrency_limit(),
+            // None = derive from the detected memory limit at startup.
+            upstream_concurrency_limit: None,
             trusted_proxy_nets: OnceLock::new(),
         }
     }
@@ -851,5 +846,10 @@ servers:
         assert_eq!(concurrency.limit, 200);
         assert_eq!(concurrency.queue_length, 10);
         assert_eq!(concurrency.queue_timeout_ms, 50);
+
+        // Absent key = None = "derive from the detected memory limit at
+        // startup" (and must not be persisted back once derived).
+        let derived: AppConfig = serde_yaml::from_str("servers: []").unwrap();
+        assert_eq!(derived.upstream_concurrency_limit, None);
     }
 }

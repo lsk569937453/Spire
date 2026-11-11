@@ -269,7 +269,7 @@ acme:
 | `trusted_proxies` | array | `[]` | CIDR list of proxies whose `X-Forwarded-For` is trusted |
 | `health_check_log_enabled` | bool | false | Enable health check logging |
 | `upstream_timeout_ms` | int | `5000` | Upstream request timeout in milliseconds (alias of the deprecated `upstream_timeout_secs`) |
-| `upstream_concurrency_limit` | int | `10000` | Global fallback for the per-endpoint concurrency limit (backpressure bound) |
+| `upstream_concurrency_limit` | int | *auto-derived* | Global fallback for the per-endpoint concurrency limit. Absent = derived at startup from the container memory limit (cgroup): `global permits = mem × 50% ÷ 64 KiB`, endpoint default = `min(10000, global ÷ 4)`; the global budget is a process-wide OOM guard. Explicit value wins |
 | `servers` | array | [] | Server configuration list |
 | `acme` | object | `lets_encrypt` | ACME certificate configuration |
 

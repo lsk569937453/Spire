@@ -599,6 +599,7 @@ where
                 buffered.extend_from_slice(data);
             }
             let body_bytes = buffered.freeze();
+            let buffered_len = body_bytes.len();
             let parts: Vec<&str> = request_path.split('/').filter(|s| !s.is_empty()).collect();
             if parts.len() < 2 {
                 return Err(AppError(format!(
@@ -608,15 +609,21 @@ where
             let service_name = parts[0].to_string();
             let method_name = parts[1].to_string();
 
-            // Same backpressure and time budget as the HTTP path.
+            // Same backpressure and time budget as the HTTP path. The
+            // request body is fully buffered by now, so the global memory
+            // guard can be charged by its actual size (×2: a roughly
+            // similar-sized response + JSON expansion is expected).
+            let global_weight =
+                ((buffered_len * 2) / concurrency::PER_REQUEST_ESTIMATE_BYTES).max(1);
             let labels = UpstreamLabels {
                 mapping_key: mapping_key.clone(),
                 route: spire_context.route_label().to_string(),
                 endpoint: concurrency::endpoint_key(&s.endpoint),
             };
-            let permit = match concurrency::acquire(
+            let permit = match concurrency::acquire_weighted(
                 &s.endpoint,
                 &check_request.concurrency,
+                global_weight,
                 &labels.mapping_key,
                 &labels.route,
             )
@@ -1180,6 +1187,7 @@ mod tests {
         assert_eq!(headers.get(header::UPGRADE).unwrap(), "websocket");
     }
 
+    #[serial_test::serial]
     #[tokio::test]
     async fn test_http_request_applies_forward_headers() {
         let (upstream_addr, recorded) = spawn_recording_upstream().await;
@@ -1363,6 +1371,7 @@ mod tests {
         .await
     }
 
+    #[serial_test::serial]
     #[tokio::test]
     async fn test_upstream_timeout_returns_504() {
         let _ = crate::monitor::prometheus_exporter::metrics::init();
@@ -1381,6 +1390,7 @@ mod tests {
         }
     }
 
+    #[serial_test::serial]
     #[tokio::test]
     async fn test_timeout_trips_circuit_breaker() {
         let _ = crate::monitor::prometheus_exporter::metrics::init();
@@ -1415,6 +1425,7 @@ mod tests {
         }
     }
 
+    #[serial_test::serial]
     #[tokio::test]
     async fn test_concurrency_limit_rejects_second_in_flight_request() {
         let _ = crate::monitor::prometheus_exporter::metrics::init();
@@ -1472,6 +1483,7 @@ mod tests {
         }
     }
 
+    #[serial_test::serial]
     #[tokio::test]
     async fn test_upstream_body_idle_timeout_cuts_stream() {
         let _ = crate::monitor::prometheus_exporter::metrics::init();

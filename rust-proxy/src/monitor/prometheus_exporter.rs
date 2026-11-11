@@ -36,6 +36,11 @@ pub mod metrics {
     pub static SPIRE_UPSTREAM_CONCURRENCY_LIMIT: OnceLock<IntGaugeVec> = OnceLock::new();
     /// Circuit breaker state per route: 0 closed, 1 open, 2 half-open.
     pub static SPIRE_CIRCUIT_BREAKER_STATE: OnceLock<IntGaugeVec> = OnceLock::new();
+    /// Memory limit the concurrency budget was derived from (0 when no
+    /// limit could be detected).
+    pub static SPIRE_MEMORY_LIMIT_BYTES: OnceLock<Gauge> = OnceLock::new();
+    /// Total permits in the process-wide memory guard (the OOM backstop).
+    pub static SPIRE_UPSTREAM_GLOBAL_PERMITS: OnceLock<Gauge> = OnceLock::new();
 
     // --------------------------
     // Unified initialization
@@ -178,6 +183,26 @@ pub mod metrics {
             }
             Err(e) => warn!("Failed to register spire_circuit_breaker_state: {e}"),
         }
+
+        match register_gauge!(opts!(
+            "spire_memory_limit_bytes",
+            "Memory limit the upstream concurrency budget was derived from (0 = not detected)."
+        )) {
+            Ok(metric) => {
+                SPIRE_MEMORY_LIMIT_BYTES.get_or_init(|| metric);
+            }
+            Err(e) => warn!("Failed to register spire_memory_limit_bytes: {e}"),
+        }
+
+        match register_gauge!(opts!(
+            "spire_upstream_global_permits",
+            "Total permits in the process-wide upstream memory guard (the OOM backstop)."
+        )) {
+            Ok(metric) => {
+                SPIRE_UPSTREAM_GLOBAL_PERMITS.get_or_init(|| metric);
+            }
+            Err(e) => warn!("Failed to register spire_upstream_global_permits: {e}"),
+        }
         Ok(())
     }
 
@@ -234,6 +259,18 @@ pub mod metrics {
     pub fn set_circuit_breaker_state(route: &str, state: i64) {
         if let Some(gauge) = SPIRE_CIRCUIT_BREAKER_STATE.get() {
             gauge.with_label_values(&[route]).set(state);
+        }
+    }
+
+    pub fn set_memory_limit_bytes(bytes: f64) {
+        if let Some(gauge) = SPIRE_MEMORY_LIMIT_BYTES.get() {
+            gauge.set(bytes);
+        }
+    }
+
+    pub fn set_upstream_global_permits(permits: f64) {
+        if let Some(gauge) = SPIRE_UPSTREAM_GLOBAL_PERMITS.get() {
+            gauge.set(permits);
         }
     }
 }
