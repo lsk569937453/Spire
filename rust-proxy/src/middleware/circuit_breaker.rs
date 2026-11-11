@@ -1,6 +1,7 @@
 use crate::middleware::middlewares::CheckResult;
 use crate::middleware::middlewares::Denial;
 use crate::middleware::middlewares::Middleware;
+use crate::monitor::prometheus_exporter::metrics;
 use crate::utils::duration_urils::human_duration;
 use crate::vojo::app_error::AppError;
 use bytes::Bytes;
@@ -56,6 +57,11 @@ pub struct CircuitBreaker {
 
     #[serde(rename = "request_volume_threshold")]
     pub min_requests_for_rate_calculation: u64,
+    /// Route id this breaker guards, assigned lazily on the first proxied
+    /// request (breakers live on `RouteConfig`, which owns the route id).
+    /// Only used to label the state gauge.
+    #[serde(skip)]
+    pub route_label: Option<String>,
     #[serde(skip)]
     state: State,
 }
@@ -107,6 +113,28 @@ impl Middleware for Arc<Mutex<CircuitBreaker>> {
     }
 }
 impl CircuitBreaker {
+    /// Idempotent: set once per breaker instance (shared via `Arc<Mutex<_>>`
+    /// across every clone of the route's middleware list) and export the
+    /// initial state so the series exists before the first transition.
+    pub fn set_route_label(&mut self, label: &str) {
+        if self.route_label.as_deref().is_none() {
+            self.route_label = Some(label.to_string());
+            self.export_state();
+        }
+    }
+
+    /// spire_circuit_breaker_state: 0 closed, 1 open, 2 half-open.
+    fn export_state(&self) {
+        if let Some(route) = &self.route_label {
+            let value = match self.state {
+                State::Closed { .. } => 0,
+                State::Open { .. } => 1,
+                State::HalfOpen { .. } => 2,
+            };
+            metrics::set_circuit_breaker_state(route, value);
+        }
+    }
+
     pub fn is_call_allowed(&mut self) -> bool {
         match self.state {
             State::Closed { .. } => true,
@@ -117,6 +145,7 @@ impl CircuitBreaker {
                         success_probes: 0,
                         total_probes: 0,
                     };
+                    self.export_state();
                     true
                 } else {
                     false
@@ -145,6 +174,7 @@ impl CircuitBreaker {
 
                 debug!("[CircuitBreaker] HalfOpen -> Closed (Success Probe)");
                 self.reset_to_closed();
+                self.export_state();
             }
             State::Open { .. } => {}
         }
@@ -164,6 +194,7 @@ impl CircuitBreaker {
                 if *consecutive_failures >= self.consecutive_failure_threshold {
                     error!("[CircuitBreaker] Closed -> Open (Consecutive Failures)");
                     self.trip();
+                    self.export_state();
                     return;
                 }
 
@@ -172,6 +203,7 @@ impl CircuitBreaker {
                     if current_failure_rate >= self.failure_rate_threshold {
                         debug!("[CircuitBreaker] Closed -> Open (Failure Rate)");
                         self.trip();
+                        self.export_state();
                     }
                 }
             }
@@ -182,6 +214,7 @@ impl CircuitBreaker {
                 *total_probes += 1;
                 debug!("[CircuitBreaker] HalfOpen -> Open (Failed Probe)");
                 self.trip();
+                self.export_state();
             }
             State::Open { .. } => {}
         }
@@ -217,6 +250,7 @@ mod tests {
             open_duration: Duration::from_millis(100),
             half_open_max_requests: 2,
             min_requests_for_rate_calculation: 10,
+            route_label: None,
             state: State::default(),
         }
     }

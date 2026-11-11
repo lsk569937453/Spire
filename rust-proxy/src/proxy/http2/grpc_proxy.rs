@@ -2,6 +2,7 @@ use crate::constants::common_constants::GRPC_STATUS_HEADER;
 use crate::constants::common_constants::GRPC_STATUS_OK;
 use crate::control_plane::cert_loader::load_tls_config_multi;
 use crate::control_plane::cert_loader::watch_for_certificate_changes;
+use crate::monitor::prometheus_exporter::metrics;
 use crate::proxy::proxy_trait::ChainTrait;
 use crate::proxy::proxy_trait::CommonCheckRequest;
 use crate::proxy::proxy_trait::SpireContext;
@@ -13,6 +14,7 @@ use h2::client::SendRequest;
 use h2::server;
 use h2::server::SendResponse;
 use http::Response;
+use http::StatusCode;
 use http::version::Version;
 use http::{Method, Request};
 use hyper::body::Bytes;
@@ -23,6 +25,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -357,11 +360,12 @@ async fn request_outbound(
     if !check_result.is_matched() {
         return Err(AppError::from("The request has been denied by the proxy!"));
     }
-    let request_path = &check_result
+    let handling_result = check_result
         .as_handling_result()
-        .ok_or("check_result is none")?
-        .request_path;
-    let url = Url::parse(request_path)?;
+        .ok_or("check_result is none")?;
+    let request_path = handling_result.request_path.clone();
+    let route_timeout_ms = handling_result.timeout;
+    let url = Url::parse(&request_path)?;
     debug!("The target is {url}");
 
     // One pooled connection per upstream authority instead of a fresh TCP/TLS
@@ -383,7 +387,25 @@ async fn request_outbound(
         }
     });
 
-    let (head, outboud_response_body) = response.await?.into_parts();
+    // The route timeout bounds waiting for the upstream response head; the
+    // bidirectional copy below is a tunnel and stays unbounded on purpose.
+    let (head, outboud_response_body) = match tokio::time::timeout(
+        Duration::from_millis(route_timeout_ms),
+        response,
+    )
+    .await
+    {
+        Ok(result) => result?.into_parts(),
+        Err(_elapsed) => {
+            error!("gRPC upstream timed out after {route_timeout_ms} ms: {url}");
+            metrics::record_upstream_timeout(&mapping_key, spire_context.route_label());
+            let timeout_response = Response::builder()
+                .status(StatusCode::GATEWAY_TIMEOUT)
+                .body(())?;
+            inbound_respond.send_response(timeout_response, true)?;
+            return Ok(());
+        }
+    };
 
     debug!("Received response: {head:?}");
 

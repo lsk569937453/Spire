@@ -5,6 +5,7 @@ use crate::middleware::middlewares::Middleware;
 use crate::utils::uuid::get_uuid;
 use crate::vojo::anomaly_detection::AnomalyDetectionType;
 use crate::vojo::app_error::AppError;
+use crate::vojo::concurrency::ConcurrencyConfig;
 use crate::vojo::health_check::HealthCheckType;
 use crate::vojo::matcher::MatcherRule;
 use crate::vojo::router::Router;
@@ -44,11 +45,25 @@ pub struct AppConfig {
     pub trusted_proxies: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_level: Option<LogLevel>,
+    /// Upstream request timeout in **milliseconds** (covers connect + send +
+    /// time to first response byte). The historical name was
+    /// `upstream_timeout_secs`, but the value was always interpreted as
+    /// milliseconds; the alias keeps old configurations loading.
     #[serde(
         skip_serializing_if = "Option::is_none",
-        default = "default_upstream_timeout"
+        default = "default_upstream_timeout",
+        alias = "upstream_timeout_secs"
     )]
-    pub upstream_timeout_secs: Option<i32>,
+    pub upstream_timeout_ms: Option<i32>,
+    /// Global fallback for the per-endpoint concurrency limit (see the
+    /// route-level `concurrency` config). High by default: it exists as the
+    /// last-resort bound that keeps in-flight requests (and therefore memory)
+    /// finite even when nothing else is configured.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default = "default_upstream_concurrency_limit"
+    )]
+    pub upstream_concurrency_limit: Option<i32>,
     #[serde(
         rename = "servers",
         deserialize_with = "deserialize_service_config",
@@ -74,7 +89,11 @@ impl core::fmt::Debug for AppConfig {
             )
             .field("trusted_proxies", &self.trusted_proxies)
             .field("log_level", &self.log_level)
-            .field("upstream_timeout_secs", &self.upstream_timeout_secs)
+            .field("upstream_timeout_ms", &self.upstream_timeout_ms)
+            .field(
+                "upstream_concurrency_limit",
+                &self.upstream_concurrency_limit,
+            )
             .field("servers", &self.api_service_config)
             .finish()
     }
@@ -82,6 +101,10 @@ impl core::fmt::Debug for AppConfig {
 
 fn default_upstream_timeout() -> Option<i32> {
     Some(5000)
+}
+
+fn default_upstream_concurrency_limit() -> Option<i32> {
+    Some(10000)
 }
 
 impl Default for AppConfig {
@@ -95,7 +118,8 @@ impl Default for AppConfig {
             log_level: None,
             api_service_config: Default::default(),
             acme: AcmeConfig::default(),
-            upstream_timeout_secs: Some(5000),
+            upstream_timeout_ms: Some(5000),
+            upstream_concurrency_limit: default_upstream_concurrency_limit(),
             trusted_proxy_nets: OnceLock::new(),
         }
     }
@@ -167,6 +191,8 @@ pub struct RouteConfig {
     pub middlewares: Option<Vec<MiddleWares>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<TimeoutConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concurrency: Option<ConcurrencyConfig>,
 }
 
 fn default_route_id() -> String {
@@ -783,5 +809,47 @@ response_object:
           kind: poll
           targets: []"#;
         let _: BaseResponse<AppConfig> = serde_yaml::from_str(src).unwrap();
+    }
+
+    #[test]
+    fn legacy_upstream_timeout_secs_key_still_loads() {
+        // Old configurations used the misleading name; the alias must keep
+        // them loading with the value interpreted (as always) as milliseconds.
+        let legacy = r#"
+upstream_timeout_secs: 30000
+servers: []"#;
+        let config: AppConfig = serde_yaml::from_str(legacy).unwrap();
+        assert_eq!(config.upstream_timeout_ms, Some(30000));
+
+        // New name, same semantics; serializing always emits the new key.
+        let config: AppConfig = serde_yaml::from_str("upstream_timeout_ms: 2500\nservers: []")
+            .unwrap();
+        assert_eq!(config.upstream_timeout_ms, Some(2500));
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        assert!(yaml.contains("upstream_timeout_ms: 2500"));
+        assert!(!yaml.contains("upstream_timeout_secs"));
+    }
+
+    #[test]
+    fn route_concurrency_config_deserializes() {
+        let src = r#"
+upstream_concurrency_limit: 500
+servers:
+  - listen: 8080
+    protocol: http
+    routes:
+      - route_id: limited
+        forward_to: http://127.0.0.1:9394
+        concurrency:
+          limit: 200
+          queue_length: 10
+          queue_timeout_ms: 50"#;
+        let config: AppConfig = serde_yaml::from_str(src).unwrap();
+        assert_eq!(config.upstream_concurrency_limit, Some(500));
+        let route = &config.api_service_config[&8080].route_configs[0];
+        let concurrency = route.concurrency.as_ref().unwrap();
+        assert_eq!(concurrency.limit, 200);
+        assert_eq!(concurrency.queue_length, 10);
+        assert_eq!(concurrency.queue_timeout_ms, 50);
     }
 }

@@ -268,7 +268,8 @@ acme:
 | `admin_token` | string | - | Bearer token required by the control plane |
 | `trusted_proxies` | array | `[]` | CIDR list of proxies whose `X-Forwarded-For` is trusted |
 | `health_check_log_enabled` | bool | false | Enable health check logging |
-| `upstream_timeout_secs` | int | `5000` | Upstream request timeout (milliseconds) |
+| `upstream_timeout_ms` | int | `5000` | Upstream request timeout in milliseconds (alias of the deprecated `upstream_timeout_secs`) |
+| `upstream_concurrency_limit` | int | `10000` | Global fallback for the per-endpoint concurrency limit (backpressure bound) |
 | `servers` | array | [] | Server configuration list |
 | `acme` | object | `lets_encrypt` | ACME certificate configuration |
 
@@ -292,7 +293,8 @@ acme:
 | `liveness_config` | object | `min_liveness_count`, required for health checking |
 | `middlewares` | array | Middleware list |
 | `path_rewrite` | string | Path rewrite rule |
-| `timeout` | object | `request_timeout` in milliseconds |
+| `timeout` | object | `request_timeout` in milliseconds (headers phase and per-body-frame idle timeout; exceeded upstreams answer 504) |
+| `concurrency` | object | Per-endpoint backpressure: `limit` (max in-flight), `queue_length` (max waiters, `0` = fail fast), `queue_timeout_ms` (max wait). Exhausted limit answers 503 + `Retry-After` |
 
 ### Matchers (matchers)
 

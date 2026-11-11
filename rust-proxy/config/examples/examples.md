@@ -67,7 +67,8 @@ spire -f config/examples/<example-file>.yaml
 | `log_level` | string | `info` | Log level: trace/debug/info/warn/error |
 | `admin_port` | int | `9999` | Admin API port |
 | `health_check_log_enabled` | bool | `false` | Enable health check logging |
-| `upstream_timeout_secs` | int | `5000` | Upstream timeout in milliseconds |
+| `upstream_timeout_ms` | int | `5000` | Upstream timeout in milliseconds (alias: `upstream_timeout_secs`) |
+| `upstream_concurrency_limit` | int | `10000` | Global fallback for the per-endpoint concurrency limit |
 | `servers` | array | `[]` | Server configurations |
 
 ### Server Configuration
@@ -89,6 +90,7 @@ spire -f config/examples/<example-file>.yaml
 | `middlewares` | array | Middleware chain |
 | `health_check` | object | Health check configuration |
 | `timeout` | object | Request timeout configuration |
+| `concurrency` | object | Per-endpoint concurrency limit: `limit`, `queue_length` (0 = fail fast), `queue_timeout_ms` |
 
 ### Forward Types
 

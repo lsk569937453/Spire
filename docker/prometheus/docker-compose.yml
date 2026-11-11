@@ -11,6 +11,7 @@ services:
         restart: always
         volumes:
             - ./prometheus.yml:/etc/prometheus/prometheus.yml
+            - ./alert_rules.yml:/etc/prometheus/alert_rules.yml
         ports:
             - "9090:9090"
         extra_hosts:

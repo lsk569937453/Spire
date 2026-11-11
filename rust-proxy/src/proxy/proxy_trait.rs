@@ -6,6 +6,7 @@ use crate::utils::client_ip::resolve_client_ip;
 use crate::vojo::app_config::RouteConfig;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
+use crate::vojo::concurrency::ConcurrencyConfig;
 use crate::vojo::matcher::MatcherRule;
 use crate::vojo::router::BaseRoute;
 use crate::vojo::router::StaticFileRoute;
@@ -67,6 +68,10 @@ pub struct HandlingResult {
     pub request_path: String,
     pub router_destination: RouterDestination,
     pub timeout: u64,
+    /// Effective concurrency limit for the matched route's endpoint(s):
+    /// route-level `concurrency` when configured, otherwise the global
+    /// `upstream_concurrency_limit` (fail fast, no queuing).
+    pub concurrency: ConcurrencyConfig,
 }
 
 #[derive(Debug)]
@@ -146,9 +151,13 @@ impl ChainTrait for CommonCheckRequest {
         // A shared (read) lock: routing never mutates the configuration, so all
         // in-flight requests can match routes concurrently.
         let app_config = shared_config.shared_data.read()?;
-        let request_timeout_sec = app_config.upstream_timeout_secs.ok_or(AppError::from(
-            "Can not find request_timeout_sec  from app config.",
+        let request_timeout_ms = app_config.upstream_timeout_ms.ok_or(AppError::from(
+            "Can not find upstream_timeout_ms from app config.",
         ))?;
+        let global_concurrency_limit = app_config
+            .upstream_concurrency_limit
+            .unwrap_or(10000)
+            .max(1) as usize;
         let client_addr = SocketAddr::new(
             resolve_client_ip(peer_addr, headers, app_config.trusted_proxy_nets()),
             peer_addr.port(),
@@ -202,9 +211,13 @@ impl ChainTrait for CommonCheckRequest {
                 .timeout
                 .as_ref()
                 .unwrap_or(&TimeoutConfig {
-                    request_timeout: request_timeout_sec as u64,
+                    request_timeout: request_timeout_ms as u64,
                 })
                 .request_timeout;
+            let concurrency = best_route
+                .concurrency
+                .clone()
+                .unwrap_or_else(|| ConcurrencyConfig::global_default(global_concurrency_limit));
 
             match router_destination {
                 RouterDestination::File(file_route) => {
@@ -215,6 +228,7 @@ impl ChainTrait for CommonCheckRequest {
                         request_path: String::from(request_path.to_str().unwrap_or_default()),
                         router_destination: RouterDestination::File(file_route),
                         timeout,
+                        concurrency,
                     }));
                 }
                 RouterDestination::Http(base_route) => {
@@ -224,6 +238,7 @@ impl ChainTrait for CommonCheckRequest {
                         request_path,
                         router_destination: RouterDestination::Http(base_route),
                         timeout,
+                        concurrency,
                     }));
                 }
                 RouterDestination::Grpc(base_route) => {
@@ -232,6 +247,7 @@ impl ChainTrait for CommonCheckRequest {
                         request_path: rest_path,
                         router_destination: RouterDestination::Grpc(base_route),
                         timeout,
+                        concurrency,
                     }));
                 }
             }

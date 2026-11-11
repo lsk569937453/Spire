@@ -74,10 +74,12 @@ where
 
     debug!("Forwarding upgrade request to upstream: {:?}", upstream_req);
 
+    // Respect the route's timeout instead of a hardcoded value.
+    let timeout_ms = check_result.timeout;
     let request_future = if upstream_req.uri().to_string().starts_with("https") {
-        http_client.request_https(upstream_req, 5000)
+        http_client.request_https(upstream_req, timeout_ms)
     } else {
-        http_client.request_http(upstream_req, 5000)
+        http_client.request_http(upstream_req, timeout_ms)
     };
 
     let upstream_res = match request_future.await {

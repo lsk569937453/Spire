@@ -3,7 +3,11 @@ use crate::control_plane::cert_loader::load_tls_config_multi;
 use crate::control_plane::cert_loader::watch_for_certificate_changes;
 use crate::middleware::middlewares::MiddleWares;
 use crate::monitor::prometheus_exporter::metrics;
+use crate::proxy::concurrency;
 use crate::proxy::http1::app_clients::AppClients;
+use crate::proxy::http1::upstream_body::PermitBody;
+use crate::proxy::http1::upstream_body::TimedBody;
+use crate::proxy::http1::upstream_body::UpstreamLabels;
 use crate::proxy::http1::websocket_proxy::server_upgrade;
 use crate::proxy::proxy_trait::DestinationResult;
 use crate::proxy::proxy_trait::{ChainTrait, SpireContext};
@@ -11,7 +15,7 @@ use crate::proxy::proxy_trait::{CommonCheckRequest, RouterDestination};
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
 use bytes::Bytes;
-use http::{HeaderMap, HeaderValue, Uri};
+use http::{HeaderMap, HeaderName, HeaderValue, Uri};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::Method;
 use hyper::StatusCode;
@@ -28,8 +32,11 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::time::Duration;
+use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
 pub struct HttpProxy {
     pub port: i32,
@@ -257,6 +264,58 @@ where
     Ok(res)
 }
 
+/// 504 Gateway Timeout for an upstream that exceeded its time budget.
+///
+/// Returned as a *successful* result (not `Err`) so it flows through
+/// `handle_before_response`: the circuit breaker's `record_outcome` must see
+/// timeouts as failures — a slow-to-death downstream is the one failure mode
+/// the breaker used to be blind to.
+fn gateway_timeout_response() -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
+    let response = Response::builder()
+        .status(StatusCode::GATEWAY_TIMEOUT)
+        .header(header::RETRY_AFTER, "1")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(
+            Full::new(Bytes::from_static(b"{\"error\":\"upstream timeout\"}"))
+                .map_err(|e| match e {})
+                .boxed(),
+        )?;
+    Ok(response)
+}
+
+/// 503 Service Unavailable for our own backpressure (concurrency limit
+/// exhausted). Returned on the early path that bypasses `record_outcome`:
+/// the breaker judges the downstream's health, never our own load shedding.
+/// The endpoint is deliberately kept out of the body; it is logged instead.
+fn service_unavailable_response() -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
+    let response = Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header(header::RETRY_AFTER, "1")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(
+            Full::new(Bytes::from_static(
+                b"{\"error\":\"upstream concurrency limit\"}",
+            ))
+            .map_err(|e| match e {})
+            .boxed(),
+        )?;
+    Ok(response)
+}
+
+/// Lazily binds circuit breakers to their route id (set once per shared
+/// instance) so state transitions can be exported to metrics.
+fn bind_breaker_labels(spire_context: &SpireContext) {
+    if let Some(middlewares) = &spire_context.middlewares {
+        for middleware in middlewares {
+            if let MiddleWares::CircuitBreaker(breaker) = middleware
+                && let Ok(mut guard) = breaker.lock()
+            {
+                guard.set_route_label(spire_context.route_label());
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn proxy<B>(
     port: i32,
@@ -314,6 +373,7 @@ where
             return Ok(response);
         }
     };
+    bind_breaker_labels(spire_context);
 
     if req.method() == Method::OPTIONS
         && req.headers().contains_key(header::ORIGIN)
@@ -360,7 +420,7 @@ where
                 .map_err(|e: http::uri::InvalidUriParts| AppError(format!("{e}")))?;
             route_file(router_destination, req).await
         }
-        RouterDestination::Http(_s) => {
+        RouterDestination::Http(ref base_route) => {
             *req.uri_mut() = request_path
                 .parse()
                 .map_err(|e: http::uri::InvalidUri| AppError(format!("{e}")))?;
@@ -379,6 +439,39 @@ where
             )
             .await?;
             let timeout = check_request.timeout;
+
+            // Backpressure: a concurrency permit must be held before the
+            // upstream is touched, otherwise in-flight requests are unbounded
+            // (the async equivalent of a full worker thread pool, except the
+            // process dies of OOM instead of queueing).
+            let labels = UpstreamLabels {
+                mapping_key: mapping_key.clone(),
+                route: spire_context.route_label().to_string(),
+                endpoint: concurrency::endpoint_key(&base_route.endpoint),
+            };
+            let permit = match concurrency::acquire(
+                &base_route.endpoint,
+                &check_request.concurrency,
+                &labels.mapping_key,
+                &labels.route,
+            )
+            .await
+            {
+                Ok(permit) => permit,
+                Err(rejection) => {
+                    warn!("[ConcurrencyLimit] {rejection} (route {})", labels.route);
+                    // Early return: our own load shedding is not a downstream
+                    // failure and must not feed the circuit breaker.
+                    return service_unavailable_response();
+                }
+            };
+            metrics::upstream_in_flight_delta(
+                &labels.mapping_key,
+                &labels.route,
+                &labels.endpoint,
+                1,
+            );
+
             let req = req.map(|b| b.map_err(AppError::from).boxed());
             // Decide on the *scheme*, not by looking for the substring "https"
             // somewhere in the path (a query string like `?next=https://...`
@@ -388,20 +481,96 @@ where
             } else {
                 client.http.request_http(req, timeout)
             };
-            let response_result = match request_future.await {
-                Ok(response) => response.map_err(|e| AppError(e.to_string())),
+            let started = Instant::now();
+            // `Ok(None)` = timed out: recorded below and answered with 504
+            // *as this match arm's value*, so it keeps flowing through
+            // handle_before_response — that is the whole fix. Returning
+            // early here is exactly how the breaker used to go blind.
+            // The permit lives in an Option because ownership splits across
+            // the mutually exclusive branches below (taken by the timeout /
+            // error paths, handed to PermitBody on success).
+            let mut permit = Some(permit);
+            let outcome: Result<Option<_>, _> = match request_future.await {
+                Ok(response) => response.map(Some).map_err(|e| AppError(e.to_string())),
                 Err(_elapsed) => {
-                    return Err(AppError(format!(
-                        "Upstream request timed out after {timeout} ms: {request_path}"
-                    )));
+                    metrics::observe_upstream_duration(
+                        &labels.mapping_key,
+                        &labels.route,
+                        &labels.endpoint,
+                        "ttfb",
+                        started.elapsed().as_secs_f64(),
+                    );
+                    metrics::record_upstream_timeout(&labels.mapping_key, &labels.route);
+                    error!(
+                        "Upstream request timed out after {timeout} ms: {request_path} (route {})",
+                        labels.route
+                    );
+                    // No PermitBody will exist for this request: undo the
+                    // in-flight count and let the permit go here.
+                    drop(permit.take());
+                    metrics::upstream_in_flight_delta(
+                        &labels.mapping_key,
+                        &labels.route,
+                        &labels.endpoint,
+                        -1,
+                    );
+                    Ok(None)
                 }
             };
-            response_result.map(|item| {
-                item.map(|s| s.boxed())
-                    .map(|item: BoxBody<Bytes, hyper::Error>| {
-                        item.map_err(|e: hyper::Error| e.into()).boxed()
-                    })
-            })
+            match outcome {
+                Ok(Some(response)) => {
+                    let ttfb = started.elapsed();
+                    metrics::observe_upstream_duration(
+                        &labels.mapping_key,
+                        &labels.route,
+                        &labels.endpoint,
+                        "ttfb",
+                        ttfb.as_secs_f64(),
+                    );
+                    let (mut parts, body) = response.into_parts();
+                    // Debug aid: how much of the total latency was the upstream.
+                    parts.headers.insert(
+                        HeaderName::from_static("x-upstream-latency"),
+                        HeaderValue::from(ttfb.as_millis() as u64),
+                    );
+                    // The permit is only released when the body has fully
+                    // streamed (PermitBody::finish / drop); the idle watchdog
+                    // uses the same budget as the headers phase so a
+                    // slow-drip body cannot hold the request forever.
+                    let timed = TimedBody::new(
+                        body.boxed().map_err(|e| AppError(e.to_string())).boxed(),
+                        Duration::from_millis(timeout),
+                        labels.clone(),
+                    );
+                    let permit = permit
+                        .take()
+                        .expect("permit only taken on the timeout/error paths");
+                    let permit_body =
+                        PermitBody::new(timed.boxed(), permit, labels, Instant::now());
+                    Ok(Response::from_parts(parts, permit_body.boxed()))
+                }
+                Ok(None) => gateway_timeout_response(),
+                Err(e) => {
+                    // Transport error (connect refused, reset, TLS, ...):
+                    // no body to own the permit, release it here. Flows on as
+                    // Err so the breaker records a failure, as before.
+                    drop(permit.take());
+                    metrics::upstream_in_flight_delta(
+                        &labels.mapping_key,
+                        &labels.route,
+                        &labels.endpoint,
+                        -1,
+                    );
+                    metrics::observe_upstream_duration(
+                        &labels.mapping_key,
+                        &labels.route,
+                        &labels.endpoint,
+                        "ttfb",
+                        started.elapsed().as_secs_f64(),
+                    );
+                    Err(e)
+                }
+            }
         }
         RouterDestination::Grpc(s) => {
             debug!("The request is grpc!,{request_path}");
@@ -438,21 +607,92 @@ where
             }
             let service_name = parts[0].to_string();
             let method_name = parts[1].to_string();
-            let grpc_response = grpc_client
-                .do_request(service_name, method_name, body_bytes)
-                .await?;
-            let dynamic_message = grpc_response.into_inner();
-            let response_json_string = serde_json::to_string(&dynamic_message)?;
-            let response = Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(
-                    Full::new(Bytes::from(response_json_string))
-                        .map_err(|e| match e {})
-                        .boxed(),
-                )?;
 
-            Ok(response)
+            // Same backpressure and time budget as the HTTP path.
+            let labels = UpstreamLabels {
+                mapping_key: mapping_key.clone(),
+                route: spire_context.route_label().to_string(),
+                endpoint: concurrency::endpoint_key(&s.endpoint),
+            };
+            let permit = match concurrency::acquire(
+                &s.endpoint,
+                &check_request.concurrency,
+                &labels.mapping_key,
+                &labels.route,
+            )
+            .await
+            {
+                Ok(permit) => permit,
+                Err(rejection) => {
+                    warn!("[ConcurrencyLimit] {rejection} (route {})", labels.route);
+                    return service_unavailable_response();
+                }
+            };
+            metrics::upstream_in_flight_delta(
+                &labels.mapping_key,
+                &labels.route,
+                &labels.endpoint,
+                1,
+            );
+            let started = Instant::now();
+            // Ok(None) = timed out: answered with a 504 *as this match arm's
+            // value* so it flows through handle_before_response and the
+            // breaker records the failure (returning early would reintroduce
+            // the blindness this fixes). Either way the upstream call is over
+            // by then, so the permit is released and the gauge undone here —
+            // the local JSON body below streams from memory, not upstream.
+            let grpc_outcome: Result<
+                Option<tonic::Response<prost_reflect::DynamicMessage>>,
+                AppError,
+            > = {
+                let call = timeout(
+                    Duration::from_millis(check_request.timeout),
+                    grpc_client.do_request(service_name, method_name, body_bytes),
+                )
+                .await;
+                metrics::observe_upstream_duration(
+                    &labels.mapping_key,
+                    &labels.route,
+                    &labels.endpoint,
+                    "ttfb",
+                    started.elapsed().as_secs_f64(),
+                );
+                drop(permit);
+                metrics::upstream_in_flight_delta(
+                    &labels.mapping_key,
+                    &labels.route,
+                    &labels.endpoint,
+                    -1,
+                );
+                match call {
+                    Ok(result) => result.map(Some),
+                    Err(_elapsed) => {
+                        metrics::record_upstream_timeout(&labels.mapping_key, &labels.route);
+                        error!(
+                            "gRPC upstream request timed out after {} ms: {} (route {})",
+                            check_request.timeout, request_path, labels.route
+                        );
+                        Ok(None)
+                    }
+                }
+            };
+            match grpc_outcome {
+                Ok(None) => gateway_timeout_response(),
+                Ok(Some(grpc_response)) => {
+                    let dynamic_message = grpc_response.into_inner();
+                    let response_json_string = serde_json::to_string(&dynamic_message)?;
+                    let response = Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(
+                            Full::new(Bytes::from(response_json_string))
+                                .map_err(|e| match e {})
+                                .boxed(),
+                        )?;
+                    Ok(response)
+                }
+                Err(e) => Err(e),
+            }
         }
     };
     if let Some(middlewares) = spire_context.middlewares.as_mut()
@@ -724,6 +964,9 @@ mod tests {
                             doc_root: "./test".to_string(),
                         }),
                         timeout: 1000,
+                        concurrency: crate::vojo::concurrency::ConcurrencyConfig::global_default(
+                            1024,
+                        ),
                     },
                 ))
             },
@@ -783,6 +1026,9 @@ mod tests {
                             doc_root: "./test".to_string(),
                         }),
                         timeout: 1000,
+                        concurrency: crate::vojo::concurrency::ConcurrencyConfig::global_default(
+                            1024,
+                        ),
                     },
                 ))
             });
@@ -971,5 +1217,304 @@ mod tests {
         assert_eq!(headers.get("x-real-ip").unwrap(), "203.0.113.9");
         assert_eq!(headers.get("x-forwarded-for").unwrap(), "203.0.113.9");
         assert_eq!(headers.get("x-forwarded-host").unwrap(), "www.937453.xyz");
+    }
+
+    // ------------------------------------------------------------------
+    // Slow-downstream protection: timeouts, breaker visibility, backpressure
+    // ------------------------------------------------------------------
+
+    use crate::proxy::concurrency;
+    use crate::vojo::concurrency::ConcurrencyConfig;
+    use crate::vojo::timeout_config::TimeoutConfig;
+    use http_body::Frame;
+    use std::pin::Pin;
+    use std::task::Context;
+    use std::task::Poll;
+    use std::time::Duration;
+
+    /// Upstream that accepts immediately but answers after `delay` — the
+    /// "slow interface" under test.
+    async fn spawn_slow_upstream(delay: Duration) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let service = service_fn(move |_: Request<Incoming>| async move {
+                        tokio::time::sleep(delay).await;
+                        Ok::<_, Infallible>(Response::new(Full::new(Bytes::new())))
+                    });
+                    let io = TokioIo::new(stream);
+                    if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
+                        error!("slow upstream connection error: {err:?}");
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    /// Upstream that answers 200 with one body chunk and then goes silent —
+    /// the "slow-drip body" under test.
+    struct OneChunkThenStallBody {
+        chunk: Bytes,
+        delivered: bool,
+    }
+    impl http_body::Body for OneChunkThenStallBody {
+        type Data = Bytes;
+        type Error = Infallible;
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+            if !self.delivered {
+                self.delivered = true;
+                Poll::Ready(Some(Ok(Frame::data(self.chunk.clone()))))
+            } else {
+                Poll::Pending
+            }
+        }
+    }
+
+    async fn spawn_stalling_body_upstream() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let service = service_fn(|_: Request<Incoming>| async {
+                        Ok::<_, Infallible>(Response::new(OneChunkThenStallBody {
+                            chunk: Bytes::from_static(b"partial"),
+                            delivered: false,
+                        }))
+                    });
+                    let io = TokioIo::new(stream);
+                    if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
+                        error!("stalling upstream connection error: {err:?}");
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    fn upstream_route_config(
+        upstream: SocketAddr,
+        timeout_ms: u64,
+        concurrency: Option<ConcurrencyConfig>,
+        middlewares: Option<Vec<MiddleWares>>,
+        route_id: &str,
+    ) -> SharedConfig {
+        let route = RouteConfig {
+            route_id: route_id.to_string(),
+            matchers: vec![MatcherRule::Path {
+                value: "/".to_string(),
+                match_type: PathMatchType::Prefix,
+                regex: Default::default(),
+            }],
+            router: Router::Random(RandomRoute::new(vec![format!("http://{upstream}")])),
+            timeout: Some(TimeoutConfig {
+                request_timeout: timeout_ms,
+            }),
+            concurrency,
+            middlewares,
+            ..Default::default()
+        };
+        let mut app_config = AppConfig::default();
+        app_config.api_service_config.insert(
+            8080,
+            ApiService {
+                listen_port: 8080,
+                route_configs: vec![route],
+                ..Default::default()
+            },
+        );
+        SharedConfig::from_app_config(app_config)
+    }
+
+    async fn proxy_get(
+        shared_config: &SharedConfig,
+        path: &str,
+        mapping_key: &str,
+    ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
+        let client = AppClients::new(shared_config.clone(), 8080).await.unwrap();
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(path)
+            .body(Full::new(Bytes::new()).map_err(AppError::from).boxed())
+            .unwrap();
+        let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        proxy(
+            8080,
+            shared_config.clone(),
+            client,
+            req,
+            mapping_key.to_string(),
+            remote_addr,
+            CommonCheckRequest {},
+            &mut SpireContext::new(8080, None),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_upstream_timeout_returns_504() {
+        let _ = crate::monitor::prometheus_exporter::metrics::init();
+        let upstream = spawn_slow_upstream(Duration::from_millis(1_000)).await;
+        let shared_config = upstream_route_config(upstream, 100, None, None, "timeout-route");
+
+        let res = proxy_get(&shared_config, "/slow", "test").await.unwrap();
+        assert_eq!(res.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(res.headers().get(header::RETRY_AFTER).unwrap(), "1");
+
+        // The timeout is counted for alerting.
+        if let Some(counter) =
+            crate::monitor::prometheus_exporter::metrics::SPIRE_UPSTREAM_TIMEOUTS_TOTAL.get()
+        {
+            assert!(counter.with_label_values(&["test", "timeout-route"]).get() >= 1.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_timeout_trips_circuit_breaker() {
+        let _ = crate::monitor::prometheus_exporter::metrics::init();
+        let upstream = spawn_slow_upstream(Duration::from_millis(1_000)).await;
+        // Timeouts previously bypassed the breaker entirely; three in a row
+        // must open it now.
+        let breaker: MiddleWares = serde_yaml::from_str(
+            "kind: circuit_breaker\nfailure_threshold: 1.0\nconsecutive_failures: 3\ncooldown: 60s\nhalf_open_requests: 1\nrequest_volume_threshold: 5",
+        )
+        .unwrap();
+        let shared_config = upstream_route_config(
+            upstream,
+            80,
+            None,
+            Some(vec![breaker]),
+            "cb-timeout-route",
+        );
+
+        for _ in 0..3 {
+            let res = proxy_get(&shared_config, "/slow", "test").await.unwrap();
+            assert_eq!(res.status(), StatusCode::GATEWAY_TIMEOUT);
+        }
+        // Fourth request: the breaker is open — denied before the upstream.
+        let denied = proxy_get(&shared_config, "/slow", "test").await.unwrap();
+        assert_eq!(denied.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        // And the state is exported for alerting (1 = open).
+        if let Some(gauge) =
+            crate::monitor::prometheus_exporter::metrics::SPIRE_CIRCUIT_BREAKER_STATE.get()
+        {
+            assert_eq!(gauge.with_label_values(&["cb-timeout-route"]).get(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrency_limit_rejects_second_in_flight_request() {
+        let _ = crate::monitor::prometheus_exporter::metrics::init();
+        let upstream = spawn_slow_upstream(Duration::from_millis(400)).await;
+        let shared_config = upstream_route_config(
+            upstream,
+            5_000,
+            Some(ConcurrencyConfig {
+                limit: 1,
+                queue_length: 0,
+                queue_timeout_ms: 50,
+            }),
+            None,
+            "conc-route",
+        );
+
+        let cfg_first = shared_config.clone();
+        let first =
+            tokio::spawn(async move { proxy_get(&cfg_first, "/slow", "test").await });
+        // Let the first request acquire the permit and park on the upstream.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Fail fast: the second request must not queue behind the slow one.
+        let second = proxy_get(&shared_config, "/slow", "test").await.unwrap();
+        assert_eq!(second.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(second.headers().contains_key(header::RETRY_AFTER));
+
+        let endpoint = concurrency::endpoint_key(&format!("http://{upstream}"));
+        if let Some(counter) = crate::monitor::prometheus_exporter::metrics::SPIRE_UPSTREAM_CONCURRENCY_REJECTED_TOTAL
+            .get()
+        {
+            assert!(
+                counter
+                    .with_label_values(&["test", "conc-route", endpoint.as_str()])
+                    .get()
+                    >= 1.0
+            );
+        }
+
+        // The first request finishes normally once the upstream answers.
+        let first_resp = first.await.unwrap().unwrap();
+        assert_eq!(first_resp.status(), StatusCode::OK);
+        // Drain the body: only then is the permit released and in-flight
+        // back to zero.
+        let _ = first_resp.into_body().collect().await.unwrap();
+        if let Some(gauge) =
+            crate::monitor::prometheus_exporter::metrics::SPIRE_UPSTREAM_IN_FLIGHT.get()
+        {
+            assert_eq!(
+                gauge
+                    .with_label_values(&["test", "conc-route", endpoint.as_str()])
+                    .get(),
+                0
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_upstream_body_idle_timeout_cuts_stream() {
+        let _ = crate::monitor::prometheus_exporter::metrics::init();
+        let upstream = spawn_stalling_body_upstream().await;
+        let shared_config = upstream_route_config(upstream, 150, None, None, "idle-route");
+
+        let response = proxy_get(&shared_config, "/stream", "test").await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut body = response.into_body();
+        let first = body.frame().await.expect("first chunk").expect("ok frame");
+        assert_eq!(first.data_ref().unwrap(), &Bytes::from_static(b"partial"));
+
+        // No second frame ever comes; the idle watchdog must resolve the
+        // stall with an error instead of parking the request forever.
+        let started = std::time::Instant::now();
+        let second = body.frame().await;
+        let err = second
+            .expect("watchdog must resolve the stall")
+            .expect_err("must be an error");
+        assert!(err.0.contains("idle timeout"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+
+        // Permit released, in-flight back to zero after the stream was cut.
+        let endpoint = concurrency::endpoint_key(&format!("http://{upstream}"));
+        if let Some(gauge) =
+            crate::monitor::prometheus_exporter::metrics::SPIRE_UPSTREAM_IN_FLIGHT.get()
+        {
+            assert_eq!(
+                gauge
+                    .with_label_values(&["test", "idle-route", endpoint.as_str()])
+                    .get(),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_timeout_response_shape() {
+        let res = gateway_timeout_response().unwrap();
+        assert_eq!(res.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(res.headers().get(header::RETRY_AFTER).unwrap(), "1");
+        let res = service_unavailable_response().unwrap();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(res.headers().get(header::RETRY_AFTER).unwrap(), "1");
     }
 }

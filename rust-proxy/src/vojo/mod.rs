@@ -5,6 +5,7 @@ pub mod anomaly_detection;
 pub mod app_error;
 pub mod base_response;
 pub mod cli;
+pub mod concurrency;
 pub mod domain_config;
 pub mod health_check;
 pub mod matcher;

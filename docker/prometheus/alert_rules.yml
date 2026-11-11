@@ -1,0 +1,113 @@
+# Slow-downstream alerting for Spire.
+#
+# Two early-warning tiers (route getting slow, backpressure nearing
+# saturation) fire before user-visible damage; the alert tier fires once the
+# protection (timeouts / breaker / concurrency limit) is actively engaging.
+#
+# Metric names produced by the proxy:
+#   http_request_duration_seconds{mapping_key,route,method}
+#   http_requests_total{mapping_key,route,method,status}
+#   spire_upstream_duration_seconds{mapping_key,route,endpoint,phase}
+#   spire_upstream_in_flight{mapping_key,route,endpoint}
+#   spire_upstream_concurrency_limit{mapping_key,route,endpoint}
+#   spire_upstream_timeouts_total{mapping_key,route}
+#   spire_upstream_concurrency_rejected_total{mapping_key,route,endpoint}
+#   spire_circuit_breaker_state{route}   (0 closed, 1 open, 2 half-open)
+groups:
+  - name: spire.slow-downstream.early-warning
+    rules:
+      # A single route's p99 is creeping up — often the first sign a
+      # downstream interface is degrading, well before timeouts start.
+      - alert: RouteP99Slow
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le, route) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Route {{ $labels.route }} p99 latency above 2s for 5m"
+          description: >
+            The p99 of route {{ $labels.route }} has stayed above 2 seconds for
+            5 minutes. Check which downstream it forwards to with
+            spire_upstream_duration_seconds (phase=ttfb vs body) before it
+            turns into timeouts.
+
+      # In-flight requests are approaching the configured concurrency limit —
+      # raise the limit or fix the downstream before requests start being
+      # rejected with 503.
+      - alert: UpstreamNearSaturation
+        expr: |
+          spire_upstream_in_flight
+            / on (mapping_key, route, endpoint) group_left
+              spire_upstream_concurrency_limit
+          > 0.8
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Endpoint {{ $labels.endpoint }} above 80% of its concurrency limit"
+          description: >
+            Route {{ $labels.route }} keeps over 80% of its concurrency budget
+            in flight towards {{ $labels.endpoint }}. When it hits the limit,
+            Spire will start answering 503 (backpressure) for this endpoint.
+
+  - name: spire.slow-downstream.alert
+    rules:
+      # More than 5% of a route's requests are hitting the upstream timeout.
+      - alert: UpstreamTimeoutRatioHigh
+        expr: |
+          sum by (route) (rate(spire_upstream_timeouts_total[1m]))
+            / clamp_min(sum by (route) (rate(http_requests_total[1m])), 1e-9)
+          > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Route {{ $labels.route }} upstream timeout ratio above 5%"
+          description: >
+            Downstream behind route {{ $labels.route }} is slow enough that
+            more than 5% of requests exceed their time budget (504s).
+
+      # Backpressure is actively shedding load — the concurrency limit is
+      # exhausted and requests are failing fast with 503.
+      - alert: UpstreamBackpressureRejects
+        expr: increase(spire_upstream_concurrency_rejected_total[1m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backpressure rejections on {{ $labels.endpoint }}"
+          description: >
+            Spire rejected requests towards {{ $labels.endpoint }} (route
+            {{ $labels.route }}) because the concurrency limit was exhausted;
+            the downstream cannot keep up with the offered load.
+
+      # A circuit breaker is open: the route is failing fast with 503.
+      - alert: CircuitBreakerOpen
+        expr: spire_circuit_breaker_state == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker open on route {{ $labels.route }}"
+          description: >
+            The breaker for route {{ $labels.route }} has been open for over a
+            minute; the downstream is failing often enough that traffic is
+            being shed. Check its health and recent timeouts.
+
+      # Sustained gateway errors (timeouts report 504, transport failures 502).
+      - alert: RouteHighGatewayErrorRate
+        expr: |
+          sum by (route) (rate(http_requests_total{status=~"502|503|504"}[5m]))
+            / clamp_min(sum by (route) (rate(http_requests_total[5m])), 1e-9)
+          > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Route {{ $labels.route }} gateway error rate above 10%"
+          description: >
+            More than 10% of responses on route {{ $labels.route }} are 502/
+            503/504. Correlate with UpstreamTimeoutRatioHigh and
+            CircuitBreakerOpen for the root cause.

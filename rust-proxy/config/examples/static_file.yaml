@@ -6,7 +6,7 @@
 # Adds cache headers for performance optimization.
 
 log_level: debug
-upstream_timeout_secs: 30000
+upstream_timeout_ms: 30000
 servers:
   - listen: 8084
     protocol: http
