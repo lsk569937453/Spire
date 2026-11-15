@@ -1,23 +1,26 @@
-use crate::constants::common_constants::MAX_TRANSCODE_BODY_BYTES;
 use crate::control_plane::cert_loader::load_tls_config_multi;
 use crate::control_plane::cert_loader::watch_for_certificate_changes;
 use crate::middleware::middlewares::MiddleWares;
-use crate::middleware::middlewares::Middleware;
-use crate::middleware::middlewares::{Denial, ExchangeSummary, RequestPhase, ResponsePhase};
 use crate::monitor::prometheus_exporter::metrics;
-use crate::proxy::concurrency;
 use crate::proxy::http1::app_clients::AppClients;
-use crate::proxy::http1::upstream_body::PermitBody;
-use crate::proxy::http1::upstream_body::TimedBody;
-use crate::proxy::http1::upstream_body::UpstreamLabels;
+use crate::proxy::http1::middleware_phases::PhaseInfo;
+use crate::proxy::http1::middleware_phases::apply_log_phases;
+use crate::proxy::http1::middleware_phases::apply_request_middlewares;
+use crate::proxy::http1::middleware_phases::apply_response_phases;
+use crate::proxy::http1::middleware_phases::denial_response;
+use crate::proxy::http1::middleware_phases::has_wasm;
+use crate::proxy::http1::upstream_forward::UpstreamCall;
+use crate::proxy::http1::upstream_forward::forward_grpc_upstream;
+use crate::proxy::http1::upstream_forward::forward_http_upstream;
 use crate::proxy::http1::websocket_proxy::server_upgrade;
 use crate::proxy::proxy_trait::DestinationResult;
+use crate::proxy::proxy_trait::HandlingResult;
 use crate::proxy::proxy_trait::{ChainTrait, SpireContext};
 use crate::proxy::proxy_trait::{CommonCheckRequest, RouterDestination};
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
 use bytes::Bytes;
-use http::{HeaderName, HeaderValue, Uri};
+use http::{HeaderValue, Uri};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::Method;
 use hyper::StatusCode;
@@ -34,11 +37,9 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::time::Duration;
 use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
 pub struct HttpProxy {
     pub port: i32,
@@ -266,44 +267,6 @@ where
     Ok(res)
 }
 
-/// 504 Gateway Timeout for an upstream that exceeded its time budget.
-///
-/// Returned as a *successful* result (not `Err`) so it flows through
-/// `handle_before_response`: the circuit breaker's `record_outcome` must see
-/// timeouts as failures — a slow-to-death downstream is the one failure mode
-/// the breaker used to be blind to.
-fn gateway_timeout_response() -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
-    let response = Response::builder()
-        .status(StatusCode::GATEWAY_TIMEOUT)
-        .header(header::RETRY_AFTER, "1")
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(
-            Full::new(Bytes::from_static(b"{\"error\":\"upstream timeout\"}"))
-                .map_err(|e| match e {})
-                .boxed(),
-        )?;
-    Ok(response)
-}
-
-/// 503 Service Unavailable for our own backpressure (concurrency limit
-/// exhausted). Returned on the early path that bypasses `record_outcome`:
-/// the breaker judges the downstream's health, never our own load shedding.
-/// The endpoint is deliberately kept out of the body; it is logged instead.
-fn service_unavailable_response() -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
-    let response = Response::builder()
-        .status(StatusCode::SERVICE_UNAVAILABLE)
-        .header(header::RETRY_AFTER, "1")
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(
-            Full::new(Bytes::from_static(
-                b"{\"error\":\"upstream concurrency limit\"}",
-            ))
-            .map_err(|e| match e {})
-            .boxed(),
-        )?;
-    Ok(response)
-}
-
 /// Lazily binds circuit breakers to their route id (set once per shared
 /// instance) so state transitions can be exported to metrics.
 fn bind_breaker_labels(spire_context: &SpireContext) {
@@ -378,29 +341,7 @@ where
     };
     bind_breaker_labels(spire_context);
 
-    // WASM plugin bookkeeping, paid for only when the matched route actually
-    // configures a plugin: a request id, the route id and the method as owned
-    // values (the response and log phases need them after `req` has been
-    // consumed by the upstream call).
-    let has_plugins = spire_context
-        .middlewares
-        .as_ref()
-        .is_some_and(|m| has_wasm(m));
-    let request_id: String = if has_plugins {
-        crate::utils::uuid::get_uuid()
-    } else {
-        String::new()
-    };
-    let route_id_owned: String = if has_plugins {
-        spire_context.route_label().to_string()
-    } else {
-        String::new()
-    };
-    let method_owned: String = if has_plugins {
-        method.as_str().to_string()
-    } else {
-        String::new()
-    };
+    let (request_id, route_id_owned, method_owned) = wasm_exchange_ids(spire_context, method);
 
     if req.method() == Method::OPTIONS
         && req.headers().contains_key(header::ORIGIN)
@@ -421,24 +362,21 @@ where
     let is_websocket_upgrade =
         inbound_headers.contains_key(CONNECTION) && inbound_headers.contains_key(SEC_WEBSOCKET_KEY);
     if is_websocket_upgrade {
-        debug!("The request has been updated to websocket,the req is {req:?}!");
         let phase_info = PhaseInfo {
             client_addr,
             route_id: &route_id_owned,
             request_id: &request_id,
             listener_port: port,
         };
-        if let Some(denial) = apply_request_middlewares(
+        return upgrade_websocket(
+            client,
             &chain_trait,
-            spire_context.middlewares.clone(),
+            spire_context,
+            req,
             phase_info,
-            &mut req,
+            handling_result,
         )
-        .await?
-        {
-            return denial_response(denial);
-        }
-        return server_upgrade(req, handling_result, client.http).await;
+        .await;
     }
 
     let check_request = handling_result;
@@ -486,268 +424,34 @@ where
                 // run on a locally generated reply.
                 return denial_response(denial);
             }
-            let timeout = check_request.timeout;
-
-            // Backpressure: a concurrency permit must be held before the
-            // upstream is touched, otherwise in-flight requests are unbounded
-            // (the async equivalent of a full worker thread pool, except the
-            // process dies of OOM instead of queueing).
-            let labels = UpstreamLabels {
-                mapping_key: mapping_key.clone(),
-                route: spire_context.route_label().to_string(),
-                endpoint: concurrency::endpoint_key(&base_route.endpoint),
-            };
-            let permit = match concurrency::acquire(
-                &base_route.endpoint,
-                &check_request.concurrency,
-                &labels.mapping_key,
-                &labels.route,
+            forward_http_upstream(
+                &client,
+                req,
+                UpstreamCall {
+                    endpoint: &base_route.endpoint,
+                    timeout_ms: check_request.timeout,
+                    concurrency: &check_request.concurrency,
+                    mapping_key: &mapping_key,
+                    route_label: spire_context.route_label(),
+                },
+                request_path,
             )
             .await
-            {
-                Ok(permit) => permit,
-                Err(rejection) => {
-                    warn!("[ConcurrencyLimit] {rejection} (route {})", labels.route);
-                    // Early return: our own load shedding is not a downstream
-                    // failure and must not feed the circuit breaker.
-                    return service_unavailable_response();
-                }
-            };
-            metrics::upstream_in_flight_delta(
-                &labels.mapping_key,
-                &labels.route,
-                &labels.endpoint,
-                1,
-            );
-
-            let req = req.map(|b| b.map_err(AppError::from).boxed());
-            // Decide on the *scheme*, not by looking for the substring "https"
-            // somewhere in the path (a query string like `?next=https://...`
-            // used to flip the transport).
-            let request_future = if request_path.starts_with("https://") {
-                client.http.request_https(req, timeout)
-            } else {
-                client.http.request_http(req, timeout)
-            };
-            let started = Instant::now();
-            // `Ok(None)` = timed out: recorded below and answered with 504
-            // *as this match arm's value*, so it keeps flowing through
-            // handle_before_response — that is the whole fix. Returning
-            // early here is exactly how the breaker used to go blind.
-            // The permit lives in an Option because ownership splits across
-            // the mutually exclusive branches below (taken by the timeout /
-            // error paths, handed to PermitBody on success).
-            let mut permit = Some(permit);
-            let outcome: Result<Option<_>, _> = match request_future.await {
-                Ok(response) => response.map(Some).map_err(|e| AppError(e.to_string())),
-                Err(_elapsed) => {
-                    metrics::observe_upstream_duration(
-                        &labels.mapping_key,
-                        &labels.route,
-                        &labels.endpoint,
-                        "ttfb",
-                        started.elapsed().as_secs_f64(),
-                    );
-                    metrics::record_upstream_timeout(&labels.mapping_key, &labels.route);
-                    error!(
-                        "Upstream request timed out after {timeout} ms: {request_path} (route {})",
-                        labels.route
-                    );
-                    // No PermitBody will exist for this request: undo the
-                    // in-flight count and let the permit go here.
-                    drop(permit.take());
-                    metrics::upstream_in_flight_delta(
-                        &labels.mapping_key,
-                        &labels.route,
-                        &labels.endpoint,
-                        -1,
-                    );
-                    Ok(None)
-                }
-            };
-            match outcome {
-                Ok(Some(response)) => {
-                    let ttfb = started.elapsed();
-                    metrics::observe_upstream_duration(
-                        &labels.mapping_key,
-                        &labels.route,
-                        &labels.endpoint,
-                        "ttfb",
-                        ttfb.as_secs_f64(),
-                    );
-                    let (mut parts, body) = response.into_parts();
-                    // Debug aid: how much of the total latency was the upstream.
-                    parts.headers.insert(
-                        HeaderName::from_static("x-upstream-latency"),
-                        HeaderValue::from(ttfb.as_millis() as u64),
-                    );
-                    // The permit is only released when the body has fully
-                    // streamed (PermitBody::finish / drop); the idle watchdog
-                    // uses the same budget as the headers phase so a
-                    // slow-drip body cannot hold the request forever.
-                    let timed = TimedBody::new(
-                        body.boxed().map_err(|e| AppError(e.to_string())).boxed(),
-                        Duration::from_millis(timeout),
-                        labels.clone(),
-                    );
-                    let permit = permit
-                        .take()
-                        .expect("permit only taken on the timeout/error paths");
-                    let permit_body =
-                        PermitBody::new(timed.boxed(), permit, labels, Instant::now());
-                    Ok(Response::from_parts(parts, permit_body.boxed()))
-                }
-                Ok(None) => gateway_timeout_response(),
-                Err(e) => {
-                    // Transport error (connect refused, reset, TLS, ...):
-                    // no body to own the permit, release it here. Flows on as
-                    // Err so the breaker records a failure, as before.
-                    drop(permit.take());
-                    metrics::upstream_in_flight_delta(
-                        &labels.mapping_key,
-                        &labels.route,
-                        &labels.endpoint,
-                        -1,
-                    );
-                    metrics::observe_upstream_duration(
-                        &labels.mapping_key,
-                        &labels.route,
-                        &labels.endpoint,
-                        "ttfb",
-                        started.elapsed().as_secs_f64(),
-                    );
-                    Err(e)
-                }
-            }
         }
         RouterDestination::Grpc(s) => {
-            debug!("The request is grpc!,{request_path}");
-            let grpc_client = client
-                .grpc
-                .ok_or(AppError(
-                    "No gRPC client configured for this listener".to_string(),
-                ))?
-                .get_client(&s.endpoint)
-                .await?;
-
-            // Buffered body, so it must be bounded: an unbounded collect() is a
-            // trivial memory exhaustion vector.
-            let (_parts, mut body) = req.into_parts();
-            let mut buffered = bytes::BytesMut::new();
-            while let Some(frame) = body.frame().await {
-                let frame = frame.map_err(AppError::from)?;
-                let Some(data) = frame.data_ref() else {
-                    continue;
-                };
-                if buffered.len() + data.len() > MAX_TRANSCODE_BODY_BYTES {
-                    return Err(AppError(format!(
-                        "Request body exceeds the {MAX_TRANSCODE_BODY_BYTES} byte limit"
-                    )));
-                }
-                buffered.extend_from_slice(data);
-            }
-            let body_bytes = buffered.freeze();
-            let buffered_len = body_bytes.len();
-            let parts: Vec<&str> = request_path.split('/').filter(|s| !s.is_empty()).collect();
-            if parts.len() < 2 {
-                return Err(AppError(format!(
-                    "Invalid gRPC target path, expected '/<service>/<method>': {request_path}"
-                )));
-            }
-            let service_name = parts[0].to_string();
-            let method_name = parts[1].to_string();
-
-            // Same backpressure and time budget as the HTTP path. The
-            // request body is fully buffered by now, so the global memory
-            // guard can be charged by its actual size (×2: a roughly
-            // similar-sized response + JSON expansion is expected).
-            let global_weight =
-                ((buffered_len * 2) / concurrency::PER_REQUEST_ESTIMATE_BYTES).max(1);
-            let labels = UpstreamLabels {
-                mapping_key: mapping_key.clone(),
-                route: spire_context.route_label().to_string(),
-                endpoint: concurrency::endpoint_key(&s.endpoint),
-            };
-            let permit = match concurrency::acquire_weighted(
-                &s.endpoint,
-                &check_request.concurrency,
-                global_weight,
-                &labels.mapping_key,
-                &labels.route,
+            forward_grpc_upstream(
+                &client,
+                req,
+                UpstreamCall {
+                    endpoint: &s.endpoint,
+                    timeout_ms: check_request.timeout,
+                    concurrency: &check_request.concurrency,
+                    mapping_key: &mapping_key,
+                    route_label: spire_context.route_label(),
+                },
+                request_path,
             )
             .await
-            {
-                Ok(permit) => permit,
-                Err(rejection) => {
-                    warn!("[ConcurrencyLimit] {rejection} (route {})", labels.route);
-                    return service_unavailable_response();
-                }
-            };
-            metrics::upstream_in_flight_delta(
-                &labels.mapping_key,
-                &labels.route,
-                &labels.endpoint,
-                1,
-            );
-            let started = Instant::now();
-            // Ok(None) = timed out: answered with a 504 *as this match arm's
-            // value* so it flows through handle_before_response and the
-            // breaker records the failure (returning early would reintroduce
-            // the blindness this fixes). Either way the upstream call is over
-            // by then, so the permit is released and the gauge undone here —
-            // the local JSON body below streams from memory, not upstream.
-            let grpc_outcome: Result<
-                Option<tonic::Response<prost_reflect::DynamicMessage>>,
-                AppError,
-            > = {
-                let call = timeout(
-                    Duration::from_millis(check_request.timeout),
-                    grpc_client.do_request(service_name, method_name, body_bytes),
-                )
-                .await;
-                metrics::observe_upstream_duration(
-                    &labels.mapping_key,
-                    &labels.route,
-                    &labels.endpoint,
-                    "ttfb",
-                    started.elapsed().as_secs_f64(),
-                );
-                drop(permit);
-                metrics::upstream_in_flight_delta(
-                    &labels.mapping_key,
-                    &labels.route,
-                    &labels.endpoint,
-                    -1,
-                );
-                match call {
-                    Ok(result) => result.map(Some),
-                    Err(_elapsed) => {
-                        metrics::record_upstream_timeout(&labels.mapping_key, &labels.route);
-                        error!(
-                            "gRPC upstream request timed out after {} ms: {} (route {})",
-                            check_request.timeout, request_path, labels.route
-                        );
-                        Ok(None)
-                    }
-                }
-            };
-            match grpc_outcome {
-                Ok(None) => gateway_timeout_response(),
-                Ok(Some(grpc_response)) => {
-                    let dynamic_message = grpc_response.into_inner();
-                    let response_json_string = serde_json::to_string(&dynamic_message)?;
-                    let response = Response::builder()
-                        .status(StatusCode::OK)
-                        .header(header::CONTENT_TYPE, "application/json")
-                        .body(
-                            Full::new(Bytes::from(response_json_string))
-                                .map_err(|e| match e {})
-                                .boxed(),
-                        )?;
-                    Ok(response)
-                }
-                Err(e) => Err(e),
-            }
         }
     };
     if let Some(middlewares) = spire_context.middlewares.as_mut()
@@ -785,163 +489,52 @@ where
     res
 }
 
-/// Renders a denial — from routing (`allow_deny_list`, `authentication`, …) or
-/// from a plugin's local reply — as the response the client receives.
-fn denial_response(denial: Denial) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
-    let mut response = Response::builder().status(denial.status).body(
-        Full::new(Bytes::from(denial.body))
-            .map_err(|e| match e {})
-            .boxed(),
-    )?;
-    response.headers_mut().extend(denial.headers);
-    Ok(response)
-}
-
-/// Per-exchange facts the plugin hooks need. Cheap to copy around.
-#[derive(Clone, Copy)]
-struct PhaseInfo<'a> {
-    client_addr: SocketAddr,
-    route_id: &'a str,
-    request_id: &'a str,
-    listener_port: i32,
-}
-
-/// True when the route configured at least one WASM plugin. Everything the
-/// plugin path costs (request-line copies, phase structs) is behind this.
-fn has_wasm(middlewares: &[MiddleWares]) -> bool {
-    middlewares
-        .iter()
-        .any(|m| matches!(m, MiddleWares::Wasm(_)))
-}
-
-/// Runs the request-phase middlewares: first the built-in header rewriting
-/// (`forward_headers`, `request_headers`), then the WASM plugins in configured
-/// order.
+/// Owned per-exchange values the WASM phases need after `req` has been consumed
+/// by the upstream call: a request id, the route id and the method.
 ///
-/// Shared by the regular HTTP and the WebSocket upgrade paths so both forward
-/// the same client information and both honour a plugin's local reply.
-async fn apply_request_middlewares<B>(
+/// Paid for only when the matched route actually configures a plugin; otherwise
+/// all three stay empty.
+fn wasm_exchange_ids(spire_context: &SpireContext, method: &Method) -> (String, String, String) {
+    let has_plugins = spire_context
+        .middlewares
+        .as_ref()
+        .is_some_and(|m| has_wasm(m));
+    if !has_plugins {
+        return (String::new(), String::new(), String::new());
+    }
+    (
+        crate::utils::uuid::get_uuid(),
+        spire_context.route_label().to_string(),
+        method.as_str().to_string(),
+    )
+}
+
+/// Handles a WebSocket upgrade: the request-phase middlewares run first (a
+/// plugin may still answer locally), then the upgrade goes to the upstream.
+async fn upgrade_websocket<B>(
+    client: AppClients,
     chain_trait: &impl ChainTrait,
-    middlewares: Option<Vec<MiddleWares>>,
+    spire_context: &SpireContext,
+    mut req: Request<B>,
     info: PhaseInfo<'_>,
-    req: &mut Request<B>,
-) -> Result<Option<Denial>, AppError>
+    handling_result: HandlingResult,
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
 where
     B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + Unpin + 'static,
     AppError: From<B::Error>,
 {
-    let Some(mut middlewares) = middlewares else {
-        return Ok(None);
-    };
-    if middlewares.is_empty() {
-        return Ok(None);
+    debug!("The request has been updated to websocket,the req is {req:?}!");
+    if let Some(denial) = apply_request_middlewares(
+        chain_trait,
+        spire_context.middlewares.clone(),
+        info,
+        &mut req,
+    )
+    .await?
+    {
+        return denial_response(denial);
     }
-    chain_trait
-        .handle_before_request(&mut middlewares, info.client_addr, req.headers_mut())
-        .await?;
-    if !has_wasm(&middlewares) {
-        return Ok(None);
-    }
-
-    let method = req.method().as_str().to_string();
-    let uri = req.uri().clone();
-    let scheme = uri.scheme_str().unwrap_or("http").to_string();
-    let authority = uri
-        .authority()
-        .map(|a| a.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let path = uri.path().to_string();
-    let query = uri.query().unwrap_or_default().to_string();
-    let mut phase = RequestPhase {
-        method,
-        scheme,
-        authority,
-        path,
-        query,
-        headers: req.headers_mut(),
-        client_addr: info.client_addr,
-        route_id: info.route_id,
-        listener_port: info.listener_port,
-        request_id: info.request_id,
-    };
-    for middleware in middlewares.iter() {
-        if let Some(denial) = middleware.on_request_phase(&mut phase)? {
-            return Ok(Some(denial));
-        }
-    }
-    Ok(None)
-}
-
-/// Runs the WASM response hooks before Spire's own response middlewares
-/// (`cors`, `rewrite_headers`, `compression`), so a plugin sees the upstream's
-/// response and its mutations are still subject to those middlewares.
-fn apply_response_phases(
-    middlewares: &[MiddleWares],
-    info: PhaseInfo<'_>,
-    response: &mut Response<BoxBody<Bytes, AppError>>,
-) -> Result<(), AppError> {
-    if !has_wasm(middlewares) {
-        return Ok(());
-    }
-    for middleware in middlewares.iter() {
-        let denial = {
-            let mut phase = ResponsePhase {
-                route_id: info.route_id,
-                request_id: info.request_id,
-                response: &mut *response,
-            };
-            middleware.on_response_phase(&mut phase)?
-        };
-        if let Some(denial) = denial {
-            *response = denial_response(denial)?;
-        }
-    }
-    Ok(())
-}
-
-/// Calls `on-log` on every plugin of the route. Never fails the request: the
-/// client's response is already committed at this point.
-#[allow(clippy::too_many_arguments)]
-fn apply_log_phases(
-    middlewares: &[MiddleWares],
-    info: PhaseInfo<'_>,
-    method: &str,
-    path: &str,
-    response: &Response<BoxBody<Bytes, AppError>>,
-    total: Duration,
-) {
-    if !has_wasm(middlewares) {
-        return;
-    }
-    let status = response.status().as_u16();
-    // Spire answers 503 (concurrency limit) and 504 (upstream timeout) itself;
-    // those are gateway facts, not upstream facts.
-    let local = matches!(status, 503 | 504);
-    // The upstream latency is already exported as `x-upstream-latency` on the
-    // response, so it does not need a second plumbing path.
-    let upstream_millis = response
-        .headers()
-        .get("x-upstream-latency")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok());
-    let summary = ExchangeSummary {
-        request_id: info.request_id,
-        route_id: info.route_id,
-        method,
-        path,
-        status,
-        local,
-        total_millis: total.as_millis() as u64,
-        upstream_millis,
-        // Bodies are streamed, so their size is not known here. `None` is the
-        // honest answer; a plugin that needs sizes must opt into body mode.
-        request_bytes: None,
-        response_bytes: None,
-    };
-    for middleware in middlewares {
-        middleware.on_log_phase(&summary);
-    }
+    server_upgrade(req, handling_result, client.http).await
 }
 
 /// Serves a static file route.
@@ -973,6 +566,8 @@ mod tests {
     use crate::middleware::forward_header::ForwardHeader;
     use crate::middleware::middlewares::MiddleWares;
     use crate::middleware::request_headers::RequestHeaders;
+    use crate::proxy::http1::upstream_forward::gateway_timeout_response;
+    use crate::proxy::http1::upstream_forward::service_unavailable_response;
     use crate::proxy::proxy_trait::{HandlingResult, MockChainTrait};
     use crate::vojo::app_config::AppConfig;
     use crate::vojo::app_config::{ApiService, RouteConfig};
