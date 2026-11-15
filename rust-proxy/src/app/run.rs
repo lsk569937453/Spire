@@ -134,9 +134,7 @@ async fn run_app(
             Some((bytes, source)) => (bytes, source.as_str()),
             None => (0, "not detected, using conservative defaults"),
         };
-        let derived = concurrency::init_derived_limits(
-            (mem_bytes > 0).then_some(mem_bytes),
-        );
+        let derived = concurrency::init_derived_limits((mem_bytes > 0).then_some(mem_bytes));
         metrics::set_memory_limit_bytes(mem_bytes as f64);
         metrics::set_upstream_global_permits(derived.global_permits as f64);
         info!(

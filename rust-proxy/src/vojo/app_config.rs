@@ -825,8 +825,8 @@ servers: []"#;
         assert_eq!(config.upstream_timeout_ms, Some(30000));
 
         // New name, same semantics; serializing always emits the new key.
-        let config: AppConfig = serde_yaml::from_str("upstream_timeout_ms: 2500\nservers: []")
-            .unwrap();
+        let config: AppConfig =
+            serde_yaml::from_str("upstream_timeout_ms: 2500\nservers: []").unwrap();
         assert_eq!(config.upstream_timeout_ms, Some(2500));
         let yaml = serde_yaml::to_string(&config).unwrap();
         assert!(yaml.contains("upstream_timeout_ms: 2500"));

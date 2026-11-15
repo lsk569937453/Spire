@@ -389,23 +389,19 @@ async fn request_outbound(
 
     // The route timeout bounds waiting for the upstream response head; the
     // bidirectional copy below is a tunnel and stays unbounded on purpose.
-    let (head, outboud_response_body) = match tokio::time::timeout(
-        Duration::from_millis(route_timeout_ms),
-        response,
-    )
-    .await
-    {
-        Ok(result) => result?.into_parts(),
-        Err(_elapsed) => {
-            error!("gRPC upstream timed out after {route_timeout_ms} ms: {url}");
-            metrics::record_upstream_timeout(&mapping_key, spire_context.route_label());
-            let timeout_response = Response::builder()
-                .status(StatusCode::GATEWAY_TIMEOUT)
-                .body(())?;
-            inbound_respond.send_response(timeout_response, true)?;
-            return Ok(());
-        }
-    };
+    let (head, outboud_response_body) =
+        match tokio::time::timeout(Duration::from_millis(route_timeout_ms), response).await {
+            Ok(result) => result?.into_parts(),
+            Err(_elapsed) => {
+                error!("gRPC upstream timed out after {route_timeout_ms} ms: {url}");
+                metrics::record_upstream_timeout(&mapping_key, spire_context.route_label());
+                let timeout_response = Response::builder()
+                    .status(StatusCode::GATEWAY_TIMEOUT)
+                    .body(())?;
+                inbound_respond.send_response(timeout_response, true)?;
+                return Ok(());
+            }
+        };
 
     debug!("Received response: {head:?}");
 

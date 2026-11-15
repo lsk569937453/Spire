@@ -143,7 +143,8 @@ where
             cfg.validate()
                 .map_err(|e| AppError(format!("route {route_id}: {e}")))?;
             #[cfg(feature = "wasm")]
-            crate::wasm::resolve(&cfg.plugin).map_err(|e| AppError(format!("route {route_id}: {}", e.0)))?;
+            crate::wasm::resolve(&cfg.plugin)
+                .map_err(|e| AppError(format!("route {route_id}: {}", e.0)))?;
             #[cfg(not(feature = "wasm"))]
             return Err(AppError(format!(
                 "route {route_id} uses `kind: wasm`, but this build has no WASM plugin support; \
@@ -154,9 +155,7 @@ where
     Ok(())
 }
 
-fn validate_service_plugins(
-    service: &crate::vojo::app_config::ApiService,
-) -> Result<(), AppError> {
+fn validate_service_plugins(service: &crate::vojo::app_config::ApiService) -> Result<(), AppError> {
     for route in &service.route_configs {
         if let Some(middlewares) = &route.middlewares {
             validate_plugins(&route.route_id, middlewares.iter())?;

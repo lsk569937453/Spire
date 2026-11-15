@@ -166,12 +166,7 @@ pub fn reload() -> Result<(), AppError> {
 
     let current: HashMap<String, String> = compiled
         .iter()
-        .map(|plugin| {
-            (
-                plugin.manifest.id.clone(),
-                plugin.generation.to_string(),
-            )
-        })
+        .map(|plugin| (plugin.manifest.id.clone(), plugin.generation.to_string()))
         .collect();
     *PLUGINS.write()? = compiled;
     *FAILED.write()? = Some(failed);
@@ -506,7 +501,9 @@ fn fail(
         FailPolicy::Closed => {
             error!(
                 plugin = plugin_id,
-                phase, reason, "wasm: plugin failed, refusing the request (fail: closed): {message}"
+                phase,
+                reason,
+                "wasm: plugin failed, refusing the request (fail: closed): {message}"
             );
             let mut headers = http::HeaderMap::new();
             headers.insert(
@@ -564,7 +561,12 @@ fn create_slot(
     guest
         .spire_filter_lifecycle()
         .call_start(&mut store, &info)
-        .map_err(|e| AppError(format!("wasm plugin `{}`: start() trapped: {e}", plugin.manifest.id)))?
+        .map_err(|e| {
+            AppError(format!(
+                "wasm plugin `{}`: start() trapped: {e}",
+                plugin.manifest.id
+            ))
+        })?
         .map_err(|e| {
             AppError(format!(
                 "wasm plugin `{}`: start() refused to activate: {e:?}",
@@ -631,7 +633,11 @@ mod tests {
         let package = dir.join("io.example.header-annotator");
         std::fs::create_dir_all(package.join("dist")).unwrap();
         std::fs::copy(source.join("plugin.toml"), package.join("plugin.toml")).unwrap();
-        std::fs::copy(source.join("dist/plugin.wasm"), package.join("dist/plugin.wasm")).unwrap();
+        std::fs::copy(
+            source.join("dist/plugin.wasm"),
+            package.join("dist/plugin.wasm"),
+        )
+        .unwrap();
         Some(dir)
     }
 
@@ -658,8 +664,7 @@ mod tests {
         assert!(loaded_ids().contains(&"io.example.header-annotator".to_string()));
         // The host metrics are registered by the same bootstrap the server
         // calls; without it the `spire_wasm_*` families do not exist.
-        crate::monitor::prometheus_exporter::metrics::init()
-            .expect("metrics should register");
+        crate::monitor::prometheus_exporter::metrics::init().expect("metrics should register");
 
         let cfg = config("header=x-test\nvalue=abc");
 
@@ -681,7 +686,10 @@ mod tests {
         };
         let denial = request_phase(&cfg, &mut phase).expect("request phase should not error");
         assert!(denial.is_none(), "the plugin must not short-circuit");
-        assert!(pool::live_slots() >= 1, "the instance should be pooled on this thread");
+        assert!(
+            pool::live_slots() >= 1,
+            "the instance should be pooled on this thread"
+        );
         assert_eq!(
             phase.headers.get("x-test").map(|v| v.to_str().unwrap()),
             Some("abc"),
@@ -755,11 +763,7 @@ mod tests {
         init(Some(dir)).expect("plugin system should initialise");
         match resolve("io.example.not-installed") {
             Ok(_) => panic!("an unknown plugin must not resolve"),
-            Err(err) => assert!(
-                err.0.contains("io.example.not-installed"),
-                "{}",
-                err.0
-            ),
+            Err(err) => assert!(err.0.contains("io.example.not-installed"), "{}", err.0),
         }
     }
 
@@ -785,7 +789,8 @@ mod tests {
             }
             let copied = std::fs::read_to_string(&copy).unwrap();
             assert_eq!(
-                copied, host_text,
+                copied,
+                host_text,
                 "{} has drifted from {}; copy the host file over it",
                 copy.display(),
                 host.display()
@@ -794,10 +799,8 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_manifest_is_rejected_before_compilation() {        let dir = std::env::temp_dir().join(format!(
-            "spire-broken-plugin-{}",
-            std::process::id()
-        ));
+    fn a_broken_manifest_is_rejected_before_compilation() {
+        let dir = std::env::temp_dir().join(format!("spire-broken-plugin-{}", std::process::id()));
         let package = dir.join("bad");
         std::fs::create_dir_all(&package).unwrap();
         std::fs::write(

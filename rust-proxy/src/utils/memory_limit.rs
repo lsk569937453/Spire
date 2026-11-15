@@ -86,14 +86,8 @@ fn parse_cgroup_v1_limit(content: &str) -> Option<u64> {
 
 /// `/proc/meminfo`: `MemTotal:       32612304 kB` (kB is 1024 bytes here).
 fn parse_meminfo_total(content: &str) -> Option<u64> {
-    let line = content
-        .lines()
-        .find(|l| l.starts_with("MemTotal:"))?;
-    let kb: u64 = line
-        .split_whitespace()
-        .nth(1)?
-        .parse()
-        .ok()?;
+    let line = content.lines().find(|l| l.starts_with("MemTotal:"))?;
+    let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
     Some(kb.saturating_mul(1024))
 }
 
@@ -127,7 +121,10 @@ mod tests {
 
     #[test]
     fn cgroup_v1_parses_real_limit() {
-        assert_eq!(parse_cgroup_v1_limit("2147483648\n"), Some(2 * 1024 * 1024 * 1024));
+        assert_eq!(
+            parse_cgroup_v1_limit("2147483648\n"),
+            Some(2 * 1024 * 1024 * 1024)
+        );
     }
 
     #[test]

@@ -30,12 +30,8 @@ pub const API_MINOR: u32 = 1;
 /// Capabilities a manifest may ask for. Anything else is a load-time error: a
 /// typo must not silently produce a plugin that runs with fewer powers than its
 /// author thinks.
-pub const KNOWN_CAPABILITIES: &[&str] = &[
-    "host.log",
-    "host.metrics",
-    "host.shared-data",
-    "host.clock",
-];
+pub const KNOWN_CAPABILITIES: &[&str] =
+    &["host.log", "host.metrics", "host.shared-data", "host.clock"];
 
 /// A `plugin.toml`, validated.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -102,12 +98,8 @@ pub struct PluginPackage {
 impl PluginPackage {
     pub fn load(dir: &Path) -> Result<Self, AppError> {
         let manifest_path = dir.join("plugin.toml");
-        let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
-            AppError(format!(
-                "plugin manifest {}: {e}",
-                manifest_path.display()
-            ))
-        })?;
+        let text = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| AppError(format!("plugin manifest {}: {e}", manifest_path.display())))?;
         let manifest: PluginManifest = toml::from_str(&text).map_err(|e| {
             AppError(format!(
                 "plugin manifest {} is not valid TOML: {e}",
@@ -120,9 +112,9 @@ impl PluginPackage {
         // `..` was rejected in `validate`, and `Path::join` never lets an
         // absolute `wasm` replace the base, but canonicalise anyway so a
         // symlinked subdirectory cannot point outside the package either.
-        let canonical_dir = dir.canonicalize().map_err(|e| {
-            AppError(format!("plugin directory {}: {e}", dir.display()))
-        })?;
+        let canonical_dir = dir
+            .canonicalize()
+            .map_err(|e| AppError(format!("plugin directory {}: {e}", dir.display())))?;
         let canonical_wasm = wasm_path.canonicalize().map_err(|e| {
             AppError(format!(
                 "plugin {} declares wasm = \"{}\", which cannot be opened: {e}",
@@ -146,20 +138,22 @@ impl PluginPackage {
 
         Ok(Self {
             manifest,
-                        wasm_path: canonical_wasm,
+            wasm_path: canonical_wasm,
         })
     }
 }
 
 impl PluginManifest {
     fn validate(&self, origin: &Path) -> Result<(), AppError> {
-        let bad = |msg: String| Err(AppError(format!("plugin manifest {}: {msg}", origin.display())));
+        let bad = |msg: String| {
+            Err(AppError(format!(
+                "plugin manifest {}: {msg}",
+                origin.display()
+            )))
+        };
 
         if !valid_id(&self.id) {
-            return bad(format!(
-                "id `{}` must match [a-z0-9][a-z0-9._-]*",
-                self.id
-            ));
+            return bad(format!("id `{}` must match [a-z0-9][a-z0-9._-]*", self.id));
         }
         if self.name.trim().is_empty() {
             return bad("name must not be empty".to_string());
@@ -177,14 +171,16 @@ impl PluginManifest {
             return bad("wasm must name the component file".to_string());
         }
         let wasm = Path::new(&self.wasm);
-        if wasm.is_absolute() || wasm.components().any(|c| {
-            matches!(
-                c,
-                std::path::Component::ParentDir
-                    | std::path::Component::RootDir
-                    | std::path::Component::Prefix(_)
-            )
-        }) {
+        if wasm.is_absolute()
+            || wasm.components().any(|c| {
+                matches!(
+                    c,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
             return bad(format!(
                 "wasm `{}` must be a relative path inside the package",
                 self.wasm

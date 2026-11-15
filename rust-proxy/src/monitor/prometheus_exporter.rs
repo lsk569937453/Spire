@@ -258,9 +258,7 @@ pub mod metrics {
 
     pub fn record_upstream_timeout(mapping_key: &str, route: &str) {
         if let Some(counter) = SPIRE_UPSTREAM_TIMEOUTS_TOTAL.get() {
-            counter
-                .with_label_values(&[mapping_key, route])
-                .inc();
+            counter.with_label_values(&[mapping_key, route]).inc();
         }
     }
 
@@ -288,11 +286,18 @@ pub mod metrics {
 
     pub fn upstream_in_flight_delta(mapping_key: &str, route: &str, endpoint: &str, delta: i64) {
         if let Some(gauge) = SPIRE_UPSTREAM_IN_FLIGHT.get() {
-            gauge.with_label_values(&[mapping_key, route, endpoint]).add(delta);
+            gauge
+                .with_label_values(&[mapping_key, route, endpoint])
+                .add(delta);
         }
     }
 
-    pub fn set_upstream_concurrency_limit(mapping_key: &str, route: &str, endpoint: &str, limit: i64) {
+    pub fn set_upstream_concurrency_limit(
+        mapping_key: &str,
+        route: &str,
+        endpoint: &str,
+        limit: i64,
+    ) {
         if let Some(gauge) = SPIRE_UPSTREAM_CONCURRENCY_LIMIT.get() {
             gauge
                 .with_label_values(&[mapping_key, route, endpoint])
@@ -324,9 +329,7 @@ pub mod metrics {
     #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
     pub fn observe_wasm_call(plugin: &str, phase: &str, seconds: f64, outcome: &str) {
         if let Some(counter) = SPIRE_WASM_CALLS_TOTAL.get() {
-            counter
-                .with_label_values(&[plugin, phase, outcome])
-                .inc();
+            counter.with_label_values(&[plugin, phase, outcome]).inc();
         }
         if let Some(histogram) = SPIRE_WASM_CALL_DURATION_SECONDS.get() {
             histogram

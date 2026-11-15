@@ -57,11 +57,11 @@ impl Slot {
         }));
         match result {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => debug!("wasm: stop() failed for {}: {e}", self.store.data().plugin_id),
-            Err(_) => warn!(
-                "wasm: stop() panicked for {}",
+            Ok(Err(e)) => debug!(
+                "wasm: stop() failed for {}: {e}",
                 self.store.data().plugin_id
             ),
+            Err(_) => warn!("wasm: stop() panicked for {}", self.store.data().plugin_id),
         }
     }
 }

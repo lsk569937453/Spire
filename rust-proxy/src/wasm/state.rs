@@ -170,7 +170,7 @@ impl bindings::spire::filter::host::Host for StoreData {
     ) -> Result<(), wit::Error> {
         self.require(CAP_METRICS)?;
         let metric = self.counters.counter(&self.plugin_id, &name, &labels)?;
-        
+
         let values = PluginMetrics::label_values(&labels);
         metric.with_label_values(&values).inc_by(delta as f64);
         Ok(())
@@ -188,9 +188,7 @@ impl bindings::spire::filter::host::Host for StoreData {
                 "histogram `{name}`: value is not finite"
             )));
         }
-        let metric = self
-            .counters
-            .histogram(&self.plugin_id, &name, &labels)?;
+        let metric = self.counters.histogram(&self.plugin_id, &name, &labels)?;
         let values = PluginMetrics::label_values(&labels);
         metric.with_label_values(&values).observe(value_f64);
         Ok(())
@@ -210,7 +208,9 @@ impl bindings::spire::filter::host::Host for StoreData {
         value: Vec<u8>,
     ) -> Result<(), wit::Error> {
         self.require(CAP_SHARED_DATA)?;
-        self.shared.set(&namespace, &key, value).map_err(wit::Error::Invalid)
+        self.shared
+            .set(&namespace, &key, value)
+            .map_err(wit::Error::Invalid)
     }
 
     fn now_millis(&mut self) -> u64 {
@@ -349,10 +349,7 @@ impl PluginMetrics {
                 "metric name must be 1..=100 characters".to_string(),
             ));
         }
-        if !name
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_lowercase())
+        if !name.chars().next().is_some_and(|c| c.is_ascii_lowercase())
             || !name
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
@@ -591,23 +588,22 @@ mod tests {
     }
 
     #[test]
-    fn capability_gating_reports_denied() {        let data = StoreData::new(
+    fn capability_gating_reports_denied() {
+        let data = StoreData::new(
             "io.example.x".to_string(),
             Arc::new(vec![CAP_LOG.to_string()]),
             Arc::from(""),
-            PluginLimits::from_config(
-                &crate::middleware::wasm_plugin_config::WasmPluginConfig {
-                    plugin: "io.example.x".to_string(),
-                    config: None,
-                    fail: Default::default(),
-                    body: Default::default(),
-                    timeout_ms: 5,
-                    fuel: 1_000_000,
-                    max_memory_bytes: 1024 * 1024,
-                    max_body_bytes: 1024,
-                    max_output_bytes: 1024,
-                },
-            ),
+            PluginLimits::from_config(&crate::middleware::wasm_plugin_config::WasmPluginConfig {
+                plugin: "io.example.x".to_string(),
+                config: None,
+                fail: Default::default(),
+                body: Default::default(),
+                timeout_ms: 5,
+                fuel: 1_000_000,
+                max_memory_bytes: 1024 * 1024,
+                max_body_bytes: 1024,
+                max_output_bytes: 1024,
+            }),
             shared_data().clone(),
             plugin_metrics().clone(),
         );

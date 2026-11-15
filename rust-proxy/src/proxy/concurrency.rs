@@ -110,9 +110,7 @@ impl AcquireError {
         match self {
             AcquireError::Rejected => "upstream concurrency limit exhausted",
             AcquireError::TimedOut => "upstream concurrency queue wait timed out",
-            AcquireError::GlobalBudgetExhausted => {
-                "global concurrency memory budget exhausted"
-            }
+            AcquireError::GlobalBudgetExhausted => "global concurrency memory budget exhausted",
         }
     }
 }
@@ -264,7 +262,10 @@ fn limiter_for(key: &str, cfg: &ConcurrencyConfig) -> Arc<UpstreamLimiter> {
     {
         return existing.clone();
     }
-    let mut map = registry().limiters.write().expect("limiter registry lock poisoned");
+    let mut map = registry()
+        .limiters
+        .write()
+        .expect("limiter registry lock poisoned");
     // Another thread may have won the write race while we upgraded the lock.
     if let Some(existing) = map.get(key)
         && &existing.cfg == cfg
@@ -336,7 +337,11 @@ pub async fn acquire_weighted(
                 "[ConcurrencyLimit] global memory budget exhausted (weight {weight}, endpoint {key}, route {route})"
             );
             metrics::record_concurrency_rejected(mapping_key, route, &key);
-            Err(AppError(format!("{}: {}", AcquireError::GlobalBudgetExhausted.reason(), key)))
+            Err(AppError(format!(
+                "{}: {}",
+                AcquireError::GlobalBudgetExhausted.reason(),
+                key
+            )))
         }
     }
 }
@@ -363,7 +368,10 @@ mod tests {
             endpoint_key("https://api.example.com"),
             "https://api.example.com"
         );
-        assert_eq!(endpoint_key("grpc://10.0.0.1:50051"), "grpc://10.0.0.1:50051");
+        assert_eq!(
+            endpoint_key("grpc://10.0.0.1:50051"),
+            "grpc://10.0.0.1:50051"
+        );
         // Unparseable endpoints fall back to the raw string, still bounded.
         assert_eq!(endpoint_key("not a url"), "not a url");
     }
@@ -499,9 +507,11 @@ mod tests {
 
         drop(held);
         // After release, weight fits again.
-        assert!(acquire_weighted(&key, &route_cfg, 1, "test", "weighted-route")
-            .await
-            .is_ok());
+        assert!(
+            acquire_weighted(&key, &route_cfg, 1, "test", "weighted-route")
+                .await
+                .is_ok()
+        );
 
         // Restore the conservative budget for any concurrently running test.
         init_derived_limits(None);

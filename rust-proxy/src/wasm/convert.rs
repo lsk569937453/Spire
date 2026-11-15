@@ -70,9 +70,12 @@ pub fn local_reply_to_denial(reply: wit::LocalReply, max_output: u64) -> Result<
     let status = StatusCode::from_u16(reply.status)
         .map_err(|e| format!("invalid local reply status {}: {e}", reply.status))?;
     let mut headers = HeaderMap::new();
-    apply_header_ops(&mut headers, reply.headers.into_iter().map(wit::HeaderOp::Set).collect())?;
-    let body = String::from_utf8(reply.body)
-        .map_err(|e| format!("local reply body is not UTF-8: {e}"))?;
+    apply_header_ops(
+        &mut headers,
+        reply.headers.into_iter().map(wit::HeaderOp::Set).collect(),
+    )?;
+    let body =
+        String::from_utf8(reply.body).map_err(|e| format!("local reply body is not UTF-8: {e}"))?;
     Ok(Denial {
         status,
         headers,

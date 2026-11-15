@@ -1615,13 +1615,8 @@ mod tests {
             "kind: circuit_breaker\nfailure_threshold: 1.0\nconsecutive_failures: 3\ncooldown: 60s\nhalf_open_requests: 1\nrequest_volume_threshold: 5",
         )
         .unwrap();
-        let shared_config = upstream_route_config(
-            upstream,
-            80,
-            None,
-            Some(vec![breaker]),
-            "cb-timeout-route",
-        );
+        let shared_config =
+            upstream_route_config(upstream, 80, None, Some(vec![breaker]), "cb-timeout-route");
 
         for _ in 0..3 {
             let res = proxy_get(&shared_config, "/slow", "test").await.unwrap();
@@ -1657,8 +1652,7 @@ mod tests {
         );
 
         let cfg_first = shared_config.clone();
-        let first =
-            tokio::spawn(async move { proxy_get(&cfg_first, "/slow", "test").await });
+        let first = tokio::spawn(async move { proxy_get(&cfg_first, "/slow", "test").await });
         // Let the first request acquire the permit and park on the upstream.
         tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -1668,8 +1662,9 @@ mod tests {
         assert!(second.headers().contains_key(header::RETRY_AFTER));
 
         let endpoint = concurrency::endpoint_key(&format!("http://{upstream}"));
-        if let Some(counter) = crate::monitor::prometheus_exporter::metrics::SPIRE_UPSTREAM_CONCURRENCY_REJECTED_TOTAL
-            .get()
+        if let Some(counter) =
+            crate::monitor::prometheus_exporter::metrics::SPIRE_UPSTREAM_CONCURRENCY_REJECTED_TOTAL
+                .get()
         {
             assert!(
                 counter

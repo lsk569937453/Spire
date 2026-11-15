@@ -18,11 +18,11 @@ use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 
-use wasmtime::component::Component;
-use wasmtime::component::Linker;
 use wasmtime::Config;
 use wasmtime::Engine;
 use wasmtime::Store;
+use wasmtime::component::Component;
+use wasmtime::component::Linker;
 
 use crate::vojo::app_error::AppError;
 use crate::wasm::bindings;
@@ -116,7 +116,10 @@ impl PluginEngine {
         // The store starts with a deadline in the past (`StoreData::new`), so
         // arm the instantiation budget *before* instantiating, otherwise the
         // first epoch tick would interrupt the instantiation itself.
-        store.data().deadline.set(Instant::now() + INSTANTIATION_BUDGET);
+        store
+            .data()
+            .deadline
+            .set(Instant::now() + INSTANTIATION_BUDGET);
         store.set_epoch_deadline(1);
         store.epoch_deadline_callback(|hook| {
             if Instant::now() >= hook.data().deadline.get() {
@@ -159,18 +162,13 @@ fn spawn_epoch_ticker(engine: wasmtime::EngineWeak) {
 /// human-readable message for the log.
 pub fn classify_error(error: &wasmtime::Error) -> (&'static str, String) {
     match error.downcast_ref::<wasmtime::Trap>() {
-        Some(wasmtime::Trap::OutOfFuel) => (
-            "out_of_fuel",
-            "exhausted its CPU budget".to_string(),
-        ),
-        Some(wasmtime::Trap::Interrupt) => (
-            "timeout",
-            "was cancelled by the epoch deadline".to_string(),
-        ),
-        Some(wasmtime::Trap::UnreachableCodeReached) => (
-            "panic",
-            "crashed (unreachable / panic)".to_string(),
-        ),
+        Some(wasmtime::Trap::OutOfFuel) => ("out_of_fuel", "exhausted its CPU budget".to_string()),
+        Some(wasmtime::Trap::Interrupt) => {
+            ("timeout", "was cancelled by the epoch deadline".to_string())
+        }
+        Some(wasmtime::Trap::UnreachableCodeReached) => {
+            ("panic", "crashed (unreachable / panic)".to_string())
+        }
         Some(trap) => ("trap", format!("trapped: {trap}")),
         None => ("error", format!("{error:#}")),
     }

@@ -133,10 +133,7 @@ pub trait Middleware: Send + Sync {
     /// middlewares that genuinely need method/authority/path — today the WASM
     /// plugins — override this, and the pipeline only builds the (owned) phase
     /// when at least one such middleware is configured.
-    fn on_request_phase(
-        &self,
-        _phase: &mut RequestPhase<'_>,
-    ) -> Result<Option<Denial>, AppError> {
+    fn on_request_phase(&self, _phase: &mut RequestPhase<'_>) -> Result<Option<Denial>, AppError> {
         Ok(None)
     }
 
@@ -297,20 +294,14 @@ impl Middleware for MiddleWares {
         }
     }
 
-    fn on_request_phase(
-        &self,
-        phase: &mut RequestPhase<'_>,
-    ) -> Result<Option<Denial>, AppError> {
+    fn on_request_phase(&self, phase: &mut RequestPhase<'_>) -> Result<Option<Denial>, AppError> {
         match self {
             MiddleWares::Wasm(cfg) => wasm_plugin::request_phase(cfg, phase),
             _ => Ok(None),
         }
     }
 
-    fn on_response_phase(
-        &self,
-        phase: &mut ResponsePhase<'_>,
-    ) -> Result<Option<Denial>, AppError> {
+    fn on_response_phase(&self, phase: &mut ResponsePhase<'_>) -> Result<Option<Denial>, AppError> {
         match self {
             MiddleWares::Wasm(cfg) => wasm_plugin::response_phase(cfg, phase),
             _ => Ok(None),

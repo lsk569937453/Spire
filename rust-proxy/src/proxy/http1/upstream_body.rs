@@ -86,10 +86,7 @@ impl TimedBody {
                         "[UpstreamBody] idle timeout after {:?} waiting for the next body frame from {} (route {})",
                         this.idle_timeout, this.labels.endpoint, this.labels.route
                     );
-                    metrics::record_upstream_timeout(
-                        &this.labels.mapping_key,
-                        &this.labels.route,
-                    );
+                    metrics::record_upstream_timeout(&this.labels.mapping_key, &this.labels.route);
                     Poll::Ready(Some(Err(AppError(
                         "upstream body idle timeout exceeded".to_string(),
                     ))))

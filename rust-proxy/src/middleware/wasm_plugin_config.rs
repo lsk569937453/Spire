@@ -196,8 +196,7 @@ mod tests {
 
     #[test]
     fn rejects_impossible_budgets() {
-        let mut cfg: WasmPluginConfig =
-            serde_yaml::from_str("plugin: io.example.x").unwrap();
+        let mut cfg: WasmPluginConfig = serde_yaml::from_str("plugin: io.example.x").unwrap();
         cfg.timeout_ms = 0;
         assert!(cfg.validate().is_err());
         cfg.timeout_ms = 5;

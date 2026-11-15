@@ -93,7 +93,8 @@ fn validate_wasm_middlewares(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn format_yaml_error(error: &serde_yaml::Error) -> String {    let err_str = error.to_string();
+fn format_yaml_error(error: &serde_yaml::Error) -> String {
+    let err_str = error.to_string();
     // Clean up the error message for better readability
     if let Some(line_col) = error.location() {
         format!(
