@@ -130,6 +130,41 @@ async fn read_body(req: Request) -> Result<bytes::Bytes, AppError> {
     Ok(axum::body::to_bytes(body, MAX_ADMIN_BODY_BYTES).await?)
 }
 
+/// Rejects a configuration that references a WASM plugin this process cannot
+/// run, *before* it is committed. A control-plane write that lands a route the
+/// data plane cannot serve would otherwise look successful and fail every
+/// request hitting that route.
+fn validate_plugins<'a, I>(route_id: &str, middlewares: I) -> Result<(), AppError>
+where
+    I: Iterator<Item = &'a crate::middleware::middlewares::MiddleWares>,
+{
+    for middleware in middlewares {
+        if let crate::middleware::middlewares::MiddleWares::Wasm(cfg) = middleware {
+            cfg.validate()
+                .map_err(|e| AppError(format!("route {route_id}: {e}")))?;
+            #[cfg(feature = "wasm")]
+            crate::wasm::resolve(&cfg.plugin).map_err(|e| AppError(format!("route {route_id}: {}", e.0)))?;
+            #[cfg(not(feature = "wasm"))]
+            return Err(AppError(format!(
+                "route {route_id} uses `kind: wasm`, but this build has no WASM plugin support; \
+                 rebuild with `--features wasm`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_service_plugins(
+    service: &crate::vojo::app_config::ApiService,
+) -> Result<(), AppError> {
+    for route in &service.route_configs {
+        if let Some(middlewares) = &route.middlewares {
+            validate_plugins(&route.route_id, middlewares.iter())?;
+        }
+    }
+    Ok(())
+}
+
 async fn post_app_config(
     State(shared_config): State<SharedConfig>,
     req: Request,
@@ -137,6 +172,7 @@ async fn post_app_config(
     let bytes = read_body(req).await?;
     let api_service: ApiService = serde_yaml::from_slice(&bytes)?;
     let port = api_service.listen_port;
+    validate_service_plugins(&api_service)?;
 
     let app_config = {
         let mut config = shared_config.shared_data.write()?;
@@ -203,6 +239,9 @@ async fn put_route(
 ) -> Result<impl IntoResponse, AppError> {
     let bytes = read_body(req).await?;
     let route: RouteConfig = serde_yaml::from_slice(&bytes)?;
+    if let Some(middlewares) = &route.middlewares {
+        validate_plugins(&route.route_id, middlewares.iter())?;
+    }
 
     let app_config = {
         let mut config = shared_config.shared_data.write()?;
@@ -230,6 +269,21 @@ async fn reload_config(
 ) -> Result<impl IntoResponse, AppError> {
     let bytes = read_body(req).await?;
     let new_config: AppConfig = serde_yaml::from_slice(&bytes)?;
+
+    // Recompile the plugin directory first (a plugin may have been rebuilt on
+    // disk) and validate every reference against it before the new
+    // configuration is committed.
+    #[cfg(feature = "wasm")]
+    {
+        if let Err(e) = crate::wasm::reload() {
+            warn!("wasm: plugin reload failed, keeping the previous generation: {e}");
+        }
+        crate::wasm::validate_references(&new_config)?;
+    }
+    #[cfg(not(feature = "wasm"))]
+    for service in new_config.api_service_config.values() {
+        validate_service_plugins(service)?;
+    }
 
     let app_config = {
         let mut config = shared_config.shared_data.write()?;

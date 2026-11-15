@@ -41,6 +41,13 @@ pub mod metrics {
     pub static SPIRE_MEMORY_LIMIT_BYTES: OnceLock<Gauge> = OnceLock::new();
     /// Total permits in the process-wide memory guard (the OOM backstop).
     pub static SPIRE_UPSTREAM_GLOBAL_PERMITS: OnceLock<Gauge> = OnceLock::new();
+    /// WASM plugin callbacks, by plugin, phase and outcome (`ok`, `trap`,
+    /// `out_of_fuel`, `timeout`, `panic`, `error`).
+    pub static SPIRE_WASM_CALLS_TOTAL: OnceLock<CounterVec> = OnceLock::new();
+    /// Wall-clock duration of one plugin callback.
+    pub static SPIRE_WASM_CALL_DURATION_SECONDS: OnceLock<HistogramVec> = OnceLock::new();
+    /// Traps, by plugin and low-cardinality reason.
+    pub static SPIRE_WASM_TRAPS_TOTAL: OnceLock<CounterVec> = OnceLock::new();
 
     // --------------------------
     // Unified initialization
@@ -203,6 +210,43 @@ pub mod metrics {
             }
             Err(e) => warn!("Failed to register spire_upstream_global_permits: {e}"),
         }
+
+        match register_counter_vec!(
+            opts!(
+                "spire_wasm_calls_total",
+                "WASM plugin callbacks by plugin, phase and outcome."
+            ),
+            &["plugin", "phase", "outcome"]
+        ) {
+            Ok(metric) => {
+                SPIRE_WASM_CALLS_TOTAL.get_or_init(|| metric);
+            }
+            Err(e) => warn!("Failed to register spire_wasm_calls_total: {e}"),
+        }
+
+        match register_histogram_vec!(
+            "spire_wasm_call_duration_seconds",
+            "Wall-clock duration of a WASM plugin callback.",
+            &["plugin", "phase"]
+        ) {
+            Ok(metric) => {
+                SPIRE_WASM_CALL_DURATION_SECONDS.get_or_init(|| metric);
+            }
+            Err(e) => warn!("Failed to register spire_wasm_call_duration_seconds: {e}"),
+        }
+
+        match register_counter_vec!(
+            opts!(
+                "spire_wasm_traps_total",
+                "WASM plugin traps by plugin and reason (out_of_fuel, timeout, panic, trap)."
+            ),
+            &["plugin", "reason"]
+        ) {
+            Ok(metric) => {
+                SPIRE_WASM_TRAPS_TOTAL.get_or_init(|| metric);
+            }
+            Err(e) => warn!("Failed to register spire_wasm_traps_total: {e}"),
+        }
         Ok(())
     }
 
@@ -271,6 +315,30 @@ pub mod metrics {
     pub fn set_upstream_global_permits(permits: f64) {
         if let Some(gauge) = SPIRE_UPSTREAM_GLOBAL_PERMITS.get() {
             gauge.set(permits);
+        }
+    }
+
+    /// One plugin callback: count it by outcome and record how long it took.
+    /// The plugin id is a bounded label (it comes from a manifest, not from a
+    /// request), so this cannot grow per URL.
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+    pub fn observe_wasm_call(plugin: &str, phase: &str, seconds: f64, outcome: &str) {
+        if let Some(counter) = SPIRE_WASM_CALLS_TOTAL.get() {
+            counter
+                .with_label_values(&[plugin, phase, outcome])
+                .inc();
+        }
+        if let Some(histogram) = SPIRE_WASM_CALL_DURATION_SECONDS.get() {
+            histogram
+                .with_label_values(&[plugin, phase])
+                .observe(seconds);
+        }
+    }
+
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+    pub fn record_wasm_trap(plugin: &str, reason: &str) {
+        if let Some(counter) = SPIRE_WASM_TRAPS_TOTAL.get() {
+            counter.with_label_values(&[plugin, reason]).inc();
         }
     }
 }

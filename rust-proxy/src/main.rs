@@ -9,6 +9,8 @@ mod monitor;
 mod proxy;
 mod utils;
 mod vojo;
+#[cfg(feature = "wasm")]
+mod wasm;
 use crate::app::run::main_with_error;
 #[macro_use]
 extern crate clap;

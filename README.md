@@ -26,6 +26,7 @@ Spire is a high-performance proxy and gateway system written in Rust, designed t
 - **TLS Support** - HTTPS/TLS encrypted connections, ACME auto certificate acquisition
 - **Monitoring Metrics** - Prometheus metrics export
 - **Dynamic Configuration** - Hot reload support, with an authenticated control plane API
+- **WebAssembly Plugins** - Per-route L7 logic in a sandboxed WebAssembly component (optional `wasm` feature); see [docs/plugin-system.md](./docs/plugin-system.md)
 
 ## Feature Details
 

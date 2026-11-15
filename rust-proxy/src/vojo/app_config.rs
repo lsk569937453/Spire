@@ -68,6 +68,12 @@ pub struct AppConfig {
         serialize_with = "serialize_api_service_config"
     )]
     pub api_service_config: HashMap<i32, ApiService>,
+    /// Directory scanned for WebAssembly plugin packages (`<dir>/<id>/plugin.toml`).
+    /// Defaults to `~/.spire/plugins`. Only consulted by builds with the `wasm`
+    /// feature; a `kind: wasm` middleware in a build without it is rejected at
+    /// load time, never ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_dir: Option<String>,
     /// Parsed form of `trusted_proxies`, built once per configuration.
     #[serde(skip)]
     pub(crate) trusted_proxy_nets: OnceLock<Vec<IpNet>>,
@@ -93,6 +99,7 @@ impl core::fmt::Debug for AppConfig {
                 &self.upstream_concurrency_limit,
             )
             .field("servers", &self.api_service_config)
+            .field("plugins_dir", &self.plugins_dir)
             .finish()
     }
 }
@@ -111,6 +118,7 @@ impl Default for AppConfig {
             trusted_proxies: None,
             log_level: None,
             api_service_config: Default::default(),
+            plugins_dir: None,
             acme: AcmeConfig::default(),
             upstream_timeout_ms: Some(5000),
             // None = derive from the detected memory limit at startup.

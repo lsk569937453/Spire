@@ -24,6 +24,11 @@ path = "src/main.rs"
 [features]
 default = []
 pprof = ["dep:pprof"]
+# WASM plugin system (see docs/plugin-system.md). Off by default: it pulls in
+# Cranelift (~15 MB of code) and a route config that uses `kind: wasm` is
+# rejected at load time when this feature is missing, so a build can never end
+# up silently ignoring an operator's plugin configuration.
+wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:toml"]
 
 [dependencies]
 
@@ -101,6 +106,7 @@ time = "0.3.55"
 tokio = { version = "1.53.1", features = ["full", "tracing"] }
 tokio-rustls = { version = "0.26.4", default-features = false }
 tokio-util = { version = "0.7.19", features = ["full", "time"] }
+toml = { version = "1.2.1", optional = true }
 tonic = "0.14.6"
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.0", features = ["full"] }
@@ -114,6 +120,8 @@ uuid = { version = "1.26.0", features = [
     "fast-rng",
     "macro-diagnostics",
 ] }
+wasmtime = { version = "50.0.1", default-features = false, features = ["component-model", "cranelift", "runtime", "std", "parallel-compilation", "wit-parser", "backtrace"], optional = true }
+wasmtime-wasi = { version = "50.0.1", default-features = false, features = ["p2"], optional = true }
 webpki-roots = "1.0.9"
 x509-parser = "0.18.1"
 zstd = "0.13.3"

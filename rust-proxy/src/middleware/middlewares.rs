@@ -8,6 +8,8 @@ use crate::middleware::cors_config::CorsConfig;
 use crate::middleware::ip_ban::IpBan;
 use crate::middleware::rate_limit::Ratelimit;
 use crate::middleware::request_headers::RequestHeaders;
+use crate::middleware::wasm_plugin;
+use crate::middleware::wasm_plugin_config::WasmPluginConfig;
 use crate::vojo::app_error::AppError;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -68,6 +70,11 @@ pub enum MiddleWares {
     RequestHeaders(RequestHeaders),
     #[serde(rename = "compression")]
     Compression(Compression),
+    /// A WebAssembly data-plane plugin. The variant carries *configuration*
+    /// only; the compiled component and its instances live in
+    /// [`crate::wasm`], keyed by the plugin id and this config.
+    #[serde(rename = "wasm")]
+    Wasm(WasmPluginConfig),
 }
 impl PartialEq for MiddleWares {
     fn eq(&self, other: &Self) -> bool {
@@ -84,6 +91,7 @@ impl PartialEq for MiddleWares {
 
             (Self::RequestHeaders(a), Self::RequestHeaders(b)) => a == b,
             (Self::Compression(a), Self::Compression(b)) => a == b,
+            (Self::Wasm(a), Self::Wasm(b)) => a == b,
             _ => false,
         }
     }
@@ -117,6 +125,35 @@ pub trait Middleware: Send + Sync {
         _response_result: &Result<Response<BoxBody<Bytes, AppError>>, AppError>,
     ) {
     }
+
+    /// Request-phase hook that sees the whole request line, not just headers.
+    ///
+    /// Additive on purpose: `handle_request` predates it and stays the cheap
+    /// header-only path used by the built-in rewriting middlewares. Only
+    /// middlewares that genuinely need method/authority/path — today the WASM
+    /// plugins — override this, and the pipeline only builds the (owned) phase
+    /// when at least one such middleware is configured.
+    fn on_request_phase(
+        &self,
+        _phase: &mut RequestPhase<'_>,
+    ) -> Result<Option<Denial>, AppError> {
+        Ok(None)
+    }
+
+    /// Response-phase hook. Runs *before* the built-in response middlewares
+    /// (`cors`, `rewrite_headers`, `compression`), so a plugin sees the
+    /// upstream's response as the upstream sent it and its mutations are still
+    /// subject to those middlewares.
+    fn on_response_phase(
+        &self,
+        _phase: &mut ResponsePhase<'_>,
+    ) -> Result<Option<Denial>, AppError> {
+        Ok(None)
+    }
+
+    /// End-of-exchange hook (access log / statistics). Must never fail the
+    /// request: the client's response is already committed.
+    fn on_log_phase(&self, _summary: &ExchangeSummary<'_>) {}
 }
 impl Eq for MiddleWares {}
 #[derive(Debug, Clone)]
@@ -145,6 +182,59 @@ impl CheckResult {
         }
     }
 }
+/// The inbound request, as a plugin sees it once the route has been chosen.
+///
+/// Owned strings, not `&str`: the pipeline only builds this when a route
+/// actually configures a WASM plugin, so the allocations are off the hot path
+/// for every other request, and the type stays free of `hyper` lifetime
+/// plumbing.
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+pub struct RequestPhase<'a> {
+    pub method: String,
+    pub scheme: String,
+    pub authority: String,
+    pub path: String,
+    pub query: String,
+    pub headers: &'a mut HeaderMap,
+    /// Resolved client address (after `trusted_proxies`), never the raw peer.
+    pub client_addr: SocketAddr,
+    pub route_id: &'a str,
+    pub listener_port: i32,
+    pub request_id: &'a str,
+}
+
+/// The upstream response, before Spire's own response middlewares run.
+///
+/// Deliberately narrow: the WIT's `on-response-headers` carries the response
+/// and nothing else, so a plugin cannot correlate a response with the request
+/// headers. That is an ABI gap to close (M2) rather than a field to carry
+/// around unused here.
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+pub struct ResponsePhase<'a> {
+    pub route_id: &'a str,
+    pub request_id: &'a str,
+    pub response: &'a mut Response<BoxBody<Bytes, AppError>>,
+}
+
+/// End-of-exchange facts for `on-log`. Computed by the pipeline so a plugin
+/// cannot disagree with the access log about what happened.
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+pub struct ExchangeSummary<'a> {
+    pub request_id: &'a str,
+    pub route_id: &'a str,
+    pub method: &'a str,
+    pub path: &'a str,
+    pub status: u16,
+    /// True when the gateway itself produced the response (timeout,
+    /// concurrency limit, local reply) rather than the upstream.
+    pub local: bool,
+    pub total_millis: u64,
+    pub upstream_millis: Option<u64>,
+    /// Unknown while a body streams; `None` rather than a misleading zero.
+    pub request_bytes: Option<u64>,
+    pub response_bytes: Option<u64>,
+}
+
 #[async_trait]
 impl Middleware for MiddleWares {
     fn handle_request(
@@ -204,6 +294,32 @@ impl Middleware for MiddleWares {
     ) {
         if let MiddleWares::CircuitBreaker(mw) = self {
             mw.record_outcome(response_result)
+        }
+    }
+
+    fn on_request_phase(
+        &self,
+        phase: &mut RequestPhase<'_>,
+    ) -> Result<Option<Denial>, AppError> {
+        match self {
+            MiddleWares::Wasm(cfg) => wasm_plugin::request_phase(cfg, phase),
+            _ => Ok(None),
+        }
+    }
+
+    fn on_response_phase(
+        &self,
+        phase: &mut ResponsePhase<'_>,
+    ) -> Result<Option<Denial>, AppError> {
+        match self {
+            MiddleWares::Wasm(cfg) => wasm_plugin::response_phase(cfg, phase),
+            _ => Ok(None),
+        }
+    }
+
+    fn on_log_phase(&self, summary: &ExchangeSummary<'_>) {
+        if let MiddleWares::Wasm(cfg) = self {
+            wasm_plugin::log_phase(cfg, summary);
         }
     }
 }

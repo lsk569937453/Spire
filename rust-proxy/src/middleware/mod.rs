@@ -9,3 +9,5 @@ pub mod ip_ban;
 pub mod middlewares;
 pub mod rate_limit;
 pub mod request_headers;
+pub mod wasm_plugin;
+pub mod wasm_plugin_config;

@@ -73,7 +73,10 @@ pub async fn main_with_error() -> Result<(), AppError> {
                 info!("'validate' command detected");
                 if let Err(e) = handle_validate_command(args).await {
                     error!("Validation failed: {e}");
-                    // Exit with error code 1 for invalid config
+                    // A CLI validation failure must be visible on the console,
+                    // not only in the log file: this is the command CI runs.
+                    // Exit with error code 1 for invalid config.
+                    eprintln!("[ERROR] {e}");
                     std::process::exit(1);
                 }
                 // Exit with success code
@@ -158,11 +161,48 @@ async fn run_app(
     app_config_service::init(shared_config.clone()).await?;
     info!("Configuration service initialized.");
 
+    // WASM plugins are compiled before the listeners start: a compile must
+    // delay startup, never a request. The directory is process-wide and fixed
+    // for the lifetime of the process (changing it requires a restart); what
+    // changes on reload is which packages it contains.
+    #[cfg(feature = "wasm")]
+    {
+        let plugins_dir = shared_config
+            .shared_data
+            .read()?
+            .plugins_dir
+            .clone()
+            .map(std::path::PathBuf::from);
+        crate::wasm::init(plugins_dir)?;
+        let loaded = crate::wasm::loaded_ids();
+        if loaded.is_empty() {
+            info!(
+                "WASM plugin system ready (no plugins in {})",
+                crate::wasm::default_dir().display()
+            );
+        } else {
+            info!(
+                "WASM plugin system ready: {} plugin(s) loaded: {}",
+                loaded.len(),
+                loaded.join(", ")
+            );
+        }
+        {
+            let config = shared_config.shared_data.read()?;
+            crate::wasm::validate_references(&config)?;
+        }
+    }
+
     info!("Starting control plane on port {admin_port}...");
     start_control_plane(admin_port, shared_config.clone(), shutdown_signal()).await?;
 
     // The control plane has stopped: ask every proxy listener to stop as well.
     shutdown_listeners(&shared_config).await;
+
+    // Tear down this thread's plugin instances, so `lifecycle.stop` runs while
+    // the runtime is still healthy instead of during process teardown.
+    #[cfg(feature = "wasm")]
+    crate::wasm::shutdown();
 
     info!("Application shut down gracefully. ");
     Ok(())

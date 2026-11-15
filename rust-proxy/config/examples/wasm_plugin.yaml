@@ -1,0 +1,62 @@
+# =============================================================================
+# File: wasm_plugin.yaml
+# Description: Run a WebAssembly plugin on every request of a route.
+# =============================================================================
+# Requirements
+# ------------
+# 1. A build with the plugin system enabled:
+#
+#      cargo build --release --features wasm
+#
+# 2. The plugin package installed in the plugins directory
+#    (`<plugins_dir>/<id>/plugin.toml`, default `~/.spire/plugins`):
+#
+#      ~/.spire/plugins/io.example.header-annotator/
+#      ├── plugin.toml
+#      └── dist/plugin.wasm
+#
+# 3. Build the reference plugin (see plugins/header-annotator):
+#
+#      rustup target add wasm32-wasip2
+#      cd plugins/header-annotator && cargo build --release --target wasm32-wasip2
+#
+# `kind: wasm` is parsed by every build. A binary compiled *without*
+# `--features wasm` rejects this file with an explanation instead of silently
+# ignoring the plugin — a gateway must never quietly drop a security control an
+# operator configured.
+
+# Optional. Defaults to ~/.spire/plugins. Changing it requires a restart.
+# plugins_dir: /etc/spire/plugins
+
+servers:
+  - listen: 8086
+    protocol: http
+    routes:
+      - route_id: annotated_route
+        matchers:
+          - kind: path
+            value: /api
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          # Order matters within the plugin group: they run in the order they
+          # appear here, and all of them run before Spire's own response
+          # middlewares (cors / rewrite_headers / compression).
+          - kind: wasm
+            # Manifest id, not a path: the gateway resolves it against the
+            # plugins directory and refuses to start if it is unknown.
+            plugin: io.example.header-annotator
+            # Opaque to the gateway; handed to the plugin's `configure` once.
+            # `key=value` lines here because that is what the reference plugin
+            # parses — any format works.
+            config: |
+              header=x-served-by
+              value=edge-a
+            # open  = a failing plugin is logged and skipped (default)
+            # closed = a failing plugin answers 503 (use for authz / WAF)
+            fail: open
+            # headers_only (default) never copies a body through the sandbox.
+            body: headers_only
+            # Budgets are operator-controlled; a manifest cannot raise them.
+            timeout_ms: 5
+            fuel: 2000000
+            max_memory_bytes: 16777216

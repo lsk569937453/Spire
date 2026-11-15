@@ -26,13 +26,18 @@ pub async fn handle_validate_command(args: ValidateArgs) -> Result<(), String> {
     }
 
     // Parse and deserialize the YAML
-    let _config: AppConfig = serde_yaml::from_str(&content).map_err(|e| {
+    let config: AppConfig = serde_yaml::from_str(&content).map_err(|e| {
         format!(
             "Invalid YAML syntax in '{}':\n  {}",
             config_path,
             format_yaml_error(&e)
         )
     })?;
+
+    // `kind: wasm` middlewares need a build that can run them and, for the
+    // plugin itself, a package on disk. Reporting that here means `spire
+    // validate` fails in CI instead of the data plane failing per request.
+    validate_wasm_middlewares(&config)?;
 
     if args.verbose {
         eprintln!("Configuration parsed successfully!");
@@ -43,8 +48,52 @@ pub async fn handle_validate_command(args: ValidateArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn format_yaml_error(error: &serde_yaml::Error) -> String {
-    let err_str = error.to_string();
+/// Checks every `kind: wasm` middleware of the configuration.
+///
+/// Two distinct failures are reported separately, because they need different
+/// fixes: budgets the host refuses (wrong config) and a plugin the host cannot
+/// run (wrong binary, or the package is missing from the plugins directory).
+fn validate_wasm_middlewares(config: &AppConfig) -> Result<(), String> {
+    use crate::middleware::middlewares::MiddleWares;
+
+    // Scanning the plugins directory is part of validating: a route that names a
+    // plugin nobody installed must fail here, in CI, rather than on the first
+    // request that reaches the route.
+    #[cfg(feature = "wasm")]
+    crate::wasm::init(config.plugins_dir.clone().map(std::path::PathBuf::from))
+        .map_err(|e| format!("wasm plugin system: {}", e.0))?;
+
+    for service in config.api_service_config.values() {
+        for route in &service.route_configs {
+            let Some(middlewares) = &route.middlewares else {
+                continue;
+            };
+            for middleware in middlewares {
+                let MiddleWares::Wasm(cfg) = middleware else {
+                    continue;
+                };
+                let route_label = if route.route_id.is_empty() {
+                    "<unnamed>"
+                } else {
+                    route.route_id.as_str()
+                };
+                cfg.validate()
+                    .map_err(|e| format!("route {route_label}: {e}"))?;
+                #[cfg(feature = "wasm")]
+                crate::wasm::resolve(&cfg.plugin)
+                    .map_err(|e| format!("route {route_label}: {}", e.0))?;
+                #[cfg(not(feature = "wasm"))]
+                return Err(format!(
+                    "route {route_label} uses `kind: wasm`, but this build has no WASM plugin \
+                     support; rebuild with `--features wasm`"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn format_yaml_error(error: &serde_yaml::Error) -> String {    let err_str = error.to_string();
     // Clean up the error message for better readability
     if let Some(line_col) = error.location() {
         format!(

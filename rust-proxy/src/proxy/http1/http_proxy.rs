@@ -2,6 +2,8 @@ use crate::constants::common_constants::MAX_TRANSCODE_BODY_BYTES;
 use crate::control_plane::cert_loader::load_tls_config_multi;
 use crate::control_plane::cert_loader::watch_for_certificate_changes;
 use crate::middleware::middlewares::MiddleWares;
+use crate::middleware::middlewares::Middleware;
+use crate::middleware::middlewares::{Denial, ExchangeSummary, RequestPhase, ResponsePhase};
 use crate::monitor::prometheus_exporter::metrics;
 use crate::proxy::concurrency;
 use crate::proxy::http1::app_clients::AppClients;
@@ -15,7 +17,7 @@ use crate::proxy::proxy_trait::{CommonCheckRequest, RouterDestination};
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
 use bytes::Bytes;
-use http::{HeaderMap, HeaderName, HeaderValue, Uri};
+use http::{HeaderName, HeaderValue, Uri};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::Method;
 use hyper::StatusCode;
@@ -335,6 +337,7 @@ where
     let cloned_headers = inbound_headers.clone();
     let method = req.method();
     let uri = req.uri().clone();
+    let exchange_started = Instant::now();
     let handling_result = chain_trait
         .get_destination(
             shared_config.clone(),
@@ -375,6 +378,30 @@ where
     };
     bind_breaker_labels(spire_context);
 
+    // WASM plugin bookkeeping, paid for only when the matched route actually
+    // configures a plugin: a request id, the route id and the method as owned
+    // values (the response and log phases need them after `req` has been
+    // consumed by the upstream call).
+    let has_plugins = spire_context
+        .middlewares
+        .as_ref()
+        .is_some_and(|m| has_wasm(m));
+    let request_id: String = if has_plugins {
+        crate::utils::uuid::get_uuid()
+    } else {
+        String::new()
+    };
+    let route_id_owned: String = if has_plugins {
+        spire_context.route_label().to_string()
+    } else {
+        String::new()
+    };
+    let method_owned: String = if has_plugins {
+        method.as_str().to_string()
+    } else {
+        String::new()
+    };
+
     if req.method() == Method::OPTIONS
         && req.headers().contains_key(header::ORIGIN)
         && req
@@ -395,13 +422,22 @@ where
         inbound_headers.contains_key(CONNECTION) && inbound_headers.contains_key(SEC_WEBSOCKET_KEY);
     if is_websocket_upgrade {
         debug!("The request has been updated to websocket,the req is {req:?}!");
-        apply_request_middlewares(
+        let phase_info = PhaseInfo {
+            client_addr,
+            route_id: &route_id_owned,
+            request_id: &request_id,
+            listener_port: port,
+        };
+        if let Some(denial) = apply_request_middlewares(
             &chain_trait,
             spire_context.middlewares.clone(),
-            client_addr,
-            req.headers_mut(),
+            phase_info,
+            &mut req,
         )
-        .await?;
+        .await?
+        {
+            return denial_response(denial);
+        }
         return server_upgrade(req, handling_result, client.http).await;
     }
 
@@ -431,13 +467,25 @@ where
                 .to_string();
             req.headers_mut()
                 .insert(http::header::HOST, HeaderValue::from_str(&host)?);
-            apply_request_middlewares(
+            let phase_info = PhaseInfo {
+                client_addr,
+                route_id: &route_id_owned,
+                request_id: &request_id,
+                listener_port: port,
+            };
+            if let Some(denial) = apply_request_middlewares(
                 &chain_trait,
                 spire_context.middlewares.clone(),
-                client_addr,
-                req.headers_mut(),
+                phase_info,
+                &mut req,
             )
-            .await?;
+            .await?
+            {
+                // A plugin answered without touching the upstream. Same
+                // contract as a routing denial: response middlewares do not
+                // run on a locally generated reply.
+                return denial_response(denial);
+            }
             let timeout = check_request.timeout;
 
             // Backpressure: a concurrency permit must be held before the
@@ -705,32 +753,198 @@ where
     if let Some(middlewares) = spire_context.middlewares.as_mut()
         && !middlewares.is_empty()
     {
+        let phase_info = PhaseInfo {
+            client_addr,
+            route_id: &route_id_owned,
+            request_id: &request_id,
+            listener_port: port,
+        };
+        // Wasm plugins see the upstream response before Spire's own response
+        // middlewares run, so `compression`, `cors` and header rewriting still
+        // apply to whatever the plugin produced. A transport error has no
+        // response to show a plugin, so only the `Ok` case is offered to it.
+        if let Ok(response) = res.as_mut() {
+            apply_response_phases(middlewares, phase_info, response)?;
+        }
         chain_trait
             .handle_before_response(middlewares, request_path, &mut res, cloned_headers.clone())
             .await?;
+        // Access-log hooks run last: the response is final, and a failure here
+        // can no longer change what the client receives.
+        if let Ok(response) = res.as_ref() {
+            apply_log_phases(
+                middlewares,
+                phase_info,
+                &method_owned,
+                request_path,
+                response,
+                exchange_started.elapsed(),
+            );
+        }
     }
     res
 }
 
-/// Runs the request-phase middlewares that rewrite/forward headers
-/// (`forward_headers`, `request_headers`). Shared by the regular HTTP and the
-/// WebSocket upgrade paths so both forward the same client information.
-async fn apply_request_middlewares(
+/// Renders a denial — from routing (`allow_deny_list`, `authentication`, …) or
+/// from a plugin's local reply — as the response the client receives.
+fn denial_response(denial: Denial) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
+    let mut response = Response::builder().status(denial.status).body(
+        Full::new(Bytes::from(denial.body))
+            .map_err(|e| match e {})
+            .boxed(),
+    )?;
+    response.headers_mut().extend(denial.headers);
+    Ok(response)
+}
+
+/// Per-exchange facts the plugin hooks need. Cheap to copy around.
+#[derive(Clone, Copy)]
+struct PhaseInfo<'a> {
+    client_addr: SocketAddr,
+    route_id: &'a str,
+    request_id: &'a str,
+    listener_port: i32,
+}
+
+/// True when the route configured at least one WASM plugin. Everything the
+/// plugin path costs (request-line copies, phase structs) is behind this.
+fn has_wasm(middlewares: &[MiddleWares]) -> bool {
+    middlewares
+        .iter()
+        .any(|m| matches!(m, MiddleWares::Wasm(_)))
+}
+
+/// Runs the request-phase middlewares: first the built-in header rewriting
+/// (`forward_headers`, `request_headers`), then the WASM plugins in configured
+/// order.
+///
+/// Shared by the regular HTTP and the WebSocket upgrade paths so both forward
+/// the same client information and both honour a plugin's local reply.
+async fn apply_request_middlewares<B>(
     chain_trait: &impl ChainTrait,
     middlewares: Option<Vec<MiddleWares>>,
-    peer_addr: SocketAddr,
-    headers: &mut HeaderMap,
+    info: PhaseInfo<'_>,
+    req: &mut Request<B>,
+) -> Result<Option<Denial>, AppError>
+where
+    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + Unpin + 'static,
+    AppError: From<B::Error>,
+{
+    let Some(mut middlewares) = middlewares else {
+        return Ok(None);
+    };
+    if middlewares.is_empty() {
+        return Ok(None);
+    }
+    chain_trait
+        .handle_before_request(&mut middlewares, info.client_addr, req.headers_mut())
+        .await?;
+    if !has_wasm(&middlewares) {
+        return Ok(None);
+    }
+
+    let method = req.method().as_str().to_string();
+    let uri = req.uri().clone();
+    let scheme = uri.scheme_str().unwrap_or("http").to_string();
+    let authority = uri
+        .authority()
+        .map(|a| a.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let path = uri.path().to_string();
+    let query = uri.query().unwrap_or_default().to_string();
+    let mut phase = RequestPhase {
+        method,
+        scheme,
+        authority,
+        path,
+        query,
+        headers: req.headers_mut(),
+        client_addr: info.client_addr,
+        route_id: info.route_id,
+        listener_port: info.listener_port,
+        request_id: info.request_id,
+    };
+    for middleware in middlewares.iter() {
+        if let Some(denial) = middleware.on_request_phase(&mut phase)? {
+            return Ok(Some(denial));
+        }
+    }
+    Ok(None)
+}
+
+/// Runs the WASM response hooks before Spire's own response middlewares
+/// (`cors`, `rewrite_headers`, `compression`), so a plugin sees the upstream's
+/// response and its mutations are still subject to those middlewares.
+fn apply_response_phases(
+    middlewares: &[MiddleWares],
+    info: PhaseInfo<'_>,
+    response: &mut Response<BoxBody<Bytes, AppError>>,
 ) -> Result<(), AppError> {
-    if let Some(mut middlewares) = middlewares
-        && !middlewares.is_empty()
-    {
-        chain_trait
-            .handle_before_request(&mut middlewares, peer_addr, headers)
-            .await?;
+    if !has_wasm(middlewares) {
+        return Ok(());
+    }
+    for middleware in middlewares.iter() {
+        let denial = {
+            let mut phase = ResponsePhase {
+                route_id: info.route_id,
+                request_id: info.request_id,
+                response: &mut *response,
+            };
+            middleware.on_response_phase(&mut phase)?
+        };
+        if let Some(denial) = denial {
+            *response = denial_response(denial)?;
+        }
     }
     Ok(())
 }
 
+/// Calls `on-log` on every plugin of the route. Never fails the request: the
+/// client's response is already committed at this point.
+#[allow(clippy::too_many_arguments)]
+fn apply_log_phases(
+    middlewares: &[MiddleWares],
+    info: PhaseInfo<'_>,
+    method: &str,
+    path: &str,
+    response: &Response<BoxBody<Bytes, AppError>>,
+    total: Duration,
+) {
+    if !has_wasm(middlewares) {
+        return;
+    }
+    let status = response.status().as_u16();
+    // Spire answers 503 (concurrency limit) and 504 (upstream timeout) itself;
+    // those are gateway facts, not upstream facts.
+    let local = matches!(status, 503 | 504);
+    // The upstream latency is already exported as `x-upstream-latency` on the
+    // response, so it does not need a second plumbing path.
+    let upstream_millis = response
+        .headers()
+        .get("x-upstream-latency")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    let summary = ExchangeSummary {
+        request_id: info.request_id,
+        route_id: info.route_id,
+        method,
+        path,
+        status,
+        local,
+        total_millis: total.as_millis() as u64,
+        upstream_millis,
+        // Bodies are streamed, so their size is not known here. `None` is the
+        // honest answer; a plugin that needs sizes must opt into body mode.
+        request_bytes: None,
+        response_bytes: None,
+    };
+    for middleware in middlewares {
+        middleware.on_log_phase(&summary);
+    }
+}
+
+/// Serves a static file route.
 async fn route_file<B>(
     router_destination: RouterDestination,
     req: Request<B>,

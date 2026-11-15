@@ -1,0 +1,14 @@
+id = "io.example.header-annotator"
+name = "Header Annotator"
+version = "0.1.0"
+description = "Adds a configured request header, echoes the upstream status on the response, and counts exchanges per status class."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses. A missing one makes the matching
+# host call return `denied` instead of trapping, so the plugin degrades rather
+# than breaking the route.
+[capabilities]
+required = ["host.log", "host.metrics", "host.shared-data", "host.clock"]
+optional = []
