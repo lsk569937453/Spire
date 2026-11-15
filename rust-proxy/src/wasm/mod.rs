@@ -136,32 +136,28 @@ pub fn reload() -> Result<(), AppError> {
     let mut compiled: Vec<Arc<CompiledPlugin>> = Vec::new();
     let mut failed: HashMap<String, String> = HashMap::new();
 
-    match scan_packages(dir) {
-        Ok(packages) => {
-            for package in packages {
-                let id = package.manifest.id.clone();
-                match plugin_engine.compile(&package.wasm_path) {
-                    Ok(component) => {
-                        info!(
-                            plugin = id.as_str(),
-                            version = package.manifest.version.as_str(),
-                            "wasm: loaded plugin"
-                        );
-                        compiled.push(Arc::new(CompiledPlugin {
-                            granted: Arc::new(package.manifest.capabilities.granted()),
-                            manifest: package.manifest,
-                            component,
-                            generation,
-                        }));
-                    }
-                    Err(e) => {
-                        error!("wasm: {e}");
-                        failed.insert(id, e.0);
-                    }
-                }
+    let packages = scan_packages(dir)?;
+    for package in packages {
+        let id = package.manifest.id.clone();
+        match plugin_engine.compile(&package.wasm_path) {
+            Ok(component) => {
+                info!(
+                    plugin = id.as_str(),
+                    version = package.manifest.version.as_str(),
+                    "wasm: loaded plugin"
+                );
+                compiled.push(Arc::new(CompiledPlugin {
+                    granted: Arc::new(package.manifest.capabilities.granted()),
+                    manifest: package.manifest,
+                    component,
+                    generation,
+                }));
+            }
+            Err(e) => {
+                error!("wasm: {e}");
+                failed.insert(id, e.0);
             }
         }
-        Err(e) => return Err(e),
     }
 
     let current: HashMap<String, String> = compiled
@@ -701,13 +697,16 @@ mod tests {
             .status(StatusCode::OK)
             .body(BoxBody::<Bytes, AppError>::default())
             .unwrap();
-        let mut rphase = ResponsePhase {
-            route_id: "r1",
-            request_id: "req-1",
-            response: &mut response,
-        };
-        assert!(response_phase(&cfg, &mut rphase).unwrap().is_none());
-        drop(rphase);
+        {
+            // Scoped so the mutable borrow of `response` ends before the
+            // assertions below read it again.
+            let mut rphase = ResponsePhase {
+                route_id: "r1",
+                request_id: "req-1",
+                response: &mut response,
+            };
+            assert!(response_phase(&cfg, &mut rphase).unwrap().is_none());
+        }
         assert_eq!(
             response
                 .headers()

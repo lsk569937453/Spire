@@ -97,10 +97,10 @@ pub fn acquire(
 /// is not trustworthy any more.
 pub fn discard(key: &str) {
     let removed = SLOTS.with(|slots| slots.borrow_mut().remove(key));
-    if let Some(slot) = removed {
-        if let Ok(mut slot) = slot.try_borrow_mut() {
-            slot.shutdown();
-        }
+    if let Some(slot) = removed
+        && let Ok(mut slot) = slot.try_borrow_mut()
+    {
+        slot.shutdown();
     }
 }
 
