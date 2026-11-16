@@ -1,0 +1,20 @@
+# Same as spire-bench.yaml, but the route-level upstream timeout is pinned to
+# 300ms so the chaos run can observe timeout (504) behaviour instead of letting
+# the default 5000ms swallow every slow request.
+log_level: warn
+
+observability:
+  listen: 0.0.0.0:8870
+
+servers:
+  - listen: 6667
+    protocol: http
+    routes:
+      - route_id: default
+        matchers:
+          - kind: path
+            value: /
+            match_type: prefix
+        timeout:
+          request_timeout: 300
+        forward_to: http://backend:8080

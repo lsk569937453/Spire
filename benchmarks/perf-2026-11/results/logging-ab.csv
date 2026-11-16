@@ -1,0 +1,5 @@
+phase,gateway,tier,concurrency,run,rps,avg_ms,note
+warn,spire,4,64,1,48973.86,1.3,log_level=warn (access log off)
+warn,spire,4,256,1,43751.08,5.8,log_level=warn (access log off)
+debug,spire,4,64,1,37011.77,1.7,log_level=debug (access log per request)
+debug,spire,4,256,1,22330.65,11.5,log_level=debug (access log per request)

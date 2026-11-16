@@ -1,0 +1,3 @@
+tag,gateway,cpuset,concurrency,gateway_rps,ceiling_rps,ratio,ts
+mimi-purge-off,spire,4,64,9,267.1,30,113.6,0.308,06:59:20
+mimi-eager,spire,4,64,9,460.0,32,313.1,0.293,07:00:19

@@ -1,0 +1,108 @@
+# Topology for the perf-2026-11 benchmark.
+#
+# Everything runs on one user-defined bridge so the load generator never crosses
+# the Docker Desktop -> WSL2 NAT boundary: that boundary has its own throughput
+# ceiling and would flatten the 1/2/4-core difference we are trying to measure.
+#
+# Core pinning (host has 6 P-cores as 0-11 with HT, 8 E-cores as 12-19):
+#   measured gateway : GATEWAY_CPUSET  (4 | 4,6 | 4,6,8,10) - distinct P cores
+#   backend          : BACKEND_CPUSET  (12-19)               - all E cores
+#   load generator   : CLIENT_CPUSET   (0,2)                 - thread-0 of two
+#                      otherwise idle P cores, so the client is fast and never
+#                      shares a core with the gateway
+#
+# Usage (see ../scripts/run.ps1 for the full matrix):
+#   $env:GATEWAY_CPUSET="4"; docker compose -f stack.yaml up -d backend spire
+name: perf-2026-11
+
+networks:
+  bench:
+    driver: bridge
+
+services:
+  backend:
+    build:
+      context: ../backend
+    image: perf-backend:8
+    cpuset: "${BACKEND_CPUSET:-12-19}"
+    mem_limit: 1g
+    # chaosblade's jvm plugin attaches with ptrace; without these the
+    # `blade create jvm ...` call fails with a permission error.
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      PORT: "8080"
+      THREADS: "${BACKEND_THREADS:-800}"
+    networks: [bench]
+
+  spire:
+    build:
+      context: ..
+      dockerfile: spire/Dockerfile
+    image: perf-spire:bench
+    profiles: ["spire"]
+    cpuset: "${GATEWAY_CPUSET:-4}"
+    mem_limit: 2g
+    environment:
+      SPIRE_PROFILE_DELAY_SECS: "${SPIRE_PROFILE_DELAY_SECS:-5}"
+      SPIRE_PROFILE_SECS: "${SPIRE_PROFILE_SECS:-60}"
+      SPIRE_PROFILE_HZ: "${SPIRE_PROFILE_HZ:-99}"
+      SPIRE_PROFILE_OUT: "/out/flamegraph.svg"
+    volumes:
+      - ../config/${SPIRE_CONFIG:-spire-bench.yaml}:/etc/spire/config.yaml:ro
+      - ../results:/out
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    networks: [bench]
+
+  nginx:
+    image: nginx:1.23.3
+    profiles: ["nginx"]
+    cpuset: "${GATEWAY_CPUSET:-4}"
+    mem_limit: 2g
+    # worker_processes must follow the cpuset, not the host's online CPU count.
+    command:
+      - sh
+      - -c
+      - sed "s/__WORKERS__/$$(nproc)/" /etc/nginx/nginx.conf.tpl > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'
+    volumes:
+      - ../config/nginx.conf.tpl:/etc/nginx/nginx.conf.tpl:ro
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    networks: [bench]
+
+  hey:
+    image: demisto/rakyll-hey:1.0.0.44140
+    profiles: ["client"]
+    entrypoint: ["hey"]
+    cpuset: "${CLIENT_CPUSET:-0,2}"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    networks: [bench]
+
+  k6:
+    image: grafana/k6:latest
+    profiles: ["chaos"]
+    cpuset: "${CLIENT_CPUSET:-0,2}"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    volumes:
+      - ../k6:/scripts:ro
+      - ../results:/out
+    networks: [bench]
+
+  probe:
+    image: curlimages/curl:latest
+    profiles: ["probe"]
+    entrypoint: ["curl"]
+    networks: [bench]

@@ -1,0 +1,24 @@
+# Spire configuration used by the perf-2026-11 benchmark.
+#
+# Deliberately minimal and identical for every CPU tier so the only variable
+# between runs is the number of cores the container may use:
+#   * log_level: debug  - the access log must never touch the measured path
+#   * observability bound to 0.0.0.0 so the runner can scrape /metrics
+#   * no concurrency limit, no rate limit: saturation must come from CPU
+#   * upstream timeout left at the default 5000ms (matches nginx's 300s read
+#     timeout in practice, since a healthy backend answers in microseconds)
+log_level: debug
+
+observability:
+  listen: 0.0.0.0:8870
+
+servers:
+  - listen: 6667
+    protocol: http
+    routes:
+      - route_id: default
+        matchers:
+          - kind: path
+            value: /
+            match_type: prefix
+        forward_to: http://backend:8080

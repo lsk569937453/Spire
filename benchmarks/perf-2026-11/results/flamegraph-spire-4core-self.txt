@@ -1,0 +1,57 @@
+# spire-4core-perf.svg
+frames: 1517, root samples: 161,042,122,031, summed self: 161,042,122,031
+
+## top symbols by SELF time
+   share         samples  symbol
+  22.88%  36,842,526,588  _raw_spin_unlock_irqrestore
+   4.94%   7,959,879,424  memcpy
+   2.47%   3,982,948,739  __nf_conntrack_find_get
+   2.16%   3,475,426,185  _mi_page_malloc_zero
+   1.87%   3,006,017,973  spire::proxy::http1::http_proxy::proxy::<hyper::body::incoming::Incoming, spire::proxy::proxy_trait:
+   1.52%   2,440,320,897  mi_free
+   0.97%   1,555,666,959  <hyper::proto::h1::dispatch::Dispatcher<hyper::proto::h1::dispatch::Server<hyper::service::util::Ser
+   0.79%   1,265,797,358  __inet_lookup_established
+   0.73%   1,178,535,575  spire::proxy::http1::http_proxy::proxy_adapter::<hyper::body::incoming::Incoming>::{closure#0}
+   0.72%   1,161,484,422  nft_do_chain
+   0.71%   1,142,427,251  do_iter_write
+   0.66%   1,064,192,549  __fget_light
+   0.64%   1,025,075,198  _mi_page_free_collect
+   0.60%     958,876,604  <hyper_util::client::legacy::client::Client<hyper_util::client::legacy::connect::http::HttpConnector
+   0.59%     955,867,577  tcp_ack
+   0.59%     954,864,568  selinux_file_permission
+   0.58%     935,807,397  mi_theap_malloc_aligned
+   0.53%     856,569,686  <spire::proxy::http1::http_proxy::HttpProxy>::start_http_server::{closure#0}::{closure#2}
+   0.51%     825,476,407  <prometheus::vec::MetricVec<prometheus::histogram::HistogramVecBuilder>>::with_label_values::<&str>
+   0.50%     807,422,245  br_nf_hook_thresh
+   0.47%     751,253,741  <tokio::runtime::task::state::State>::transition_to_notified_by_val
+   0.44%     714,142,408  bytes::bytes_mut::shared_v_drop
+   0.44%     710,130,372  [[vdso]]
+   0.44%     705,115,327  <tokio::runtime::scheduler::multi_thread::worker::Context>::run_task
+   0.42%     676,028,066  <hyper_util::client::legacy::client::Client<hyper_util::client::legacy::connect::http::HttpConnector
+   0.42%     669,007,003  __vdso_clock_gettime
+   0.41%     661,985,940  copyout
+   0.41%     652,958,859  <hyper_util::client::legacy::client::Client<hyper_rustls::connector::HttpsConnector<hyper_util::clie
+   0.40%     641,925,760  finish_task_switch.isra.0
+   0.39%     629,889,652  tcp_sendmsg_locked
+   0.39%     621,865,580  <tokio::runtime::scheduler::multi_thread::worker::Context>::run
+   0.38%     610,832,481  ep_item_poll.isra.0
+   0.37%     597,793,364  __alloc_skb
+   0.37%     597,793,364  <prometheus::vec::MetricVec<prometheus::gauge::GaugeVecBuilder<prometheus::atomic64::AtomicI64>>>::w
+   0.37%     597,793,364  <hyper::proto::h1::dispatch::Server<hyper::service::util::ServiceFn<<spire::proxy::http1::http_proxy
+   0.37%     591,775,310  <tokio::runtime::io::driver::Driver>::turn
+   0.36%     584,754,247  <hyper_util::client::legacy::pool::Checkout<hyper_util::client::legacy::client::PoolClient<http_body
+   0.36%     574,724,157  nf_conntrack_tcp_packet
+   0.36%     573,721,148  sccp
+   0.34%     544,633,887  <tokio::runtime::io::scheduled_io::ScheduledIo>::poll_readiness
+
+## by component (self time)
+  67.15%  other
+  14.59%  hyper (HTTP codec)
+   5.37%  tokio (runtime/io)
+   5.28%  libc mem/string
+   3.72%  mimalloc (allocator)
+   1.36%  kernel write path (send)
+   0.81%  kernel read path (recv)
+   0.76%  kernel epoll/wakeup
+   0.72%  tracing (logging)
+   0.24%  rustls/ring (TLS)

@@ -1,0 +1,7 @@
+tag,gateway,cpuset,concurrency,gateway_rps,ceiling_rps,ratio,ts
+baseline,spire,4,64,10,002.9,30,489.6,0.328,06:56:56
+baseline,nginx,4,64,18,309.7,32,758.7,0.559,06:57:51
+c1,spire,4,1,2,675.0,5,986.0,0.447,07:01:27
+c1,nginx,4,1,6,106.2,10,166.6,0.601,07:02:10
+nodelay,spire,4,64,17,818.5,37,518.1,0.475,07:12:09
+target,nginx,4,64,30,684.1,36,913.2,0.831,07:13:12
