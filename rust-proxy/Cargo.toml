@@ -1,5 +1,5 @@
 [package]
-name = "spire-proxy" # crates.io 上唯一的名字
+name = "spire-proxy" # unique on crates.io
 version = "0.0.29"
 authors = ["lsk"]
 license = "Apache-2.0"
@@ -154,6 +154,6 @@ codegen-units = 16
 rpath = false
 strip = true
 
-# debug = true  # 保留调试信息（perf 能看到函数名）
-# strip = false # 不剥离符号
-# opt-level = 3 # 保持性能
+# debug = true  # keep debug info so perf can show function names
+# strip = false # do not strip symbols
+# opt-level = 3 # keep the optimised build

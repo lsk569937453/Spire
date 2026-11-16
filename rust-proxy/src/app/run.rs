@@ -441,7 +441,7 @@ servers:
         let reload_handle = setup_test_logger_handle();
         let config = AppConfig {
             admin_port: None,
-            health_check_log_enabled: None, // 关键测试点
+            health_check_log_enabled: None, // key assertion of this test
             ..Default::default()
         };
 

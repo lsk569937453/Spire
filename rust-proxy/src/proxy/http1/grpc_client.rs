@@ -47,7 +47,7 @@ impl GrpcChanel {
             response_descriptor,
         };
         let req = tonic::Request::new(dynamic_request);
-        let mut channel = self.channel.clone(); // <--- 克隆 channel
+        let mut channel = self.channel.clone(); // <--- clone the channel
 
         let path = http::uri::PathAndQuery::try_from(format!(
             "/{}/{}",
@@ -103,7 +103,7 @@ impl GrpcClients {
 }
 #[derive(Debug, Clone)]
 pub struct DynamicCodec {
-    /// 用于解码响应消息的描述符
+    /// Descriptor used to decode response messages.
     response_descriptor: MessageDescriptor,
 }
 
@@ -111,9 +111,9 @@ impl Codec for DynamicCodec {
     type Encode = DynamicMessage;
     type Decode = DynamicMessage;
 
-    // 编码器很简单，不需要状态
+    // The encoder is stateless.
     type Encoder = DynamicEncoder;
-    // 解码器需要知道消息的结构，所以我们把描述符传给它
+    // The decoder needs the message structure, so it holds the descriptor.
     type Decoder = DynamicDecoder;
 
     fn encoder(&mut self) -> Self::Encoder {
@@ -130,7 +130,7 @@ use prost_reflect::prost::Message;
 use tonic::Status;
 use tonic::codec::DecodeBuf;
 use tonic::codec::EncodeBuf;
-/// DynamicMessage 的编码器
+/// Encoder for `DynamicMessage`.
 #[derive(Debug, Default, Clone)]
 pub struct DynamicEncoder;
 
@@ -139,13 +139,13 @@ impl Encoder for DynamicEncoder {
     type Error = Status;
 
     fn encode(&mut self, item: Self::Item, buf: &mut EncodeBuf<'_>) -> Result<(), Self::Error> {
-        // DynamicMessage 已经实现了 prost::Message trait，可以直接使用 encode
+        // `DynamicMessage` implements `prost::Message`, so `encode` is all we need.
         item.encode_raw(buf);
         Ok(())
     }
 }
 
-/// DynamicMessage 的解码器
+/// Decoder for `DynamicMessage`.
 #[derive(Debug, Clone)]
 pub struct DynamicDecoder {
     descriptor: MessageDescriptor,
@@ -156,7 +156,7 @@ impl Decoder for DynamicDecoder {
     type Error = Status;
 
     fn decode(&mut self, buf: &mut DecodeBuf<'_>) -> Result<Option<Self::Item>, Self::Error> {
-        // 使用我们持有的描述符来解码
+        // Decode with the descriptor we hold.
         let item = DynamicMessage::decode(self.descriptor.clone(), buf)
             .map(Some)
             .map_err(|e| Status::internal(e.to_string()))?;

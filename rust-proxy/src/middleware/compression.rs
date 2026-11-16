@@ -39,15 +39,15 @@ pub struct Compression {
 }
 
 fn default_level() -> i32 {
-    6 // 默认压缩级别 (0-9 for gzip, 1-22 for zstd)
+    6 // default compression level (0-9 for gzip, 1-22 for zstd)
 }
 
 fn default_min_size() -> usize {
-    1024 // 默认最小压缩大小 1KB
+    1024 // default minimum size worth compressing: 1 KB
 }
 
 fn default_max_size() -> usize {
-    1024 * 1024 // 默认最大压缩大小 1MB
+    1024 * 1024 // default maximum size worth compressing: 1 MB
 }
 
 fn default_excluded_types() -> Vec<String> {
@@ -81,13 +81,13 @@ impl Default for Compression {
 }
 
 impl Compression {
-    /// 检查是否应该压缩此内容类型
+    /// Returns true when this content type should be compressed.
     pub fn should_compress(&self, content_type: Option<&str>) -> bool {
         if !self.enabled {
             return false;
         }
 
-        // 检查内容类型是否在排除列表中
+        // Is the content type on the exclusion list?
         if let Some(ct) = content_type {
             for excluded in &self.excluded_content_types {
                 if ct.starts_with(excluded) {
@@ -99,11 +99,11 @@ impl Compression {
         true
     }
 
-    /// 解析 Accept-Encoding 头部，选择最佳压缩算法
+    /// Parses `Accept-Encoding` and picks the best supported algorithm.
     pub fn parse_accept_encoding(&self, headers: &HeaderMap) -> Option<CompressionType> {
         let accept_encoding = headers.get(ACCEPT_ENCODING)?.to_str().ok()?;
 
-        // 检查支持的压缩格式
+        // Which encodings does the client accept?
         let supports_gzip = accept_encoding.contains("gzip") || accept_encoding.contains("*");
         let supports_zstd = accept_encoding.contains("zstd") || accept_encoding.contains("*");
 
@@ -111,7 +111,7 @@ impl Compression {
             CompressionType::Gzip if supports_gzip => Some(CompressionType::Gzip),
             CompressionType::Zstd if supports_zstd => Some(CompressionType::Zstd),
             CompressionType::Both => {
-                // 优先使用 zstd (更好的压缩率)，其次是 gzip (更广泛的兼容性)
+                // Prefer zstd (better ratio), fall back to gzip (wider compatibility).
                 if supports_zstd {
                     Some(CompressionType::Zstd)
                 } else if supports_gzip {
@@ -124,7 +124,7 @@ impl Compression {
         }
     }
 
-    /// 压缩数据
+    /// Compresses `data` with the given algorithm.
     pub fn compress_data(
         &self,
         data: &[u8],
@@ -158,13 +158,13 @@ impl Compression {
                     .map_err(|e| AppError(format!("Zstd finish failed: {}", e)))
             }
             CompressionType::Both => {
-                // 这种情况不应该发生，因为 Both 在解析时会被转换为具体的类型
+                // Unreachable: parsing resolves `Both` to a concrete algorithm already.
                 Ok(data.to_vec())
             }
         }
     }
 
-    /// 获取编码头部值
+    /// The `Content-Encoding` value to advertise for this algorithm.
     pub fn get_encoding_value(&self, compression_type: &CompressionType) -> &'static str {
         match compression_type {
             CompressionType::Gzip => "gzip",
@@ -173,7 +173,7 @@ impl Compression {
         }
     }
 
-    /// 检查响应是否应该被压缩
+    /// True when the response should be compressed.
     pub fn should_compress_response(
         &self,
         response: &Response<BoxBody<Bytes, AppError>>,
@@ -183,21 +183,21 @@ impl Compression {
             return None;
         }
 
-        // 检查客户端支持的压缩格式
+        // Encodings the client accepts.
         let compression_type = self.parse_accept_encoding(request_headers)?;
 
-        // 检查是否已经有 Content-Encoding
+        // Never re-encode an already encoded response.
         if response.headers().contains_key(CONTENT_ENCODING) {
             return None;
         }
 
-        // 获取内容类型
+        // Content type of the response.
         let content_type = response
             .headers()
             .get(CONTENT_TYPE)
             .and_then(|v| v.to_str().ok());
 
-        // 检查是否应该压缩此内容类型
+        // Is this content type compressible?
         if !self.should_compress(content_type) {
             return None;
         }
@@ -247,7 +247,7 @@ impl Middleware for Compression {
     ) -> Result<(), AppError> {
         debug!("[Compression] Checking if response should be compressed");
 
-        // 检查是否应该压缩
+        // Should this response be compressed at all?
         let compression_type = match self.should_compress_response(response, &inbound_headers) {
             Some(ct) => ct,
             None => {
@@ -261,7 +261,7 @@ impl Middleware for Compression {
             compression_type
         );
 
-        // 打印原始响应头
+        // Original response headers, kept for the restore path.
         debug!("[Compression] Original response headers:");
         for (name, value) in response.headers().iter() {
             if let Ok(v_str) = value.to_str() {
@@ -272,7 +272,7 @@ impl Middleware for Compression {
         }
         debug!("[Compression] Response status: {}", response.status());
 
-        // 收集响应体
+        // Collect the body: compression needs the whole payload.
         let body = std::mem::take(response.body_mut());
         let collected = body
             .collect()
@@ -280,26 +280,26 @@ impl Middleware for Compression {
             .map_err(|e| AppError(format!("Failed to collect response body: {}", e)))?;
         let data = collected.to_bytes();
 
-        // 检查数据大小是否达到最小压缩要求
+        // Skip bodies below the minimum size.
         debug!(
             "[Compression] Response body size: {} bytes, min_size: {} bytes",
             data.len(),
             self.min_size
         );
         if data.len() < self.min_size {
-            // 恢复原始响应体
+            // Restore the original body.
             *response.body_mut() = Full::new(data).map_err(AppError::from).boxed();
             debug!("[Compression] Body size too small, skipping compression");
             return Ok(());
         }
 
-        // 压缩数据
+        // Compress the payload.
         let compressed_data = self.compress_data(&data, &compression_type)?;
 
-        // 只有在压缩后数据更小时才使用压缩版本
+        // Only use the compressed body when it is actually smaller.
         if compressed_data.len() >= data.len() {
             let data_len = data.len();
-            // 恢复原始响应体
+            // Restore the original body.
             *response.body_mut() = Full::new(data).map_err(AppError::from).boxed();
             warn!(
                 "[Compression] Compressed size ({}) >= original size ({}), using original",
@@ -309,14 +309,14 @@ impl Middleware for Compression {
             return Ok(());
         }
 
-        // 移除 Content-Length，添加 Content-Encoding
+        // Drop Content-Length and set Content-Encoding.
         response.headers_mut().remove(CONTENT_LENGTH);
         response.headers_mut().insert(
             CONTENT_ENCODING,
             http::HeaderValue::from_static(self.get_encoding_value(&compression_type)),
         );
 
-        // 替换响应体
+        // Swap in the compressed body.
         *response.body_mut() = Full::new(Bytes::from(compressed_data))
             .map_err(AppError::from)
             .boxed();
@@ -350,13 +350,13 @@ mod tests {
     fn test_should_compress_excluded_types() {
         let comp = Compression::default();
 
-        // 这些类型应该被排除
+        // These types must not be compressed.
         assert!(!comp.should_compress(Some("image/png")));
         assert!(!comp.should_compress(Some("image/jpeg")));
         assert!(!comp.should_compress(Some("video/mp4")));
         assert!(!comp.should_compress(Some("application/zip")));
 
-        // 这些类型应该被压缩
+        // These types can be compressed.
         assert!(comp.should_compress(Some("text/html")));
         assert!(comp.should_compress(Some("application/json")));
         assert!(comp.should_compress(Some("text/css")));
@@ -406,7 +406,7 @@ mod tests {
         let comp = Compression::default();
         assert_eq!(comp.compression_type, CompressionType::Gzip);
 
-        // 测试 gzip
+        // gzip
         let mut headers = HeaderMap::new();
         headers.insert(ACCEPT_ENCODING, "gzip".parse().unwrap());
         assert_eq!(
@@ -419,7 +419,7 @@ mod tests {
         headers.insert(ACCEPT_ENCODING, "zstd".parse().unwrap());
         assert_eq!(comp.parse_accept_encoding(&headers), None);
 
-        // 测试 zstd
+        // zstd
         let comp_zstd = Compression {
             compression_type: CompressionType::Zstd,
             ..Default::default()
@@ -431,7 +431,7 @@ mod tests {
         headers.insert(ACCEPT_ENCODING, "gzip".parse().unwrap());
         assert_eq!(comp_zstd.parse_accept_encoding(&headers), None);
 
-        // 测试两者都支持
+        // both supported
         let comp_both = Compression {
             compression_type: CompressionType::Both,
             ..Default::default()
@@ -448,7 +448,7 @@ mod tests {
             Some(CompressionType::Zstd)
         );
 
-        // 测试通配符
+        // wildcard
         headers.insert(ACCEPT_ENCODING, "*".parse().unwrap());
         assert!(comp.parse_accept_encoding(&headers).is_some());
     }
@@ -456,11 +456,11 @@ mod tests {
     #[test]
     fn test_compress_data_gzip() {
         let comp = Compression::default();
-        let data = b"Hello, World! ".repeat(100); // 创建一些重复数据以便更好地压缩
+        let data = b"Hello, World! ".repeat(100); // repetitive payload, so compression clearly wins
 
         let compressed = comp.compress_data(&data, &CompressionType::Gzip).unwrap();
 
-        // 压缩后的数据应该更小
+        // the compressed payload must be smaller
         assert!(compressed.len() < data.len());
     }
 
@@ -475,7 +475,7 @@ mod tests {
 
         let compressed = comp.compress_data(&data, &CompressionType::Zstd).unwrap();
 
-        // 压缩后的数据应该更小
+        // the compressed payload must be smaller
         assert!(compressed.len() < data.len());
     }
 

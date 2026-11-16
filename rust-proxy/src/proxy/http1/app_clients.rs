@@ -65,7 +65,7 @@ fn extract_grpc_configs(api_service: &ApiService) -> Result<Vec<(String, String)
         })?;
 
         for endpoint in grpc_endpoints {
-            // 步骤 5: 只克隆需要的数据
+            // Step 5: clone only what the new client needs.
             grpc_list.push((endpoint, transcode_config.proto_descriptor_set.clone()));
         }
     }

@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::net::SocketAddr;
 
-// 只负责添加 X-Real-IP 和 X-Forwarded-For。它不需要任何配置字段。
+// Only adds X-Real-IP and X-Forwarded-For; it needs no configuration fields.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForwardHeader {}
 impl Middleware for ForwardHeader {

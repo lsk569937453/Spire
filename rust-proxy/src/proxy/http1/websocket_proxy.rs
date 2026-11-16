@@ -59,8 +59,8 @@ where
         *res.status_mut() = StatusCode::BAD_REQUEST;
         return Ok(res);
     }
-    let headers_clone = req.headers().clone(); // 假设 HandlingResult 已经包含了头信息
-    let method_clone = req.method().clone(); // 假设 HandlingResult 包含了方法
+    let headers_clone = req.headers().clone(); // HandlingResult already carries the request headers.
+    let method_clone = req.method().clone(); // ... and the method.
 
     let client_upgrade_fut = hyper::upgrade::on(req);
 
@@ -108,7 +108,7 @@ where
 
     let mut client_res = Response::new(Full::new(Bytes::new()).map_err(AppError::from).boxed());
     *client_res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
-    *client_res.headers_mut() = response_headers_clone; // 使用克隆的头信息
+    *client_res.headers_mut() = response_headers_clone; // Use the cloned headers.
 
     debug!("Returning 101 Switching Protocols to client.");
     Ok(client_res)
