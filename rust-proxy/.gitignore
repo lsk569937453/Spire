@@ -19,7 +19,10 @@ logs
 *.profraw
 .claude
 
-# Plugin build artifacts: the component under dist/ is committed on purpose so
-# `cargo test --features wasm` runs the real end-to-end test on a machine with
-# no wasm32-wasip2 target. Only the per-plugin cargo target dir is ignored.
+# Plugin build artifacts: compiled components are binaries and are ignored.
+# The one exception is the reference plugin's dist/plugin.wasm, kept tracked on
+# purpose so `cargo test --features wasm` still runs the real end-to-end round
+# trip on a machine with no wasm32-wasip2 target.
+*.wasm
+!plugins/header-annotator/dist/plugin.wasm
 plugins/*/target/
