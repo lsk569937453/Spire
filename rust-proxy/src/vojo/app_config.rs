@@ -1,4 +1,4 @@
-use crate::constants::common_constants::DEFAULT_ADMIN_PORT;
+use crate::constants::common_constants::DEFAULT_OBSERVABILITY_LISTEN;
 use crate::middleware::middlewares::CheckResult;
 use crate::middleware::middlewares::MiddleWares;
 use crate::middleware::middlewares::Middleware;
@@ -29,16 +29,10 @@ pub struct AppConfig {
     pub acme: AcmeConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_check_log_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub admin_port: Option<i32>,
-    /// Address the control plane binds to. Defaults to loopback because the
-    /// admin API can read and rewrite the whole configuration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub admin_listen: Option<String>,
-    /// Bearer token required by the control plane. Strongly recommended
-    /// whenever `admin_listen` is not a loopback address.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub admin_token: Option<String>,
+    /// Read-only observability listener (`/health`, `/metrics`). It replaces the
+    /// control-plane HTTP API, which could rewrite the whole configuration.
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
     /// CIDR ranges of reverse proxies / load balancers whose
     /// `X-Forwarded-For` / `X-Real-IP` headers are trusted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,12 +79,7 @@ impl core::fmt::Debug for AppConfig {
         f.debug_struct("AppConfig")
             .field("acme", &self.acme)
             .field("health_check_log_enabled", &self.health_check_log_enabled)
-            .field("admin_port", &self.admin_port)
-            .field("admin_listen", &self.admin_listen)
-            .field(
-                "admin_token",
-                &self.admin_token.as_ref().map(|_| "<redacted>"),
-            )
+            .field("observability", &self.observability)
             .field("trusted_proxies", &self.trusted_proxies)
             .field("log_level", &self.log_level)
             .field("upstream_timeout_ms", &self.upstream_timeout_ms)
@@ -112,9 +101,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             health_check_log_enabled: Some(false),
-            admin_port: Some(DEFAULT_ADMIN_PORT),
-            admin_listen: None,
-            admin_token: None,
+            observability: ObservabilityConfig::default(),
             trusted_proxies: None,
             log_level: None,
             api_service_config: Default::default(),
@@ -127,6 +114,35 @@ impl Default for AppConfig {
         }
     }
 }
+fn default_observability_enabled() -> bool {
+    true
+}
+
+fn default_observability_listen() -> String {
+    DEFAULT_OBSERVABILITY_LISTEN.to_string()
+}
+
+/// Read-only observability listener configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObservabilityConfig {
+    /// Set to `false` to run without any observability listener at all.
+    #[serde(default = "default_observability_enabled")]
+    pub enabled: bool,
+    /// `host:port` to bind. Defaults to loopback because both endpoints are
+    /// unauthenticated and read-only.
+    #[serde(default = "default_observability_listen")]
+    pub listen: String,
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            listen: DEFAULT_OBSERVABILITY_LISTEN.to_string(),
+        }
+    }
+}
+
 fn serialize_api_service_config<S>(
     config: &HashMap<i32, ApiService>,
     serializer: S,
@@ -391,12 +407,6 @@ impl AppConfig {
             }
             nets
         })
-    }
-
-    pub fn admin_listen_addr(&self) -> String {
-        self.admin_listen
-            .clone()
-            .unwrap_or_else(|| crate::constants::common_constants::DEFAULT_ADMIN_LISTEN.to_string())
     }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -692,10 +702,25 @@ mod tests {
     fn test_static_config_default() {
         let config = AppConfig::default();
         assert_eq!(config.health_check_log_enabled, Some(false));
-        assert_eq!(config.admin_port, Some(DEFAULT_ADMIN_PORT));
+        assert_eq!(
+            config.observability.listen,
+            crate::constants::common_constants::DEFAULT_OBSERVABILITY_LISTEN
+        );
+        assert!(config.observability.enabled);
         assert_eq!(config.log_level, None);
     }
-    use crate::constants::common_constants::DEFAULT_ADMIN_PORT;
+
+    #[test]
+    fn observability_defaults_to_loopback_and_can_be_disabled() {
+        let yaml = "observability:\n  enabled: false\nservers: []\n";
+        let config: AppConfig = serde_yaml::from_str(yaml).expect("valid configuration");
+        assert!(!config.observability.enabled);
+        // A disabled listener keeps the default address; nothing binds it.
+        assert_eq!(
+            config.observability.listen,
+            crate::constants::common_constants::DEFAULT_OBSERVABILITY_LISTEN
+        );
+    }
 
     #[test]
     fn test_route_matching() {
@@ -797,21 +822,19 @@ mod tests {
         assert!(yaml.contains("protocol: http"));
     }
 
-    use crate::vojo::base_response::BaseResponse;
     #[tokio::test]
     async fn test_health_check() {
         let src = r#"
-response_code: 0
-response_object:
-  servers:
-  - listen: 8080
-    protocol: http
-    routes:
-      - route_id: route1
-        forward_to:
-          kind: poll
-          targets: []"#;
-        let _: BaseResponse<AppConfig> = serde_yaml::from_str(src).unwrap();
+servers:
+- listen: 8080
+  protocol: http
+  routes:
+    - route_id: route1
+      forward_to:
+        kind: poll
+        targets: []"#;
+        let config: AppConfig = serde_yaml::from_str(src).unwrap();
+        assert!(config.api_service_config.contains_key(&8080));
     }
 
     #[test]

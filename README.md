@@ -25,7 +25,7 @@ Spire is a high-performance proxy and gateway system written in Rust, designed t
 - **Health Checking** - Active/passive health checks with automatic failover
 - **TLS Support** - HTTPS/TLS encrypted connections, ACME auto certificate acquisition
 - **Monitoring Metrics** - Prometheus metrics export
-- **Dynamic Configuration** - Hot reload support, with an authenticated control plane API
+- **Dynamic Configuration** - Hot reload on `SIGHUP` (nginx-style); no HTTP admin API
 - **WebAssembly Plugins** - Per-route L7 logic in a sandboxed WebAssembly component (optional `wasm` feature); see [docs/plugin-system.md](./docs/plugin-system.md)
 
 ## Feature Details
@@ -78,9 +78,12 @@ Certificates are stored under `~/.spire/domains/<domain>/{cert,key}.pem`.
 
 Read this before exposing Spire to the internet.
 
-- **The control plane (admin API) is bound to `127.0.0.1` by default.** It can read and rewrite the
-  whole configuration, so it must not be reachable from untrusted networks. If you change
-  `admin_listen`, **set `admin_token`** — the admin API refuses nothing by itself otherwise.
+- **The only listening management surface is the read-only observability listener**
+  (`GET /health`, `GET /metrics`). It is bound to `127.0.0.1:8870` by default and needs no token
+  because it cannot read or rewrite the configuration; there is no HTTP admin API at all.
+  Expose it deliberately (`observability.listen`) when Prometheus scrapes from another host.
+- There is **no way to rewrite the configuration over the network**. The configuration file is the
+  single source of truth; apply changes with `spire reload --pid <pid>` (sends `SIGHUP`).
 - Configuration, including TLS keys, API keys and JWT secrets, is **never printed** at the default
   log levels, and secret fields are redacted in `Debug` output.
 - `X-Forwarded-For` / `X-Real-IP` are only trusted when the immediate peer is listed in
@@ -156,7 +159,7 @@ cargo build --release
 # Pull pre-built image
 docker pull ghcr.io/lsk569937453/spire:latest
 
-# Run container (the admin API stays inside the container network)
+# Run container (the observability listener stays inside the container network)
 docker run -d \
   -p 6667:6667 \
   -v $(pwd)/config.yaml:/etc/spire/config.yaml \
@@ -200,10 +203,9 @@ validated in CI:
 
 ```yaml
 log_level: info
-admin_port: 8870
-# Bind the control plane to loopback (the default) and protect it with a token.
-admin_listen: 127.0.0.1
-admin_token: change-me
+# Read-only observability listener: /health and /metrics, no authentication.
+observability:
+  listen: 127.0.0.1:8870
 # Trust the load balancer in front of Spire for X-Forwarded-For handling.
 trusted_proxies:
   - 10.0.0.0/8
@@ -264,9 +266,7 @@ acme:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `log_level` | string | `off` | Log level: trace/debug/info/warn/error |
-| `admin_port` | int | `8870` | Admin interface port |
-| `admin_listen` | string | `127.0.0.1` | Address the control plane binds to |
-| `admin_token` | string | - | Bearer token required by the control plane |
+| `observability` | object | `listen: 127.0.0.1:8870`, `enabled: true` | Read-only listener serving `GET /health` and `GET /metrics`. No authentication; `enabled: false` runs without it |
 | `trusted_proxies` | array | `[]` | CIDR list of proxies whose `X-Forwarded-For` is trusted |
 | `health_check_log_enabled` | bool | false | Enable health check logging |
 | `upstream_timeout_ms` | int | `5000` | Upstream request timeout in milliseconds (alias of the deprecated `upstream_timeout_secs`) |
@@ -334,28 +334,56 @@ A bare string (`forward_to: http://backend:8080`) is shorthand for a single back
 `scope` accepts `kind: IP` (per client IP — the `value` field is accepted but ignored),
 `kind: Header` (`key`, optional `value`) or `kind: Iprange` (`value` as a CIDR, one shared bucket).
 
-## Admin API
+## Observability and Reload
 
-Spire provides a RESTful admin API on `admin_port`:
+Spire has **no HTTP admin API**: the configuration file is the only way in, and it can only be
+changed on disk. The only listener besides the proxy ports is the read-only observability one:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Liveness probe (`ok`) |
-| `/appConfig` | GET | Get current configuration |
-| `/config` | GET | Alias of `/appConfig` |
-| `/appConfig` | POST | Add a route or a whole service |
-| `/route` | PUT | Replace a route by `route_id` |
-| `/route/{id}` | DELETE | Delete a route |
-| `/reload` | POST | Replace the configuration (listen ports must not change) |
 | `/metrics` | GET | Prometheus metrics |
-| `/letsEncryptCertificate` | POST | Request a certificate through ACME |
 
-When `admin_token` is set, every request must carry `Authorization: Bearer <token>`
-(or `X-Admin-Token: <token>`). Request bodies are limited to 2 MiB, and configuration edits are
-persisted atomically to the file passed with `-f`.
+It is unauthenticated because it cannot read or write the configuration; it binds to
+`127.0.0.1:8870` by default. Set `observability.listen` explicitly when Prometheus scrapes from
+another host, and put it behind a firewall — the endpoints are still readable by anyone who can
+reach them.
+
+### Reloading
+
+Configuration reloads are triggered by `SIGHUP` (the nginx model):
 
 ```bash
-curl -H "Authorization: Bearer change-me" http://127.0.0.1:8870/appConfig
+spire reload --pid $(pidof spire)     # sends SIGHUP
+```
+
+or, without the CLI:
+
+```bash
+# systemd
+ExecReload=/bin/kill -HUP $MAINPID
+
+# docker
+docker kill -s HUP <container>
+```
+
+On reload Spire re-reads the file it was started with:
+
+- A file that fails to parse is reported in the log and **ignored**; the previous configuration
+  keeps serving (reloads are never fatal).
+- Listeners may be **added and removed**; new ports are bound before anything is committed, so a
+  port that cannot be bound aborts the whole reload and leaves the running configuration intact.
+- Changing the `protocol` of a port that is already listening requires a restart; so does changing
+  the `domains` of an existing TLS listener (its SNI resolver is built once).
+- `observability.listen` and `log_level` require a restart (the running values are kept and the
+  change is logged).
+- `SIGHUP` does not exist on Windows: restart the process there.
+
+### Inspecting the configuration
+
+```bash
+spire validate -c config.yaml        # like `nginx -t`
+spire config expand -c config.yaml   # like `nginx -T`: parsed configuration, defaults applied
 ```
 
 ### Metrics
@@ -403,8 +431,9 @@ rust-proxy/src/
 │   └── tcp/                   # TCP proxy
 ├── middleware/                # Middleware implementations
 ├── health_check/              # Health checking
-├── control_plane/             # Control plane API
-├── configuration_service/     # Configuration management
+├── observability/             # Read-only /health + /metrics listener
+├── tls/                       # TLS certificates and ACME renewal
+├── configuration_service/     # Configuration loading, reload, logging
 └── monitor/                   # Monitoring metrics
 ```
 

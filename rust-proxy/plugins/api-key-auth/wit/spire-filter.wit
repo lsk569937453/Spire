@@ -252,7 +252,7 @@ interface lifecycle {
 
     /// The (plugin, route) binding changed, or this is the first exchange. The
     /// host calls this once per distinct `config:` blob, not once per request.
-    /// An error rejects the configuration: `GET /appConfig` reports it and the
+    /// An error rejects the configuration: `spire validate` reports it and the
     /// route is served without the plugin.
     configure: func(config: string) -> result<_, error>;
 

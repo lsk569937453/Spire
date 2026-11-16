@@ -1,11 +1,11 @@
 use crate::constants::common_constants::GRPC_STATUS_HEADER;
 use crate::constants::common_constants::GRPC_STATUS_OK;
-use crate::control_plane::cert_loader::load_tls_config_multi;
-use crate::control_plane::cert_loader::watch_for_certificate_changes;
 use crate::monitor::prometheus_exporter::metrics;
 use crate::proxy::proxy_trait::ChainTrait;
 use crate::proxy::proxy_trait::CommonCheckRequest;
 use crate::proxy::proxy_trait::SpireContext;
+use crate::tls::cert_loader::load_tls_config_multi;
+use crate::tls::cert_loader::watch_for_certificate_changes;
 use crate::vojo::app_error::AppError;
 use h2::RecvStream;
 use h2::SendStream;

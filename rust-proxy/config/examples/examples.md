@@ -36,6 +36,7 @@ spire -f config/examples/<example-file>.yaml
 | [`http_cors.yaml`](http_cors.yaml) | CORS (Cross-Origin Resource Sharing) configuration |
 | [`jwt_auth.yaml`](jwt_auth.yaml) | JWT authentication middleware |
 | [`middle_wares.yaml`](middle_wares.yaml) | Multiple middleware combination (auth + rate limit + allow/deny + CORS) |
+| [`trusted_proxies.yaml`](trusted_proxies.yaml) | Trusted proxies (`X-Forwarded-For`) plus IP based access control |
 
 ### Rate Limiting
 
@@ -65,7 +66,8 @@ spire -f config/examples/<example-file>.yaml
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `log_level` | string | `info` | Log level: trace/debug/info/warn/error |
-| `admin_port` | int | `9999` | Admin API port |
+| `observability` | object | loopback `127.0.0.1:8870`, enabled | Read-only listener: `enabled`, `listen` (`host:port`); serves `GET /health` and `GET /metrics`, no authentication |
+| `trusted_proxies` | array | `[]` | CIDRs whose `X-Forwarded-For` / `X-Real-IP` headers are trusted |
 | `health_check_log_enabled` | bool | `false` | Enable health check logging |
 | `upstream_timeout_ms` | int | `5000` | Upstream timeout in milliseconds (alias: `upstream_timeout_secs`) |
 | `upstream_concurrency_limit` | int | *auto-derived* | Global fallback for the per-endpoint concurrency limit; absent = derived from the cgroup memory limit (`mem × 50% ÷ 64 KiB` global guard, `min(10000, global ÷ 4)` per endpoint) |

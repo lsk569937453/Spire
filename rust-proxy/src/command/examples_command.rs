@@ -15,8 +15,8 @@ const EXAMPLE_LIST: &[(&str, &str)] = &[
         "HTTPS proxy with TLS certificate configuration",
     ),
     (
-        "admin_security",
-        "Control plane token/loopback binding and trusted proxy configuration",
+        "trusted_proxies",
+        "Trusted proxy (X-Forwarded-For) handling with IP based access control",
     ),
     (
         "http_weight_route",

@@ -1,90 +1,55 @@
 use crate::vojo::cli::ReloadArgs;
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::Request;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
-use std::fs;
 
-const RELOAD_ENDPOINT: &str = "/reload";
-
-pub async fn handle_reload_command(args: ReloadArgs) -> Result<(), String> {
-    // Read the config file
-    let content = fs::read_to_string(&args.config).map_err(|e| {
-        format!(
-            "Failed to read config file '{}': {}",
-            args.config,
-            e.kind().to_string().to_lowercase()
-        )
-    })?;
-
-    eprintln!(
-        "Reloading configuration from '{}' to control plane at {}:{}",
-        args.config, args.host, args.port
-    );
-
-    let url = format!("http://{}:{}{}", args.host, args.port, RELOAD_ENDPOINT);
-
-    // Create HTTP client
-    let client = Client::builder(TokioExecutor::new())
-        .http1_title_case_headers(true)
-        .http1_preserve_header_case(true)
-        .build_http();
-
-    // Build POST request
-    let mut builder = Request::builder()
-        .method(hyper::Method::POST)
-        .uri(&url)
-        .header("Content-Type", "application/yaml");
-    if let Some(token) = args.token.as_deref() {
-        builder = builder.header("Authorization", format!("Bearer {token}"));
-    }
-    let request = builder
-        .body(Full::new(Bytes::from(content)))
-        .map_err(|e| format!("Failed to build request: {}", e))?;
-
-    // Send request
-    let response = client
-        .request(request)
-        .await
-        .map_err(|e| format!("Failed to connect to control plane: {}", e))?;
-
-    let status = response.status();
-
-    // Collect response body
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .map_err(|e| format!("Failed to read response: {}", e))?
-        .to_bytes();
-    let response_text = String::from_utf8_lossy(&body);
-
-    if status.is_success() {
-        println!("Configuration reloaded successfully!");
+/// Sends `SIGHUP` to a running Spire process.
+///
+/// The signal is what makes the process re-read its configuration file — the
+/// same thing `systemd`'s `ExecReload=/bin/kill -HUP $MAINPID` and
+/// `docker kill -s HUP` deliver. Going through `kill` keeps this free of
+/// `unsafe` FFI and of a new dependency for a single syscall.
+#[cfg(unix)]
+pub fn handle_reload_command(args: ReloadArgs) -> Result<(), String> {
+    let arguments = signal_arguments(args.pid);
+    let status = std::process::Command::new("kill")
+        .args(&arguments)
+        .status()
+        .map_err(|e| {
+            format!(
+                "Failed to run 'kill': {e}. Send the signal manually with 'kill -HUP {}'.",
+                args.pid
+            )
+        })?;
+    if status.success() {
+        println!("Sent SIGHUP to process {}.", args.pid);
         Ok(())
     } else {
         Err(format!(
-            "Reload failed with status {}: {}",
-            status, response_text
+            "'kill -HUP {}' failed ({status}); is that PID a running Spire process?",
+            args.pid
         ))
     }
 }
 
-#[cfg(test)]
+/// There is no `SIGHUP` on Windows: a configuration change means a restart.
+#[cfg(not(unix))]
+pub fn handle_reload_command(args: ReloadArgs) -> Result<(), String> {
+    let _ = args;
+    Err(
+        "'reload' is not supported on Windows (there is no SIGHUP); restart the process instead."
+            .to_string(),
+    )
+}
+
+#[cfg(unix)]
+fn signal_arguments(pid: u32) -> Vec<String> {
+    vec!["-HUP".to_string(), pid.to_string()]
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_reload_url_format() {
-        let args = ReloadArgs {
-            port: 8081,
-            host: "127.0.0.1".to_string(),
-            config: "config.yaml".to_string(),
-            token: None,
-        };
-        let expected = "http://127.0.0.1:8081/reload";
-        let actual = format!("http://{}:{}{}", args.host, args.port, RELOAD_ENDPOINT);
-        assert_eq!(actual, expected);
+    fn reload_targets_the_requested_pid() {
+        assert_eq!(signal_arguments(1234), vec!["-HUP", "1234"]);
     }
 }

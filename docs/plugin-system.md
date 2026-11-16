@@ -57,7 +57,7 @@ pub enum MiddleWares {
 **三个必须正视的结构性事实**：
 
 1. **配置即运行时对象**。`Vec<MiddleWares>` 直接挂在 `RouteConfig` 里，随 `AppConfig` 一起
-   被 `Arc<RwLock<AppConfig>>` 持有、序列化回 YAML、通过控制面整体替换。
+   被 `Arc<RwLock<AppConfig>>` 持有、序列化回 YAML、通过热重载整体替换。
    所以新的 `Wasm` 变体里**只能放纯配置**，不能放编译产物、`Store`、连接池之类的东西
    （`Store` 是 `!Sync`，塞进 `AppConfig` 会直接编译失败）。这一条决定了整个架构的骨架：
    **变体存配置 → 运行时由一个进程级注册表按 id + 配置哈希解析出组件与实例**。
@@ -109,7 +109,7 @@ pub enum MiddleWares {
 | 不采纳 | 理由 |
 |---|---|
 | 每插件一个常驻线程 + mpsc | 网关的请求已经在 N 个 tokio worker 上，再加一层线程跳转是纯损耗；且 IDE 的调用频率远低于网关。改用**线程本地实例池**（§5.2） |
-| 手动 reload | 网关有控制面 `POST /reload`，插件换代必须跟配置换代绑定 |
+| 手动 reload | 网关在 `SIGHUP` 热重载时重读配置并重编译插件目录，插件换代必须跟配置换代绑定 |
 | 把 WASI 只当"时钟+随机"却仍全量链接 | 见 §5.1 的说明：Rust guest 必须链接 wasi-p2 才能编译，能做的只是把 ctx 配成 deny-all |
 
 ### 2.2 Envoy（C++ 代理，WASM HTTP filter + proxy-wasm）
@@ -163,7 +163,7 @@ pub enum MiddleWares {
 1. 第三方能在**不重新编译网关**、**不重启进程**的前提下给某个路由加 L7 逻辑。
 2. 插件出错不能把网关带下水：CPU、内存、时间、输出体积都要有硬上限。
 3. 没有插件时零开销；有插件时单次调用在**微秒级**。
-4. 配置写错在**加载期**报错（`spire validate` / 启动 / 控制面写入），而不是在数据面每请求报错。
+4. 配置写错在**加载期**报错（`spire validate` / 启动 / `SIGHUP` 重载），而不是在数据面每请求报错。
 5. 可观测：插件调用次数/耗时/trap 原因、插件自定义指标，全部进 `/metrics`。
 
 **非目标（M1 明确不做）**
@@ -374,7 +374,7 @@ wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:toml"]
 于是没有 `--features wasm` 的构建：
 
 * 仍然能解析 `kind: wasm`；
-* `spire validate`、启动、控制面写入都会明确报错：
+* `spire validate`、启动、`SIGHUP` 重载都会明确报错：
   "this build has no WASM plugin support (`kind: wasm`); rebuild with `--features wasm`"。
 
 这是刻意的：**静默忽略一个运维配的安全控制**，比启动失败危险得多
@@ -391,7 +391,7 @@ wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:toml"]
 | `proxy/http1/http_proxy.rs` | 插件开销门控：`has_plugins` 为假时**不生成** request id、不复制 method/uri |
 | `vojo/app_config.rs` | `plugins_dir: Option<String>`（默认 `~/.spire/plugins`） |
 | `app/run.rs` | `wasm::init()` + `validate_references()`，在监听器启动前 |
-| `control_plane/rest_api.rs` | `post_app_config` / `put_route` / `reload_config` 在**提交前**校验插件引用；`reload` 先重编译插件目录 |
+| `configuration_service/app_config_service.rs` | `reload_from_disk`（`SIGHUP` 路径）在**提交前**校验插件引用；先重编译插件目录 |
 | `command/validate_command.rs` | `spire validate` 也校验 `kind: wasm`（CI 里拦住坏配置） |
 | `monitor/prometheus_exporter.rs` | `spire_wasm_calls_total` / `spire_wasm_call_duration_seconds` / `spire_wasm_traps_total` / `spire_wasm_instances` |
 
@@ -407,7 +407,7 @@ wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:toml"]
 
 ## 9. 可观测性
 
-宿主指标（`/metrics`）：
+宿主指标（只读 observability 监听上的 `/metrics`，默认 `127.0.0.1:8870`）：
 
 ```
 spire_wasm_calls_total{plugin,phase,outcome}          outcome: ok|trap|out_of_fuel|timeout|panic|error
@@ -507,7 +507,7 @@ CPU-bound 的 future 里，无法承受毫秒级阻塞。可选路径：(a) 只�
 5. **实例无法跨线程共享**：同一插件在同一进程里有 N 份实例（N=worker 线程数）。
    需要全局单例语义的（比如精确全局限流）必须用 `host.shared-data`，它有 4 MiB 上限。
 6. **无签名/来源校验**：只适合运维自管的插件目录。
-7. **`plugins_dir` 进程内固定**：改它需要重启（控制面 reload 只重编译目录内容）。
+7. **`plugins_dir` 进程内固定**：改它需要重启（`SIGHUP` 重载只重编译目录内容）。
 8. **trap 后实例被丢弃**，下一次请求要重新 instantiate（约 0.1-1ms）。连续 trap 的插件会
    表现为"每请求都慢"。M2 要加**熔断**：连续 N 次 trap 后直接按 fail 策略短路，不再尝试。
 
@@ -533,7 +533,7 @@ Copy-Item dist/plugin.wasm "$HOME\.spire\plugins\io.example.header-annotator\dis
 # 用示例配置启动
 cargo run --features wasm -- -c config/examples/wasm_plugin.yaml
 curl -i http://127.0.0.1:8086/api/x      # 响应带 x-spire-upstream-status
-curl -s http://127.0.0.1:8080/metrics | Select-String spire_plugin_
+curl -s http://127.0.0.1:8870/metrics | Select-String spire_plugin_
 ```
 
 验证工具链：

@@ -1,5 +1,3 @@
-use crate::control_plane::cert_loader::load_tls_config_multi;
-use crate::control_plane::cert_loader::watch_for_certificate_changes;
 use crate::middleware::middlewares::MiddleWares;
 use crate::middleware::middlewares::RequestSnapshot;
 use crate::monitor::prometheus_exporter::metrics;
@@ -18,6 +16,8 @@ use crate::proxy::proxy_trait::DestinationResult;
 use crate::proxy::proxy_trait::HandlingResult;
 use crate::proxy::proxy_trait::{ChainTrait, SpireContext};
 use crate::proxy::proxy_trait::{CommonCheckRequest, RouterDestination};
+use crate::tls::cert_loader::load_tls_config_multi;
+use crate::tls::cert_loader::watch_for_certificate_changes;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
 use bytes::Bytes;

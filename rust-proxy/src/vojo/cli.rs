@@ -33,26 +33,27 @@ GETTING STARTED:
     spire validate -c config.yaml
         Validate a configuration file before starting
 
+    spire config expand -c config.yaml
+        Print the fully expanded configuration (like 'nginx -T')
+
     spire convert openapi.yaml -o config.yaml
         Convert OpenAPI/Swagger spec to gateway config
 
-    spire reload config.yaml
-        Reload configuration without restarting
-
-    spire query
-        Query current configuration from control plane
+    spire reload --pid 1234
+        Reload the running process (sends SIGHUP, like 'nginx -s reload')
 
 COMMANDS:
+    config (cfg)     Configuration utilities (expand)
     convert (conv)   Convert OpenAPI/Swagger files to gateway configuration
     examples (ex)    List and display configuration examples
-    query (q)        Query current configuration from control plane
-    reload (rel)     Reload configuration from a file
+    reload (rel)     Signal a running process to reload its configuration
     validate (val)   Validate a configuration file
 
 CONFIGURATION:
     Configuration files use YAML format. See 'spire examples' for available examples.
     Default config file: config.yaml
     Use 'spire validate' to check your config before starting
+    There is no HTTP admin API: apply changes with 'spire reload --pid <pid>' (SIGHUP).
 
 BUILD WITH PROFILING:
     cargo build -rF pprof
@@ -138,7 +139,7 @@ AVAILABLE CATEGORIES:
         compression, ip_ban
 
     Security
-        admin_security, jwt_auth, ip_ban
+        trusted_proxies, jwt_auth, ip_ban
 
     Rate Limiting
         ratelimit_token_bucket, ratelimit_fixed_window
@@ -187,46 +188,73 @@ COMMON ERRORS:
     Validate(ValidateArgs),
     #[command(
         visible_alias = "rel",
-        about = "Reload configuration from a file",
-        long_about = "Reload the gateway configuration by sending a new config file to the control plane API.",
+        about = "Reload the running process (sends SIGHUP)",
+        long_about = "Send SIGHUP to a running Spire process, which makes it re-read its configuration file. \
+                      Equivalent to 'nginx -s reload'.",
         after_help = "\
 EXAMPLES:
-    spire reload config.yaml
-        Reload configuration from config.yaml
+    spire reload --pid 1234
+        Reload the process with PID 1234 from its own configuration file
 
-    spire reload new_config.yaml --port 8081
-        Reload from specific config file and connect to control plane on port 8081
+    systemd:
+        ExecReload=/bin/kill -HUP $MAINPID
 
-VALIDATION:
-    The reload command validates that the new configuration has the exact same set of listen ports
-    as the current configuration. Both the number of ports and the port values must match exactly.
+    docker:
+        docker kill -s HUP <container>
 
-    This restriction ensures that the gateway continues listening on the same ports and provides
-    a smooth configuration update without interrupting existing connections."
+WHAT HAPPENS ON RELOAD:
+    - The configuration file is read again (the same one the process was started with)
+    - A file that fails to parse is logged and ignored: the previous configuration keeps running
+    - Listeners may be added and removed
+    - Changing the protocol or the domains of an existing port requires a restart
+    - The observability listener address requires a restart
+
+PLATFORMS:
+    SIGHUP only exists on Unix. On Windows, restart the process instead."
     )]
     Reload(ReloadArgs),
     #[command(
-        visible_alias = "q",
-        about = "Query current configuration from control plane",
-        long_about = "Fetch and display the current gateway configuration from the control plane API.",
+        visible_alias = "cfg",
+        about = "Configuration utilities",
+        long_about = "Inspect the configuration without starting the gateway."
+    )]
+    Config(ConfigArgs),
+}
+
+/// `spire config <subcommand>`
+#[derive(Args, Debug, Clone)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub command: ConfigCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ConfigCommand {
+    #[command(
+        about = "Print the fully expanded configuration",
+        long_about = "Parse the configuration file and print the result to stdout. \
+                      Equivalent to 'nginx -T'.",
         after_help = "\
 EXAMPLES:
-    spire query
-        Query current configuration using default host and port
+    spire config expand -c config.yaml
+        Expand config.yaml and print it
 
-    spire query --host 192.168.1.100 --port 9090
-        Query from specific control plane address
+    spire -f config.yaml config expand
+        Use the global -f/--config instead of -c
 
 OUTPUT:
-    The configuration is displayed in YAML format, showing all current settings including:
-    - Admin port
-    - Log level
-    - API service configurations
-    - Route configurations
-    - Health check settings
-    - And other configuration options"
+    The parsed configuration after defaults are applied, with secrets included:
+    this is a local debugging command, and redacting them would defeat diffing.
+    Invalid configurations are rejected with the same errors as 'spire validate'."
     )]
-    Query(QueryArgs),
+    Expand(ExpandArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ExpandArgs {
+    /// Configuration file to expand (defaults to the global -f/--config)
+    #[arg(short, long, value_name = "FILE")]
+    pub config: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -264,40 +292,9 @@ pub struct ValidateArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct ReloadArgs {
-    /// Configuration file to load
-    #[arg(value_name = "FILE")]
-    pub config: String,
-
-    /// Control plane host
-    #[arg(long, default_value = "127.0.0.1")]
-    pub host: String,
-
-    /// Control plane port
-    #[arg(short, long, default_value = "8870")]
-    pub port: u16,
-
-    /// Control plane admin token (required when `admin_token` is configured)
-    #[arg(short, long)]
-    pub token: Option<String>,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct QueryArgs {
-    /// Control plane host
-    #[arg(long, default_value = "127.0.0.1")]
-    pub host: String,
-
-    /// Control plane port
-    #[arg(short, long, default_value = "8870")]
-    pub port: u16,
-
-    /// Output format (yaml or json)
-    #[arg(short, long, default_value = "yaml")]
-    pub format: String,
-
-    /// Control plane admin token (required when `admin_token` is configured)
-    #[arg(short, long)]
-    pub token: Option<String>,
+    /// Process ID of the running Spire instance to signal
+    #[arg(long, value_name = "PID")]
+    pub pid: u32,
 }
 
 #[derive(Clone)]

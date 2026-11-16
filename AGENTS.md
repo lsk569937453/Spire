@@ -2,17 +2,17 @@
 
 ## 1. 项目定位
 
-Spire 是高性能反向代理 / 网关：单 crate Rust 二进制，源码在 `rust-proxy/`（根目录不是 Cargo workspace，所有 cargo 命令先 `cd rust-proxy`）。技术栈 Tokio + Hyper + axum（控制面）+ rustls，`edition = "2024"`，Rust 1.85+，`cargo build --release` 产出 `target/release/spire`。
+Spire 是高性能反向代理 / 网关：单 crate Rust 二进制，源码在 `rust-proxy/`（根目录不是 Cargo workspace，所有 cargo 命令先 `cd rust-proxy`）。技术栈 Tokio + Hyper + axum（只读 observability 监听）+ rustls，`edition = "2024"`，Rust 1.85+，`cargo build --release` 产出 `target/release/spire`。
 
 本仓库只有服务端代码，没有前端。
 
-文档分工：`README.md` 是特性、配置参考与 Admin API 的权威来源；`docs/plugin-system.md` 是 WASM 插件设计；`rust-proxy/config/examples/*.yaml` 是可运行示例。写代码前先读对应章节与目标模块头的 `//!` 文档，不要凭记忆猜字段名或语义。
+文档分工：`README.md` 是特性、配置参考与 observability/重载语义的权威来源；`docs/plugin-system.md` 是 WASM 插件设计；`rust-proxy/config/examples/*.yaml` 是可运行示例。写代码前先读对应章节与目标模块头的 `//!` 文档，不要凭记忆猜字段名或语义。
 
 ## 2. 结构与数据流
 
-- 启动：`src/main.rs` → `app/run.rs::main_with_error()` → CLI 子命令（`vojo/cli.rs`：默认 serve，另有 `validate` / `examples` / `query` / `reload` / `convert`），或 `run_app` 拉起配置服务与各端口代理；控制面 REST 在 `admin_port`，默认只绑 `127.0.0.1`。
+- 启动：`src/main.rs` → `app/run.rs::main_with_error()` → CLI 子命令（`vojo/cli.rs`：默认 serve，另有 `validate` / `config expand` / `examples` / `reload` / `convert`），或 `run_app` 拉起配置服务、只读 observability 监听与各端口代理；**没有 HTTP 管理面**，重载靠 `SIGHUP`。
 - 请求链路：监听（`proxy/http1`、`proxy/http2`、`proxy/tcp`）→ 路由匹配（`vojo/router.rs`、`vojo/matcher.rs`）→ 请求阶段中间件（`middleware/`，由 `middlewares.rs` 组装）→ 并发预算（`proxy/concurrency.rs`）→ 上游 → 响应阶段中间件 → 指标（`monitor/`）。
-- 目录职责：`vojo/` 放配置与数据结构、`AppError`；`configuration_service/` 管加载、热重载与日志；`control_plane/` 管 admin API 与证书；`health_check/` 管主动/被动探测；`command/` 放 CLI 子命令；`utils/` 放公共小工具；`wasm/` 是插件宿主，只在 `--features wasm` 下编译。
+- 目录职责：`vojo/` 放配置与数据结构、`AppError`；`configuration_service/` 管配置加载（`config_loader.rs`，统一入口）、热重载与日志；`observability/` 是只读 `/health` + `/metrics` 监听；`tls/` 管证书加载与 ACME 续期；`health_check/` 管主动/被动探测；`command/` 放 CLI 子命令；`utils/` 放公共小工具；`wasm/` 是插件宿主，只在 `--features wasm` 下编译。
 
 ## 3. 质量门禁
 
@@ -61,8 +61,8 @@ cargo test
 ## 5. 架构不变量
 
 - **配置 schema 成套同步**：`vojo/app_config.rs` 的字段（含 `serde(default)` / `skip_serializing_if` 风格）→ README 配置参考表 → `config/examples/*.yaml` → `docker/spires/app_config.yaml` → `benchmarks/spires/app_config.yaml` → 相关 docs。旧字段要么兼容、要么显式报错，不静默忽略。
-- **控制面安全**：默认绑 `127.0.0.1`；写接口必须经过 `require_admin_token`（`control_plane/rest_api.rs`），新增端点挂到同一个 router；请求体上限走 `MAX_ADMIN_BODY_BYTES`；配置写入原子落盘。日志与错误信息里不得出现 token、密钥、证书私钥。
-- **重载语义**：`/reload` 不改变监听端口，改端口属于重启；新增可热更状态时确认它能在 reload 路径上重建。
+- **观测面只读**：`observability/` 只提供 `GET /health` 与 `GET /metrics`，默认绑 `127.0.0.1:8870`；不得新增任何能改写配置的 HTTP 端点。配置唯一来源是文件，日志与错误信息里不得出现 token、密钥、证书私钥。
+- **重载语义**：`SIGHUP` → `app_config_service::reload_from_disk` 重读配置文件；解析失败只记日志、保留旧配置；监听器可增删，新端口先全部 bind 成功才提交（两阶段），失败整体回滚；同一端口改 `protocol`/`domains`、改 `observability.listen`、改 `log_level` 都需要重启。新增可热更状态时确认它能在该路径上重建。
 - **请求热路径**：不加全局锁、不做 per-request 配置深拷贝；指标 label 只用 `route_id`，禁止用原始请求路径（基数无界）；访问日志保持在 `debug` 级。
 - **背压与超时不绕过**：在途 permit 必须覆盖到响应体流完（`PermitBody`）；新的转发路径必须走 `proxy/concurrency.rs` 的两层预算（端点信号量 + 进程级内存保险），不另立一套。
 - **客户端 IP 只有一层真相**：`X-Forwarded-For` / `X-Real-IP` 只有在 `trusted_proxies` 命中时才可信（`utils/client_ip.rs`），不另写解析。

@@ -6,7 +6,6 @@
 # Shows path+method combinations for CRUD operations.
 
 health_check_log_enabled: false
-admin_port: 8870
 log_level: debug
 servers:
   - listen: 8080

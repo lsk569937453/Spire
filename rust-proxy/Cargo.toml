@@ -1,10 +1,10 @@
 [package]
 name = "spire-proxy" # unique on crates.io
-version = "0.0.29"
+version = "0.0.30"
 authors = ["lsk"]
 license = "Apache-2.0"
 edition = "2024"
-description = "A high-performance proxy server with control plane, supporting HTTP/HTTPS, gRPC, and advanced routing capabilities"
+description = "A high-performance reverse proxy / API gateway with a read-only observability listener, supporting HTTP/HTTPS, gRPC, and advanced routing capabilities"
 repository = "https://github.com/lsk569937453/Spire"
 keywords = ["proxy", "http", "https", "grpc", "reverse-proxy"]
 categories = [

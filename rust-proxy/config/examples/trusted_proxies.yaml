@@ -1,23 +1,24 @@
 # =============================================================================
-# File: admin_security.yaml
-# Description: Control plane hardening and trusted proxy configuration
+# File: trusted_proxies.yaml
+# Description: Trusted proxy configuration plus IP-based access control
 # =============================================================================
-# The control plane (admin API) can read and rewrite the whole configuration.
-# It therefore binds to loopback by default and should always be protected by a
-# token when it is exposed:
+# `trusted_proxies` lists the load balancers / reverse proxies in front of
+# Spire. Only requests coming from one of these CIDRs have their
+# X-Forwarded-For / X-Real-IP honoured; everything else is treated as a direct
+# client, so IP based rate limiting, IP banning and allow/deny lists cannot be
+# bypassed by spoofing those headers.
 #
-#   admin_listen: 0.0.0.0     # opt in explicitly
-#   admin_token:  <secret>    # required for anything non-loopback
+# Spire itself has no HTTP admin API any more: the only listening surface is the
+# read-only observability listener (`/health`, `/metrics`), which binds to
+# loopback by default and needs no token:
 #
-# `trusted_proxies` lists the load balancers in front of Spire. Only requests
-# coming from one of these CIDRs have their X-Forwarded-For / X-Real-IP honoured;
-# everything else is treated as a direct client, so IP based rate limiting,
-# IP banning and allow/deny lists cannot be bypassed by spoofing those headers.
+#   observability:
+#     listen: 0.0.0.0:8870    # opt in explicitly when Prometheus scrapes remotely
+#     enabled: true
 
 log_level: info
-admin_listen: 127.0.0.1
-admin_port: 8870
-admin_token: change-me
+observability:
+  listen: 127.0.0.1:8870
 trusted_proxies:
   - 10.0.0.0/8
   - 192.168.0.0/16

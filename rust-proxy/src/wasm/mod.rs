@@ -228,7 +228,7 @@ pub fn resolve(id: &str) -> Result<Arc<CompiledPlugin>, AppError> {
     )))
 }
 
-/// Every plugin id currently loaded (for `GET /appConfig` and `spire validate`).
+/// Every plugin id currently loaded (for logs and `spire validate`).
 pub fn loaded_ids() -> Vec<String> {
     PLUGINS
         .read()
@@ -238,7 +238,7 @@ pub fn loaded_ids() -> Vec<String> {
 
 /// Fails when a route references a plugin that is not loaded, or carries
 /// budgets the host refuses. Used by config load, `spire validate` and the
-/// control plane so the same rule applies everywhere.
+/// SIGHUP reload so the same rule applies everywhere.
 pub fn validate_references(config: &AppConfig) -> Result<(), AppError> {
     for service in config.api_service_config.values() {
         for route in &service.route_configs {

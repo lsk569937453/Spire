@@ -1,6 +1,8 @@
+use crate::configuration_service::config_loader;
 use crate::vojo::app_config::AppConfig;
 use crate::vojo::cli::ValidateArgs;
 use std::fs;
+use std::path::Path;
 
 pub async fn handle_validate_command(args: ValidateArgs) -> Result<(), String> {
     let config_path = args
@@ -25,14 +27,10 @@ pub async fn handle_validate_command(args: ValidateArgs) -> Result<(), String> {
         eprintln!("File read successfully, parsing configuration...");
     }
 
-    // Parse and deserialize the YAML
-    let config: AppConfig = serde_yaml::from_str(&content).map_err(|e| {
-        format!(
-            "Invalid YAML syntax in '{}':\n  {}",
-            config_path,
-            format_yaml_error(&e)
-        )
-    })?;
+    // Parse and deserialize the YAML with the same loader the process and the
+    // SIGHUP reload use, so a configuration cannot pass here and fail there.
+    let config =
+        config_loader::parse_app_config(Path::new(&config_path), &content).map_err(|e| e.0)?;
 
     // `kind: wasm` middlewares need a build that can run them and, for the
     // plugin itself, a package on disk. Reporting that here means `spire
@@ -93,32 +91,9 @@ fn validate_wasm_middlewares(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn format_yaml_error(error: &serde_yaml::Error) -> String {
-    let err_str = error.to_string();
-    // Clean up the error message for better readability
-    if let Some(line_col) = error.location() {
-        format!(
-            "{} at line {}, column {}",
-            err_str.replace("EOF while parsing a value", "unexpected end of file"),
-            line_col.line(),
-            line_col.column()
-        )
-    } else {
-        err_str
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_format_yaml_error() {
-        let yaml = "invalid: yaml: content: [";
-        let error = serde_yaml::from_str::<serde_yaml::Value>(yaml).unwrap_err();
-        let formatted = format_yaml_error(&error);
-        assert!(formatted.contains("line"));
-    }
 
     #[test]
     fn test_valid_config_deserialization() {
@@ -133,10 +108,18 @@ servers:
             value: /
         forward_to: http://backend:8080
 "#;
-        let result: Result<AppConfig, _> = serde_yaml::from_str(yaml);
+        let result = config_loader::parse_app_config(Path::new("config.yaml"), yaml);
         assert!(
             result.is_ok(),
             "Valid config should deserialize successfully"
         );
+    }
+
+    #[test]
+    fn test_removed_admin_field_is_reported() {
+        let yaml = "admin_token: change-me\nservers: []\n";
+        let error = config_loader::parse_app_config(Path::new("config.yaml"), yaml)
+            .expect_err("admin_token was removed");
+        assert!(error.0.contains("admin_token"), "{}", error.0);
     }
 }

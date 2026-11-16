@@ -5,9 +5,9 @@
 # file. Keep this in sync with the current configuration schema — it is what the
 # published throughput numbers were measured with.
 log_level: info
-# The admin API is only used locally by the benchmark scripts.
-admin_listen: 127.0.0.1
-admin_port: 8870
+# The observability listener is only scraped locally by the benchmark setup.
+observability:
+  listen: 127.0.0.1:8870
 
 servers:
   - listen: 6667

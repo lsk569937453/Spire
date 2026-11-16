@@ -2,11 +2,12 @@ mod app;
 mod command;
 mod configuration_service;
 mod constants;
-mod control_plane;
 mod health_check;
 mod middleware;
 mod monitor;
+mod observability;
 mod proxy;
+mod tls;
 mod utils;
 mod vojo;
 #[cfg(feature = "wasm")]

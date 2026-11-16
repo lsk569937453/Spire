@@ -1,10 +1,13 @@
 # Example configuration shipped inside the container image.
 #
-# It proxies port 6667 to a single upstream and keeps the admin API on loopback
-# (the default). Set `admin_listen: 0.0.0.0` **and** `admin_token` if you want to
-# reach the control plane from outside the container.
+# It proxies port 6667 to a single upstream and exposes the read-only
+# observability listener (`/health`, `/metrics`) on 8870. The listener is
+# unauthenticated, so it binds to loopback by default; set
+# `observability.listen: 0.0.0.0:8870` when Prometheus scrapes it from another
+# container or host (the bundled compose file publishes the port for that).
 log_level: info
-admin_port: 8870
+observability:
+  listen: 0.0.0.0:8870
 
 servers:
   - listen: 6667

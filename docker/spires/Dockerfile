@@ -25,8 +25,8 @@ RUN chmod 0755 /usr/local/bin/spire \
 USER spire
 WORKDIR /home/spire
 
-# The admin API binds to loopback by default, so the probe runs inside the
-# container. `/health` needs no admin token.
+# The observability listener binds to loopback by default, so the probe runs
+# inside the container. `/health` needs no authentication.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8870/health || exit 1
 

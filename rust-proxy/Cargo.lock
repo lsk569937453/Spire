@@ -3865,7 +3865,7 @@ dependencies = [
 
 [[package]]
 name = "spire-proxy"
-version = "0.0.29"
+version = "0.0.30"
 dependencies = [
  "async-trait",
  "axum",

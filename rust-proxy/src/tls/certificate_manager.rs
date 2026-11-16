@@ -1,5 +1,5 @@
 use crate::app_error;
-use crate::control_plane::certificate_api::LetsEncryptActions;
+use crate::tls::acme::LetsEncryptActions;
 use crate::utils::fs_utils::get_domain_path;
 use crate::vojo::acme_client::LetsEntrypt;
 use crate::vojo::app_config::{AcmeConfig, AppConfig, ServiceType};

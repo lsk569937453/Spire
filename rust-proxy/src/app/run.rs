@@ -7,9 +7,9 @@ use mimalloc::MiMalloc;
 static GLOBAL: MiMalloc = MiMalloc;
 
 extern crate derive_builder;
+use crate::command::config_command::handle_config_expand_command;
 use crate::command::examples_command::handle_examples_command;
 use crate::command::openapi_converter::handle_convert_command;
-use crate::command::query_command::handle_query_command;
 use crate::command::reload_command::handle_reload_command;
 use crate::command::validate_command::handle_validate_command;
 use crate::monitor::prometheus_exporter::metrics;
@@ -17,20 +17,21 @@ use crate::vojo::cli::Cli;
 
 use clap::Parser;
 
-use crate::constants::common_constants::DEFAULT_ADMIN_PORT;
+use crate::configuration_service::config_loader;
 use crate::proxy::concurrency;
 use crate::utils::memory_limit;
 use crate::vojo::app_config::AppConfig;
 use crate::vojo::cli::SharedConfig;
 
 use crate::vojo::cli::Commands;
+use crate::vojo::cli::ConfigCommand;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::{Registry, filter};
 
 use crate::configuration_service::app_config_service;
 use crate::vojo::app_error::AppError;
 
-use crate::control_plane::rest_api::start_control_plane;
+use crate::observability::server::start_observability;
 use tracing_subscriber::reload::Handle;
 
 pub async fn main_with_error() -> Result<(), AppError> {
@@ -91,18 +92,23 @@ pub async fn main_with_error() -> Result<(), AppError> {
                 // Exit with success code
                 std::process::exit(0);
             }
-            Commands::Query(args) => {
-                info!("'query' command detected");
-                if let Err(e) = handle_query_command(args).await {
-                    error!("Query failed: {e}");
-                    return Err(AppError(e));
+            Commands::Config(args) => {
+                info!("'config' command detected");
+                match args.command {
+                    ConfigCommand::Expand(expand_args) => {
+                        if let Err(e) =
+                            handle_config_expand_command(expand_args, &cli.config_path).await
+                        {
+                            error!("Failed to expand configuration: {e}");
+                            return Err(e);
+                        }
+                    }
                 }
-                info!("Query successful!");
                 std::process::exit(0);
             }
             Commands::Reload(args) => {
                 info!("'reload' command detected");
-                if let Err(e) = handle_reload_command(args).await {
+                if let Err(e) = handle_reload_command(args) {
                     error!("Reload failed: {e}");
                     return Err(AppError(e));
                 }
@@ -162,8 +168,11 @@ async fn run_app(
             config.upstream_concurrency_limit.unwrap_or_default()
         );
     }
-    let admin_port = config.admin_port.unwrap_or(DEFAULT_ADMIN_PORT);
     let shared_config = SharedConfig::from_app_config_with_path(config, &cli.config_path);
+    info!(
+        "Configuration file: {}",
+        shared_config.config_path.display()
+    );
 
     app_config_service::init(shared_config.clone()).await?;
     info!("Configuration service initialized.");
@@ -200,10 +209,31 @@ async fn run_app(
         }
     }
 
-    info!("Starting control plane on port {admin_port}...");
-    start_control_plane(admin_port, shared_config.clone(), shutdown_signal()).await?;
+    // The observability listener is read-only and bound once: a SIGHUP reload
+    // keeps it (changing its address requires a restart).
+    let (observability_shutdown_tx, observability_shutdown_rx) = tokio::sync::oneshot::channel();
+    let observability_config = shared_config.shared_data.read()?.observability.clone();
+    let observability_server = start_observability(&observability_config, async move {
+        let _ = observability_shutdown_rx.await;
+    })
+    .await?;
 
-    // The control plane has stopped: ask every proxy listener to stop as well.
+    // The process lives in this loop: SIGHUP reloads the configuration from
+    // disk, SIGINT/SIGTERM shut everything down.
+    wait_for_signals(&shared_config).await;
+
+    // Ask the observability listener to stop, then every proxy listener.
+    let _ = observability_shutdown_tx.send(());
+    if let Some(handle) = observability_server {
+        let waited = tokio::time::timeout(
+            std::time::Duration::from_secs(crate::constants::common_constants::TIMER_WAIT_SECONDS),
+            handle,
+        )
+        .await;
+        if waited.is_err() {
+            warn!("The observability listener did not stop in time.");
+        }
+    }
     shutdown_listeners(&shared_config).await;
 
     // Tear down this thread's plugin instances, so `lifecycle.stop` runs while
@@ -215,35 +245,78 @@ async fn run_app(
     Ok(())
 }
 
-/// Waits for `SIGINT` (Ctrl+C) or `SIGTERM` (docker stop / k8s rollout).
-async fn shutdown_signal() {
-    let ctrl_c = async {
+/// Waits for a shutdown signal, reloading the configuration on `SIGHUP`.
+///
+/// A failed reload only logs: the process keeps serving with the configuration
+/// it already has, which is also what nginx does. `SIGHUP` does not exist on
+/// Windows, so a reload there means a restart.
+async fn wait_for_signals(shared_config: &SharedConfig) {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::SignalKind;
+        use tokio::signal::unix::signal;
+
+        let mut interrupt = match signal(SignalKind::interrupt()) {
+            Ok(signal) => signal,
+            Err(e) => {
+                error!("Failed to listen for SIGINT: {e}");
+                std::future::pending::<()>().await;
+                return;
+            }
+        };
+        let mut terminate = match signal(SignalKind::terminate()) {
+            Ok(signal) => signal,
+            Err(e) => {
+                error!("Failed to listen for SIGTERM: {e}");
+                std::future::pending::<()>().await;
+                return;
+            }
+        };
+        let mut hangup = match signal(SignalKind::hangup()) {
+            Ok(signal) => signal,
+            Err(e) => {
+                error!("Failed to listen for SIGHUP: {e}");
+                std::future::pending::<()>().await;
+                return;
+            }
+        };
+
+        loop {
+            tokio::select! {
+                _ = interrupt.recv() => {
+                    debug!("SIGINT received");
+                    break;
+                }
+                _ = terminate.recv() => {
+                    debug!("SIGTERM received");
+                    break;
+                }
+                _ = hangup.recv() => {
+                    info!(
+                        "SIGHUP received, reloading configuration from '{}'",
+                        shared_config.config_path.display()
+                    );
+                    match app_config_service::reload_from_disk(shared_config).await {
+                        Ok(()) => info!("Configuration reloaded."),
+                        Err(e) => error!(
+                            "Configuration reload failed, keeping the previous configuration: {e}"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = shared_config;
         if let Err(e) = tokio::signal::ctrl_c().await {
             error!("Failed to listen for Ctrl+C: {e}");
             std::future::pending::<()>().await;
         }
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut signal) => {
-                signal.recv().await;
-            }
-            Err(e) => {
-                error!("Failed to listen for SIGTERM: {e}");
-                std::future::pending::<()>().await;
-            }
-        }
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => debug!("Ctrl+C received"),
-        _ = terminate => debug!("SIGTERM received"),
+        debug!("Ctrl+C received");
     }
+
     info!("Shutdown signal received, draining listeners...");
 }
 
@@ -261,18 +334,13 @@ async fn shutdown_listeners(shared_config: &SharedConfig) {
     };
 
     for sender in senders {
-        // The receivers stop accepting as soon as the control plane returns.
         let _ = sender.send(()).await;
     }
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 }
 
 async fn load_config(cli: &Cli) -> Result<AppConfig, AppError> {
-    let config_str = tokio::fs::read_to_string(&cli.config_path)
-        .await
-        .map_err(|e| AppError(format!("Failed to read '{}': {e}", cli.config_path)))?;
-    let config: AppConfig = serde_yaml::from_str(&config_str)?;
-    Ok(config)
+    config_loader::read_app_config(std::path::Path::new(&cli.config_path)).await
 }
 
 fn reconfigure_logger(
@@ -397,7 +465,6 @@ servers:
     fn test_reconfigure_logger_with_health_check_logs_disabled() {
         let reload_handle = setup_test_logger_handle();
         let config = AppConfig {
-            admin_port: None,
             health_check_log_enabled: Some(false),
             ..Default::default()
         };
@@ -419,7 +486,6 @@ servers:
     fn test_reconfigure_logger_with_health_check_logs_enabled() {
         let reload_handle = setup_test_logger_handle();
         let config = AppConfig {
-            admin_port: None,
             health_check_log_enabled: Some(true),
             ..Default::default()
         };
@@ -440,7 +506,6 @@ servers:
     fn test_reconfigure_logger_with_health_check_logs_not_set() {
         let reload_handle = setup_test_logger_handle();
         let config = AppConfig {
-            admin_port: None,
             health_check_log_enabled: None, // key assertion of this test
             ..Default::default()
         };

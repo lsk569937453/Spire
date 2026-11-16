@@ -1,6 +1,6 @@
 use super::app_error::AppError;
 use crate::app_error;
-use crate::control_plane::certificate_api::LetsEncryptActions;
+use crate::tls::acme::LetsEncryptActions;
 use crate::vojo::app_config::AcmeConfig;
 use axum::extract::State;
 use axum::{Router, extract::Path, http::StatusCode, routing::any};
