@@ -262,10 +262,12 @@ fn limiter_for(key: &str, cfg: &ConcurrencyConfig) -> Arc<UpstreamLimiter> {
     {
         return existing.clone();
     }
+    // A panicking writer cannot leave this map structurally broken, so a
+    // poisoned lock is recovered instead of aborting the request task.
     let mut map = registry()
         .limiters
         .write()
-        .expect("limiter registry lock poisoned");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // Another thread may have won the write race while we upgraded the lock.
     if let Some(existing) = map.get(key)
         && &existing.cfg == cfg
@@ -322,10 +324,12 @@ pub async fn acquire_weighted(
     // footprint. `try_acquire_many_owned` is atomic — we get all `weight`
     // permits or none.
     let weight = weight.max(1) as u32;
+    // Same poison policy as `limiter_for`: recovering keeps the request path
+    // panic-free, and the guard itself is only ever replaced wholesale.
     let global = registry()
         .global
         .read()
-        .expect("global guard lock poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
     match global.clone().try_acquire_many_owned(weight) {
         Ok(global_permit) => Ok(UpstreamPermit::from_parts(endpoint_permit, global_permit)),

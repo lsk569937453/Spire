@@ -36,12 +36,21 @@ use tracing_subscriber::reload::Handle;
 pub async fn main_with_error() -> Result<(), AppError> {
     #[cfg(feature = "pprof")]
     tokio::spawn(async {
-        let profiler = pprof::ProfilerGuard::new(30).unwrap();
+        // Profiling is a diagnostic side channel: a failure here must never
+        // take the process (or the request path) down with it.
+        let Ok(profiler) = pprof::ProfilerGuard::new(30) else {
+            eprintln!("pprof: failed to start the profiler");
+            return;
+        };
         tokio::time::sleep(std::time::Duration::from_secs(20)).await;
         if let Ok(report) = profiler.report().build() {
-            let file = std::fs::File::create("flamegraph.svg").unwrap();
-            report.flamegraph(file).unwrap();
-            println!("自动生成火焰图完成");
+            let Ok(file) = std::fs::File::create("flamegraph.svg") else {
+                eprintln!("pprof: failed to create flamegraph.svg");
+                return;
+            };
+            if report.flamegraph(file).is_ok() {
+                println!("Flamegraph written to flamegraph.svg");
+            }
         };
     });
     let (reload_handle, _guard) = setup_logger()?;

@@ -187,9 +187,9 @@ where
                 Duration::from_millis(timeout),
                 labels.clone(),
             );
-            let permit = permit
-                .take()
-                .expect("permit only taken on the timeout/error paths");
+            let permit = permit.take().ok_or_else(|| {
+                AppError("concurrency permit disappeared before the body was built".to_string())
+            })?;
             let permit_body = PermitBody::new(timed.boxed(), permit, labels, Instant::now());
             Ok(Response::from_parts(parts, permit_body.boxed()))
         }

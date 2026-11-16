@@ -195,13 +195,9 @@ impl IpBan {
                 triggered.push(idx);
             }
         }
-        if triggered.is_empty() {
-            return None;
-        }
         let worst = *triggered
             .iter()
-            .max_by_key(|&&i| self.rules[i].ban_duration)
-            .unwrap();
+            .max_by_key(|&&i| self.rules[i].ban_duration)?;
         let (window, ban_duration, count) = {
             let rule = &self.rules[worst];
             (rule.window, rule.ban_duration, counters[worst].1)
