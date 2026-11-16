@@ -34,23 +34,42 @@ use crate::vojo::app_error::AppError;
 use crate::observability::server::start_observability;
 use tracing_subscriber::reload::Handle;
 
+#[cfg(feature = "pprof")]
+fn profile_env<T: std::str::FromStr>(name: &str, default: T) -> T {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
 pub async fn main_with_error() -> Result<(), AppError> {
     #[cfg(feature = "pprof")]
     tokio::spawn(async {
         // Profiling is a diagnostic side channel: a failure here must never
         // take the process (or the request path) down with it.
-        let Ok(profiler) = pprof::ProfilerGuard::new(30) else {
+        //
+        // Sampling is deferred so that a benchmark can warm up first:
+        //   SPIRE_PROFILE_DELAY_SECS - idle seconds before sampling (default 5)
+        //   SPIRE_PROFILE_SECS       - sampling window in seconds (default 60)
+        //   SPIRE_PROFILE_HZ         - sampling frequency in Hz (default 99)
+        //   SPIRE_PROFILE_OUT        - flamegraph output path (default flamegraph.svg)
+        let delay_secs: u64 = profile_env("SPIRE_PROFILE_DELAY_SECS", 5);
+        let window_secs: u64 = profile_env("SPIRE_PROFILE_SECS", 60);
+        let hz: i32 = profile_env("SPIRE_PROFILE_HZ", 99);
+        let out_path: String = profile_env("SPIRE_PROFILE_OUT", "flamegraph.svg".to_string());
+        tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+        let Ok(profiler) = pprof::ProfilerGuard::new(hz) else {
             eprintln!("pprof: failed to start the profiler");
             return;
         };
-        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(window_secs)).await;
         if let Ok(report) = profiler.report().build() {
-            let Ok(file) = std::fs::File::create("flamegraph.svg") else {
-                eprintln!("pprof: failed to create flamegraph.svg");
+            let Ok(file) = std::fs::File::create(&out_path) else {
+                eprintln!("pprof: failed to create {out_path}");
                 return;
             };
             if report.flamegraph(file).is_ok() {
-                println!("Flamegraph written to flamegraph.svg");
+                println!("Flamegraph written to {out_path}");
             }
         };
     });

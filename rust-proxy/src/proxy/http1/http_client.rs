@@ -18,15 +18,18 @@ pub struct HttpClients {
 }
 impl HttpClients {
     pub fn new() -> HttpClients {
+        // hyper-util's HttpConnector leaves TCP_NODELAY off. For a reverse proxy
+        // that writes request headers and body as separate segments this costs a
+        // delayed-ACK round trip per request, so enable it to match nginx.
+        let mut connector = HttpConnector::new();
+        connector.set_nodelay(true);
         let http_client = Client::builder(TokioExecutor::new())
             .pool_idle_timeout(Duration::from_secs(90))
             .pool_max_idle_per_host(1024)
             .http2_adaptive_window(true)
             .http2_keep_alive_interval(Duration::from_secs(15))
             .http2_keep_alive_timeout(Duration::from_secs(5))
-            .http1_title_case_headers(true)
-            .http1_preserve_header_case(true)
-            .build_http();
+            .build(connector);
         let mut root_store = RootCertStore::empty();
         root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 

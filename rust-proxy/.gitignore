@@ -26,3 +26,7 @@ logs
 *.wasm
 !plugins/header-annotator/dist/plugin.wasm
 plugins/*/target/
+
+# Profiling/symbol builds used by benchmarks/perf-2026-11 (cross, debug info kept).
+/target-pprof/
+/target-symbols/

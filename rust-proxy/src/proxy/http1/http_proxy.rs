@@ -62,6 +62,13 @@ impl HttpProxy {
         loop {
             tokio::select! {
                Ok((stream,addr))= listener.accept()=>{
+                // nginx proxies with TCP_NODELAY on both sides; hyper only sets
+                // it when asked. Without it every split write waits for the
+                // peer's delayed ACK, which shows up as p99 tail latency on
+                // keep-alive connections.
+                if let Err(err) = stream.set_nodelay(true) {
+                    debug!("Failed to set TCP_NODELAY on the client socket: {err}");
+                }
                 let client_cloned = client.clone();
                 let cloned_shared_config=self.shared_config.clone();
                 let cloned_port=self.port;
@@ -69,9 +76,9 @@ impl HttpProxy {
                 tokio::spawn(async move {
                     let io = TokioIo::new(stream);
 
+                    // Header-case preservation costs a per-message case map and a
+                    // re-casing pass; nginx forwards header bytes untranslated.
                     if let Err(err) = http1::Builder::new()
-                    .preserve_header_case(true)
-                    .title_case_headers(true)
                         .serve_connection(
                             io,
                             service_fn(move |req: Request<Incoming>| {
@@ -120,6 +127,11 @@ impl HttpProxy {
         loop {
             tokio::select! {
                     Ok((tcp_stream,addr))= listener.accept()=>{
+                        // TLS record framing is even more sensitive to Nagle
+                        // stalls than plain HTTP, so set it before the handshake.
+                        if let Err(err) = tcp_stream.set_nodelay(true) {
+                            debug!("Failed to set TCP_NODELAY on the TLS socket: {err}");
+                        }
                         let tls_acceptor = {
                             let config_guard = shared_tls_config.read().map_err(|e| AppError(format!("Failed to get read lock on TLS config: {e}")))?;
                             TlsAcceptor::from(Arc::new(config_guard.clone()))
@@ -491,7 +503,7 @@ where
             apply_response_phases(middlewares, phase_info, wasm_request.as_ref(), response)?;
         }
         chain_trait
-            .handle_before_response(middlewares, request_path, &mut res, cloned_headers.clone())
+            .handle_before_response(middlewares, request_path, &mut res, cloned_headers)
             .await?;
         // Access-log hooks run last: the response is final, and a failure here
         // can no longer change what the client receives.
