@@ -97,6 +97,25 @@ interface types {
         body: list<u8>,
     }
 
+    /// One outbound HTTP request a plugin may perform through `host.http-call`.
+    /// The URL must use `http` or `https` and its host must be in the route's
+    /// `http_allowed_hosts`; anything else is refused before a socket opens.
+    record http-request {
+        method: string,
+        /// Absolute URL, e.g. `https://auth.internal/verify`.
+        url: string,
+        headers: list<header>,
+        body: option<list<u8>>,
+    }
+
+    /// The response to `host.http-call`. The body is bounded by the route's
+    /// `max_http_body_bytes`; redirects are never followed.
+    record http-response {
+        status: u16,
+        headers: list<header>,
+        body: list<u8>,
+    }
+
     /// One header mutation. The host applies the list in order, so
     /// `set(a, 1)` then `add(a, 2)` leaves `a: 2` (HTTP header maps keep one
     /// value per name unless `add` is used).
@@ -172,7 +191,7 @@ interface types {
 /// `error::denied` (it never traps, so a plugin that guards properly keeps
 /// working with a reduced grant).
 interface host {
-    use types.{error, log-level};
+    use types.{error, http-request, http-response, log-level};
 
     /// Emits one line to the gateway log with `plugin = <id>`. Rate limited by
     /// the host (a fixed budget per exchange): the call itself never fails.
@@ -205,6 +224,20 @@ interface host {
 
     /// Milliseconds since the UNIX epoch.
     now-millis: func() -> u64;
+
+    /// Performs one outbound HTTP(S) request and returns its response.
+    ///
+    /// Gated by `host.http-call`. The URL's host must appear in the route's
+    /// `http_allowed_hosts`; anything else returns `error::denied` without
+    /// opening a socket. Redirects are not followed, the whole exchange is
+    /// bounded by `http_timeout_ms`, and the response body by
+    /// `max_http_body_bytes`.
+    ///
+    /// This call blocks the worker thread that entered the guest for its whole
+    /// duration, because the guest call itself is synchronous. It is meant for
+    /// short request/response exchanges (token checks, auth callouts), not for
+    /// streaming or long polls.
+    http-call: func(request: http-request) -> result<http-response, error>;
 }
 
 /// Called once per instance, before any traffic callback.
@@ -270,11 +303,25 @@ interface response-filter {
     on-log: func(summary: stream-summary);
 }
 
+/// The exchange a callback is running in, for callbacks that are not handed
+/// the request directly.
+interface exchange {
+    use types.{request};
+
+    /// The request that produced the response currently being handled.
+    ///
+    /// Populated for `on-response-headers`, `on-response-trailers` and `on-log`;
+    /// `none` outside those callbacks, and `none` when the response was not
+    /// produced by a request the plugin saw (a transport error, for example).
+    current-request: func() -> option<request>;
+}
+
 /// The world a plugin component implements. Guests may export *more* than this
 /// (a component that exports a superset conforms); the host uses only what the
 /// route asked for.
 world filter-plugin {
     import host;
+    import exchange;
     export lifecycle;
     export request-filter;
     export response-filter;

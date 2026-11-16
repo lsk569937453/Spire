@@ -1,0 +1,328 @@
+/// Spire data-plane plugin API.
+///
+/// A plugin is a WebAssembly **component** that implements this world. It runs
+/// sandboxed inside the gateway: no filesystem, no sockets, no environment and
+/// no arguments. WASI preview 2 is linked because a `wasm32-wasip2` guest
+/// imports its clocks and randomness from it, but the context is the deny-all
+/// default, so the guest has clocks and randomness and nothing else.
+/// Everything it can observe about a request arrives as an argument, and
+/// everything it can change is a decision the host applies (the plugin never
+/// touches gateway memory).
+///
+/// Versioning: once `0.1.0` is released, `0.x` may only add *optional* things
+/// (new interfaces in new worlds, new `option`/list fields). A breaking change
+/// bumps the package version; the host keeps an adapter for the previous major
+/// version so an old component keeps loading.
+///
+/// Relationship to proxy-wasm (Envoy): the callbacks and the decoder/encoder
+/// split are the same idea, but there is no shared linear-memory ABI, no
+/// `proxy_*` C exports and no index-based header maps: the component model
+/// gives us typed records, `result` errors and `resource` handles instead.
+package spire:filter@0.1.0;
+
+/// Types shared by every interface of the API.
+interface types {
+    /// One HTTP header. Names reach the plugin already lowercased, values as
+    /// sent by the peer. Header order is preserved but is not significant.
+    record header {
+        name: string,
+        value: string,
+    }
+
+    /// Why a call failed. A capability that was not granted is reported as
+    /// `denied` so the plugin can degrade instead of trapping; every other
+    /// case is a host-side rejection of the plugin's own input.
+    variant error {
+        /// The plugin did not declare (or was not granted) the capability.
+        denied(string),
+        /// Malformed input from the plugin: unknown header name, non-UTF-8
+        /// value, oversized data, counter name that collides with a built-in.
+        invalid(string),
+        /// Anything else: quota exhausted, host shutting down, …
+        failed(string),
+    }
+
+    enum log-level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    /// Passed to `lifecycle.start`, once per instance.
+    record plugin-info {
+        /// Manifest id, e.g. `io.example.header-annotator`.
+        id: string,
+        version: string,
+        /// Version of this API the host implements, e.g. `0.1.0`.
+        api-version: string,
+        /// `host.log`, `host.metrics`, `host.shared-data`, `host.clock`, …
+        capabilities: list<string>,
+    }
+
+    /// What the plugin sees of an inbound request, at the moment the request
+    /// headers have been received and the route has already been chosen.
+    /// `client-ip` is the *resolved* address (after `trusted_proxies`), never
+    /// the raw socket peer when a trusted proxy is configured.
+    record request {
+        method: string,
+        scheme: string,
+        authority: string,
+        /// Path without query, e.g. `/api/v1/users`.
+        path: string,
+        /// Query string without `?`, empty when absent.
+        query: string,
+        headers: list<header>,
+        client-ip: string,
+        /// Route that matched, as configured (`route_id`), or `-`.
+        route-id: string,
+        listener-port: u32,
+        /// Stable per-request id, also exported as `x-spire-request-id`.
+        request-id: string,
+    }
+
+    /// What the plugin sees of the upstream response, before the gateway
+    /// applies its own middlewares and sends it.
+    record response {
+        status: u16,
+        headers: list<header>,
+    }
+
+    /// A complete response the plugin generates instead of forwarding. The host
+    /// adds nothing to it except hop-by-hop header hygiene.
+    record local-reply {
+        status: u16,
+        headers: list<header>,
+        body: list<u8>,
+    }
+
+    /// One outbound HTTP request a plugin may perform through `host.http-call`.
+    /// The URL must use `http` or `https` and its host must be in the route's
+    /// `http_allowed_hosts`; anything else is refused before a socket opens.
+    record http-request {
+        method: string,
+        /// Absolute URL, e.g. `https://auth.internal/verify`.
+        url: string,
+        headers: list<header>,
+        body: option<list<u8>>,
+    }
+
+    /// The response to `host.http-call`. The body is bounded by the route's
+    /// `max_http_body_bytes`; redirects are never followed.
+    record http-response {
+        status: u16,
+        headers: list<header>,
+        body: list<u8>,
+    }
+
+    /// One header mutation. The host applies the list in order, so
+    /// `set(a, 1)` then `add(a, 2)` leaves `a: 2` (HTTP header maps keep one
+    /// value per name unless `add` is used).
+    variant header-op {
+        set(header),
+        add(header),
+        /// Removes every value of `name`.
+        remove(string),
+    }
+
+    /// Outcome of a headers callback.
+    variant headers-decision {
+        /// Forward, having applied `ops` to the map the host passed in.
+        proceed(list<header-op>),
+        /// Stop the exchange and send this instead. No later plugin or
+        /// middleware sees the request/response in this direction.
+        reply(local-reply),
+    }
+
+    /// One piece of the body. `end-of-stream` is true for the last chunk, which
+    /// may be empty (a body that ends without data still gets one call).
+    record body-chunk {
+        bytes: list<u8>,
+        end-of-stream: bool,
+    }
+
+    /// Outcome of a body callback.
+    variant body-decision {
+        /// Forward these bytes (possibly rewritten, possibly empty).
+        proceed(list<u8>),
+        /// Forward nothing more and close this stream normally.
+        end,
+        /// Abort the stream and answer with this instead.
+        reply(local-reply),
+    }
+
+    /// Classification the host computes for `on-log`, so the plugin does not
+    /// have to re-derive it.
+    enum outcome {
+        /// 2xx/3xx from upstream.
+        success,
+        /// 4xx from upstream.
+        client-error,
+        /// 5xx from upstream.
+        server-error,
+        /// The gateway itself produced the response (denied, timeout,
+        /// concurrency limit, local reply).
+        local,
+    }
+
+    /// End-of-exchange summary, for access logs and plugin-side statistics.
+    record stream-summary {
+        request-id: string,
+        route-id: string,
+        method: string,
+        path: string,
+        status: u16,
+        outcome: outcome,
+        /// Wall-clock time from request headers received to last response byte.
+        total-millis: u64,
+        /// Time the upstream spent, absent when the gateway never called it.
+        upstream-millis: option<u64>,
+        /// Body sizes are only known when the route opted into `body:
+        /// buffered`; with streaming they are absent rather than a misleading
+        /// zero.
+        request-bytes: option<u64>,
+        response-bytes: option<u64>,
+    }
+}
+
+/// Everything a plugin may ask of the gateway. Every function is gated by a
+/// capability declared in `plugin.toml`; calling one without it returns
+/// `error::denied` (it never traps, so a plugin that guards properly keeps
+/// working with a reduced grant).
+interface host {
+    use types.{error, http-request, http-response, log-level};
+
+    /// Emits one line to the gateway log with `plugin = <id>`. Rate limited by
+    /// the host (a fixed budget per exchange): the call itself never fails.
+    log: func(level: log-level, message: string);
+
+    /// The route's `config:` blob for this plugin, verbatim. Empty string when
+    /// the route configured none. The plugin parses it itself (`configure` is
+    /// where it should do so, once).
+    config-json: func() -> string;
+
+    /// `spire_plugin_<plugin>_<name>_total{plugin="<plugin>", <labels>}`. The
+    /// plugin id is part of the *metric name* because Prometheus requires one
+    /// help string and one label set per fully-qualified name, process-wide:
+    /// two plugins cannot be allowed to collide on a counter name. `name` must
+    /// match `[a-z][a-z0-9_]*`, may not start with `spire_`, and may not be
+    /// `plugin` (that label is added by the host). At most 10 labels, and the
+    /// label values are the plugin's responsibility to keep low cardinality.
+    incr-counter: func(name: string, labels: list<tuple<string, string>>, delta: u64) -> result<_, error>;
+
+    /// `spire_plugin_<plugin>_<name>` histogram in seconds, same naming and
+    /// label rules as `incr-counter`.
+    observe-histogram: func(name: string, labels: list<tuple<string, string>>, value-f64: f64) -> result<_, error>;
+
+    /// Process-wide shared state, keyed by `namespace/key`. Survives across
+    /// exchanges and across the per-thread instances of this plugin, so it is
+    /// the way a plugin implements counters, caches or circuit breakers that
+    /// must be global rather than per-instance.
+    get-shared-data: func(namespace: string, key: string) -> option<list<u8>>;
+    set-shared-data: func(namespace: string, key: string, value: list<u8>) -> result<_, error>;
+
+    /// Milliseconds since the UNIX epoch.
+    now-millis: func() -> u64;
+
+    /// Performs one outbound HTTP(S) request and returns its response.
+    ///
+    /// Gated by `host.http-call`. The URL's host must appear in the route's
+    /// `http_allowed_hosts`; anything else returns `error::denied` without
+    /// opening a socket. Redirects are not followed, the whole exchange is
+    /// bounded by `http_timeout_ms`, and the response body by
+    /// `max_http_body_bytes`.
+    ///
+    /// This call blocks the worker thread that entered the guest for its whole
+    /// duration, because the guest call itself is synchronous. It is meant for
+    /// short request/response exchanges (token checks, auth callouts), not for
+    /// streaming or long polls.
+    http-call: func(request: http-request) -> result<http-response, error>;
+}
+
+/// Called once per instance, before any traffic callback.
+interface lifecycle {
+    use types.{error, plugin-info};
+
+    /// The instance was just created. Do one-time work here (parse the config
+    /// later, in `configure`). Returning an error fails activation and the
+    /// plugin is not used; the request that triggered activation follows the
+    /// route's `fail` policy.
+    start: func(info: plugin-info) -> result<_, error>;
+
+    /// The (plugin, route) binding changed, or this is the first exchange. The
+    /// host calls this once per distinct `config:` blob, not once per request.
+    /// An error rejects the configuration: `GET /appConfig` reports it and the
+    /// route is served without the plugin.
+    configure: func(config: string) -> result<_, error>;
+
+    /// The instance is being dropped (reload, shutdown, thread exit). Keep it
+    /// fast: it runs off the request path.
+    stop: func();
+}
+
+/// Request-phase callbacks, in the order the host calls them.
+interface request-filter {
+    use types.{body-chunk, body-decision, header, headers-decision, request};
+
+    /// The request headers are available and the route is known. Mutations are
+    /// visible to the upstream request; a `reply` short-circuits it.
+    on-request-headers: func(req: request) -> headers-decision;
+
+    /// Only called when the route sets `body: stream` or `body: buffered`. With
+    /// `buffered` the host passes the whole body in a single call with
+    /// `end-of-stream` set; with `stream` it passes chunks as they arrive.
+    on-request-body: func(chunk: body-chunk) -> body-decision;
+
+    /// Request trailers (HTTP/2 and chunked HTTP/1.1), after the last body
+    /// chunk. Mutations apply to the forwarded trailers.
+    on-request-trailers: func(trailers: list<header>) -> headers-decision;
+}
+
+/// Response-phase callbacks, in the order the host calls them.
+interface response-filter {
+    use types.{
+        body-chunk, body-decision, header, headers-decision, response, stream-summary,
+    };
+
+    /// The upstream response headers are available, before Spire's own response
+    /// middlewares run (`compression`, `cors`, `rewrite_headers`), so the plugin
+    /// sees the upstream's view and its mutations are subject to those.
+    on-response-headers: func(resp: response) -> headers-decision;
+
+    /// Same buffering rules as `on-request-body`, driven by the same route
+    /// `body` setting.
+    on-response-body: func(chunk: body-chunk) -> body-decision;
+
+    /// Response trailers.
+    on-response-trailers: func(trailers: list<header>) -> headers-decision;
+
+    /// The exchange is over, whatever happened. Called exactly once per
+    /// exchange that reached `on-request-headers`. Errors here are logged and
+    /// otherwise ignored: the client's response is already committed.
+    on-log: func(summary: stream-summary);
+}
+
+/// The exchange a callback is running in, for callbacks that are not handed
+/// the request directly.
+interface exchange {
+    use types.{request};
+
+    /// The request that produced the response currently being handled.
+    ///
+    /// Populated for `on-response-headers`, `on-response-trailers` and `on-log`;
+    /// `none` outside those callbacks, and `none` when the response was not
+    /// produced by a request the plugin saw (a transport error, for example).
+    current-request: func() -> option<request>;
+}
+
+/// The world a plugin component implements. Guests may export *more* than this
+/// (a component that exports a superset conforms); the host uses only what the
+/// route asked for.
+world filter-plugin {
+    import host;
+    import exchange;
+    export lifecycle;
+    export request-filter;
+    export response-filter;
+}

@@ -1,0 +1,12 @@
+id = "io.example.rbac-lite"
+name = "RBAC Lite"
+version = "0.1.0"
+description = "Method/path allow-deny rules evaluated in configuration order, with a configurable default."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses.
+[capabilities]
+required = ["host.log", "host.metrics"]
+optional = []

@@ -1,0 +1,12 @@
+id = "io.example.header-to-response"
+name = "Request Header To Response"
+version = "0.1.0"
+description = "Copies selected request headers onto the upstream response and removes selected response headers."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses.
+[capabilities]
+required = ["host.log"]
+optional = []

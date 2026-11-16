@@ -1,0 +1,12 @@
+id = "io.example.jwt-asymmetric"
+name = "JWT Asymmetric Auth"
+version = "0.1.0"
+description = "Validates RS256/ES256 bearer tokens against a configured public key, issuer and audience."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses.
+[capabilities]
+required = ["host.log"]
+optional = []

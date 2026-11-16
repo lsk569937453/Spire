@@ -1,0 +1,12 @@
+id = "io.example.basic-auth"
+name = "Basic Auth"
+version = "0.1.0"
+description = "Validates HTTP Basic credentials against a configured user list and answers 401 otherwise."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses.
+[capabilities]
+required = ["host.log"]
+optional = []

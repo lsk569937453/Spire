@@ -114,6 +114,22 @@ pub fn request_to_wit(view: RequestView<'_>) -> wit::Request {
     }
 }
 
+/// The owned snapshot the pipeline captured for the response phase.
+pub fn snapshot_to_wit(snapshot: &crate::middleware::middlewares::RequestSnapshot) -> wit::Request {
+    wit::Request {
+        method: snapshot.method.clone(),
+        scheme: snapshot.scheme.clone(),
+        authority: snapshot.authority.clone(),
+        path: snapshot.path.clone(),
+        query: snapshot.query.clone(),
+        headers: headers_to_wit(&snapshot.headers),
+        client_ip: snapshot.client_addr.ip().to_string(),
+        route_id: snapshot.route_id.clone(),
+        listener_port: snapshot.listener_port.max(0) as u32,
+        request_id: snapshot.request_id.clone(),
+    }
+}
+
 pub fn response_to_wit(status: StatusCode, headers: &HeaderMap) -> wit::Response {
     wit::Response {
         status: status.as_u16(),

@@ -1,0 +1,12 @@
+id = "io.example.api-key-auth"
+name = "API Key Auth"
+version = "0.1.0"
+description = "Rejects requests whose configured API-key header does not match one of the accepted keys."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses.
+[capabilities]
+required = ["host.log"]
+optional = []

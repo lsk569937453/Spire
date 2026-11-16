@@ -35,6 +35,7 @@ pub mod bindings;
 pub mod convert;
 pub mod engine;
 pub mod manifest;
+pub mod outbound;
 pub mod pool;
 pub mod state;
 
@@ -303,6 +304,9 @@ pub fn request_phase(
 
     let mut guard = slot.borrow_mut();
     let slot = &mut *guard;
+    // Clear the previous exchange's request before the guest can see it; the
+    // response phase installs this exchange's own snapshot.
+    slot.store.data_mut().current_request = None;
     let max_output = slot.store.data().limits.max_output_bytes as u64;
     engine::arm_budget(&mut slot.store)?;
     let started = Instant::now();
@@ -367,6 +371,7 @@ pub fn response_phase(
     // itself is only handed over in `body: buffered|stream` mode (M2).
     let mut guard = slot.borrow_mut();
     let slot = &mut *guard;
+    slot.store.data_mut().current_request = phase.request.map(convert::snapshot_to_wit);
     let max_output = slot.store.data().limits.max_output_bytes as u64;
     engine::arm_budget(&mut slot.store)?;
     let started = Instant::now();
@@ -609,12 +614,17 @@ mod tests {
     use http_body_util::combinators::BoxBody;
     use std::net::SocketAddr;
 
-    /// Copies the reference plugin into a temp plugins directory. Returns
-    /// `None` when the component has not been built, so `cargo test` works on a
-    /// machine without the `wasm32-wasip2` target.
-    fn install_reference_plugin() -> Option<PathBuf> {
-        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/header-annotator");
-        if !source.join("dist/plugin.wasm").is_file() {
+    /// Copies every packaged plugin that has a built component into a temp
+    /// plugins directory. Returns `None` when no component has been built, so
+    /// `cargo test` still works on a machine without the `wasm32-wasip2` target.
+    ///
+    /// A package without `dist/plugin.wasm` is skipped rather than failed: the
+    /// committed components are optional for a local checkout, but every
+    /// component that *is* present must load.
+    fn install_packaged_plugins() -> Option<PathBuf> {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins");
+        let reference = source.join("header-annotator");
+        if !reference.join("dist/plugin.wasm").is_file() {
             eprintln!(
                 "skipping: build plugins/header-annotator first \
                  (rustup target add wasm32-wasip2 && cargo build --release --target wasm32-wasip2)"
@@ -626,15 +636,63 @@ mod tests {
             std::process::id(),
             std::thread::current().id()
         ));
-        let package = dir.join("io.example.header-annotator");
-        std::fs::create_dir_all(package.join("dist")).unwrap();
-        std::fs::copy(source.join("plugin.toml"), package.join("plugin.toml")).unwrap();
-        std::fs::copy(
-            source.join("dist/plugin.wasm"),
-            package.join("dist/plugin.wasm"),
-        )
-        .unwrap();
+        for entry in std::fs::read_dir(&source).ok()?.flatten() {
+            let package_source = entry.path();
+            if !package_source.is_dir() || !package_source.join("dist/plugin.wasm").is_file() {
+                continue;
+            }
+            let manifest_text =
+                std::fs::read_to_string(package_source.join("plugin.toml")).unwrap();
+            let manifest: manifest::PluginManifest = toml::from_str(&manifest_text).unwrap();
+            let package = dir.join(&manifest.id);
+            std::fs::create_dir_all(package.join("dist")).unwrap();
+            std::fs::copy(
+                package_source.join("plugin.toml"),
+                package.join("plugin.toml"),
+            )
+            .unwrap();
+            std::fs::copy(
+                package_source.join("dist/plugin.wasm"),
+                package.join("dist/plugin.wasm"),
+            )
+            .unwrap();
+        }
         Some(dir)
+    }
+
+    /// Every copied package must appear in the registry: a package that fails
+    /// to compile or validate becomes a `resolve()` error, and this test is the
+    /// guard that it does not go unnoticed.
+    #[test]
+    #[serial_test::serial]
+    fn every_packaged_plugin_loads() {
+        let Some(dir) = install_packaged_plugins() else {
+            return;
+        };
+        init(Some(dir)).expect("plugin system should initialise");
+        let loaded = loaded_ids();
+        let mut checked = 0;
+        for entry in std::fs::read_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins"))
+            .unwrap()
+            .flatten()
+        {
+            let package = entry.path();
+            if !package.is_dir() || !package.join("dist/plugin.wasm").is_file() {
+                continue;
+            }
+            let text = std::fs::read_to_string(package.join("plugin.toml")).unwrap();
+            let manifest: manifest::PluginManifest = toml::from_str(&text).unwrap();
+            assert!(
+                loaded.contains(&manifest.id),
+                "{} did not load; loaded = {loaded:?}",
+                manifest.id
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 1,
+            "at least the reference plugin should be present"
+        );
     }
 
     fn config(blob: &str) -> WasmPluginConfig {
@@ -653,7 +711,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn reference_plugin_round_trip() {
-        let Some(dir) = install_reference_plugin() else {
+        let Some(dir) = install_packaged_plugins() else {
             return;
         };
         init(Some(dir)).expect("plugin system should initialise");
@@ -703,6 +761,7 @@ mod tests {
             let mut rphase = ResponsePhase {
                 route_id: "r1",
                 request_id: "req-1",
+                request: None,
                 response: &mut response,
             };
             assert!(response_phase(&cfg, &mut rphase).unwrap().is_none());
@@ -756,7 +815,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn unknown_plugin_is_reported_with_its_directory() {
-        let Some(dir) = install_reference_plugin() else {
+        let Some(dir) = install_packaged_plugins() else {
             return;
         };
         init(Some(dir)).expect("plugin system should initialise");

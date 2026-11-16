@@ -1,0 +1,12 @@
+id = "io.example.ip-tagging"
+name = "IP Tagging"
+version = "0.1.0"
+description = "Tags requests with a configured label based on the resolved client IP and IPv4 CIDR rules."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses.
+[capabilities]
+required = ["host.log"]
+optional = []

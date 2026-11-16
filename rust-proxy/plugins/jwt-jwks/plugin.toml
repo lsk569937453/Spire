@@ -1,0 +1,20 @@
+id = "io.example.jwt-jwks"
+name = "JWT JWKS Validator"
+version = "0.1.0"
+description = "Validates RS256 bearer tokens against a cached JWKS document fetched over HTTP and rejects invalid ones with 401."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses. A missing one makes the matching
+# host call return `denied` instead of trapping, so the plugin degrades rather
+# than breaking the route.
+[capabilities]
+required = [
+  "host.http-call",
+  "host.shared-data",
+  "host.clock",
+  "host.log",
+  "host.metrics",
+]
+optional = []

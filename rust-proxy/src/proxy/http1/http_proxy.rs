@@ -1,6 +1,7 @@
 use crate::control_plane::cert_loader::load_tls_config_multi;
 use crate::control_plane::cert_loader::watch_for_certificate_changes;
 use crate::middleware::middlewares::MiddleWares;
+use crate::middleware::middlewares::RequestSnapshot;
 use crate::monitor::prometheus_exporter::metrics;
 use crate::proxy::http1::app_clients::AppClients;
 use crate::proxy::http1::middleware_phases::PhaseInfo;
@@ -342,6 +343,10 @@ where
     bind_breaker_labels(spire_context);
 
     let (request_id, route_id_owned, method_owned) = wasm_exchange_ids(spire_context, method);
+    let has_plugins = spire_context
+        .middlewares
+        .as_ref()
+        .is_some_and(|m| has_wasm(m));
 
     if req.method() == Method::OPTIONS
         && req.headers().contains_key(header::ORIGIN)
@@ -382,6 +387,10 @@ where
     let check_request = handling_result;
     let request_path = check_request.request_path.as_str();
     let router_destination = check_request.router_destination;
+    // Captured for the response phase, which otherwise could not tell a plugin
+    // which request produced the response. Only the HTTP arm fills it: the gRPC
+    // branch never runs the request phase, so a plugin never saw that request.
+    let mut wasm_request: Option<RequestSnapshot> = None;
     let mut res = match router_destination {
         RouterDestination::File(ref _s) => {
             let mut parts = req.uri().clone().into_parts();
@@ -423,6 +432,17 @@ where
                 // contract as a routing denial: response middlewares do not
                 // run on a locally generated reply.
                 return denial_response(denial);
+            }
+            if has_plugins {
+                wasm_request = Some(RequestSnapshot::capture(
+                    req.method(),
+                    req.uri(),
+                    req.headers(),
+                    client_addr,
+                    &route_id_owned,
+                    port,
+                    &request_id,
+                ));
             }
             forward_http_upstream(
                 &client,
@@ -468,7 +488,7 @@ where
         // apply to whatever the plugin produced. A transport error has no
         // response to show a plugin, so only the `Ok` case is offered to it.
         if let Ok(response) = res.as_mut() {
-            apply_response_phases(middlewares, phase_info, response)?;
+            apply_response_phases(middlewares, phase_info, wasm_request.as_ref(), response)?;
         }
         chain_trait
             .handle_before_response(middlewares, request_path, &mut res, cloned_headers.clone())

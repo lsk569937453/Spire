@@ -1,0 +1,14 @@
+id = "io.example.ext-authz"
+name = "External Authorization"
+version = "0.1.0"
+description = "Calls an external authorization service for every request, copies its identity headers on allow, and rejects on deny with configurable fail-open/fail-closed behavior."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses. A missing one makes the matching
+# host call return `denied` instead of trapping, so the plugin degrades rather
+# than breaking the route.
+[capabilities]
+required = ["host.http-call", "host.log", "host.metrics"]
+optional = []

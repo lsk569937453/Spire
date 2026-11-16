@@ -1,0 +1,266 @@
+# =============================================================================
+# File: wasm_plugins_catalog.yaml
+# Description: Every packaged Spire WASM plugin on one port, one route each.
+# =============================================================================
+# Requirements
+# ------------
+# 1. A build with the plugin system enabled:
+#
+#      cargo build --release --features wasm
+#
+# 2. The packaged plugins compiled (each one has its own Cargo project):
+#
+#      cd plugins/<name>
+#      cargo build --release --target wasm32-wasip2
+#      # dist/plugin.wasm is the component the gateway loads
+#
+#    `plugins_dir` below points at this repository's `plugins/` directory, so
+#    no copying into ~/.spire is needed during development. It is read once at
+#    startup: changing it requires a restart.
+#
+# 3. Validate before running — this scans the directory, compiles every
+#    component and checks every reference:
+#
+#      cargo run --features wasm -- validate -c config/examples/wasm_plugins_catalog.yaml
+#
+# Notes
+# -----
+# * `fail: closed` is used for every security control (auth, CSRF, RBAC): a
+#   plugin that cannot run must not silently let requests through. The
+#   observability/annotation plugins use `fail: open`.
+# * `http_allowed_hosts` is the SSRF boundary for `host.http-call`: an empty
+#   list (the default) refuses every outbound call. The hosts below are
+#   examples; point them at real services before expecting the authz/oauth2
+#   routes to work.
+
+plugins_dir: ./plugins
+
+servers:
+  - listen: 8090
+    protocol: http
+    routes:
+      # --- batch 1: no outbound calls -------------------------------------
+      - route_id: api_key
+        matchers:
+          - kind: path
+            value: /api-key
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.api-key-auth
+            config: |
+              header=x-api-key
+              keys=dev-key-1,dev-key-2
+            fail: closed
+            timeout_ms: 2
+
+      - route_id: basic_auth
+        matchers:
+          - kind: path
+            value: /basic
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.basic-auth
+            config: |
+              realm=spire
+              users=alice:secret,bob:hunter2
+              strip=true
+            fail: closed
+            timeout_ms: 2
+
+      - route_id: ip_tagging
+        matchers:
+          - kind: path
+            value: /tagged
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.ip-tagging
+            config: |
+              header=x-ip-tag
+              tag=office
+              cidr=10.0.0.0/8
+              cidr=192.168.0.0/16
+              tag=loopback
+              cidr=127.0.0.0/8
+              default=unknown
+            fail: open
+            timeout_ms: 2
+
+      - route_id: custom_response
+        matchers:
+          - kind: path
+            value: /blocked
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.custom-response
+            config: |
+              status=403
+              content_type=application/json
+              body={"error":"blocked by policy"}
+              header=x-blocked
+              value=true
+            fail: open
+            timeout_ms: 2
+
+      - route_id: local_ratelimit
+        matchers:
+          - kind: path
+            value: /limited
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.local-ratelimit
+            config: |
+              key=ip
+              limit=100
+              window_seconds=60
+            fail: open
+            timeout_ms: 2
+
+      - route_id: rbac_lite
+        matchers:
+          - kind: path
+            value: /admin
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.rbac-lite
+            config: |
+              default=deny
+              allow=GET:/admin/health
+              allow=*:/public/*
+            fail: closed
+            timeout_ms: 2
+
+      # --- batch 2: response-phase request context ------------------------
+      - route_id: csrf
+        matchers:
+          - kind: path
+            value: /csrf
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.csrf
+            config: |
+              cookie=csrf
+              header=x-csrf-token
+            fail: closed
+            timeout_ms: 2
+
+      - route_id: jwt_asymmetric
+        matchers:
+          - kind: path
+            value: /jwt
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.jwt-asymmetric
+            # key_base64 is the base64 of the SPKI DER public key.
+            config: |
+              alg=RS256
+              key_base64=REPLACE_WITH_BASE64_SPKI
+              issuer=https://issuer.example
+              audience=spire-api
+              strip=true
+            fail: closed
+            timeout_ms: 50
+            fuel: 5000000
+
+      - route_id: header_to_response
+        matchers:
+          - kind: path
+            value: /headers
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.header-to-response
+            config: |
+              map=x-tenant:x-served-tenant
+              map=x-request-id:x-request-id
+              drop=server
+            fail: open
+            timeout_ms: 2
+
+      # --- batch 3: outbound calls (host.http-call) -----------------------
+      - route_id: ext_authz
+        matchers:
+          - kind: path
+            value: /ext-authz
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.ext-authz
+            config: |
+              url=https://auth.internal/check
+              method=POST
+              forward_headers=authorization,cookie,x-request-id
+              copy_headers=x-user-id,x-roles
+              on_error=closed
+            fail: closed
+            timeout_ms: 50
+            fuel: 5000000
+            http_allowed_hosts: ["auth.internal"]
+            http_timeout_ms: 1000
+            max_http_body_bytes: 65536
+
+      - route_id: oauth2_client
+        matchers:
+          - kind: path
+            value: /oauth
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.oauth2-client
+            config: |
+              token_url=https://idp.internal/oauth/token
+              client_id=spire
+              client_secret=change-me
+              scope=api.read
+            fail: closed
+            timeout_ms: 50
+            fuel: 5000000
+            http_allowed_hosts: ["idp.internal"]
+            http_timeout_ms: 1500
+            max_http_body_bytes: 65536
+
+      - route_id: ratelimit_external
+        matchers:
+          - kind: path
+            value: /ext-limited
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.ratelimit-external
+            config: |
+              url=https://limiter.internal/check
+              key=ip
+              on_error=closed
+            fail: closed
+            timeout_ms: 50
+            fuel: 5000000
+            http_allowed_hosts: ["limiter.internal"]
+            http_timeout_ms: 500
+            max_http_body_bytes: 8192
+
+      - route_id: jwt_jwks
+        matchers:
+          - kind: path
+            value: /jwks
+        forward_to: http://127.0.0.1:9393
+        middlewares:
+          - kind: wasm
+            plugin: io.example.jwt-jwks
+            config: |
+              jwks_url=https://idp.internal/.well-known/jwks.json
+              issuer=https://issuer.example
+              audience=spire-api
+              cache_seconds=300
+            fail: closed
+            timeout_ms: 80
+            fuel: 8000000
+            http_allowed_hosts: ["idp.internal"]
+            http_timeout_ms: 1500
+            max_http_body_bytes: 262144

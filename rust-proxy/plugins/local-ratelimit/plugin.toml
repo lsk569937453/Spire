@@ -1,0 +1,12 @@
+id = "io.example.local-ratelimit"
+name = "Local Rate Limit"
+version = "0.1.0"
+description = "Fixed-window rate limiter keyed by client IP, a header value or the matched route, backed by plugin shared data."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses.
+[capabilities]
+required = ["host.shared-data", "host.clock", "host.metrics", "host.log"]
+optional = []

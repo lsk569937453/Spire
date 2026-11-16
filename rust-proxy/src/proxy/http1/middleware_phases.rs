@@ -6,7 +6,9 @@
 
 use crate::middleware::middlewares::MiddleWares;
 use crate::middleware::middlewares::Middleware;
-use crate::middleware::middlewares::{Denial, ExchangeSummary, RequestPhase, ResponsePhase};
+use crate::middleware::middlewares::{
+    Denial, ExchangeSummary, RequestPhase, RequestSnapshot, ResponsePhase,
+};
 use crate::proxy::proxy_trait::ChainTrait;
 use crate::vojo::app_error::AppError;
 use bytes::Bytes;
@@ -113,6 +115,7 @@ where
 pub(super) fn apply_response_phases(
     middlewares: &[MiddleWares],
     info: PhaseInfo<'_>,
+    request: Option<&RequestSnapshot>,
     response: &mut Response<BoxBody<Bytes, AppError>>,
 ) -> Result<(), AppError> {
     if !has_wasm(middlewares) {
@@ -123,6 +126,7 @@ pub(super) fn apply_response_phases(
             let mut phase = ResponsePhase {
                 route_id: info.route_id,
                 request_id: info.request_id,
+                request,
                 response: &mut *response,
             };
             middleware.on_response_phase(&mut phase)?

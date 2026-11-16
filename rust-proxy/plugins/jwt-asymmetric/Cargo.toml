@@ -1,0 +1,30 @@
+[package]
+name = "spire-plugin-jwt-asymmetric"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# A plugin builds on its own, for `wasm32-wasip2`, outside the gateway crate.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The guest half of the component model. Version pins are intentionally loose:
+# the *host* checks the WIT package version, not the binding generator.
+wit-bindgen = "0.63"
+# Asymmetric JWT verification. `rust_crypto` selects the pure-Rust backend so
+# the guest needs no C toolchain and no aws-lc-rs.
+jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto"] }
+base64 = "0.23"
+# Already in `jsonwebtoken`'s tree; used as the claims type so the plugin does
+# not have to invent a claims schema.
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"

@@ -24,6 +24,7 @@ pub const CAP_LOG: &str = "host.log";
 pub const CAP_METRICS: &str = "host.metrics";
 pub const CAP_SHARED_DATA: &str = "host.shared-data";
 pub const CAP_CLOCK: &str = "host.clock";
+pub const CAP_HTTP: &str = "host.http-call";
 
 /// Resolved budgets for one (plugin, route) pair. Operator-controlled: the
 /// manifest may not raise them.
@@ -37,6 +38,12 @@ pub struct PluginLimits {
     #[allow(dead_code)] // read by the M2 body phases, not yet wired
     pub max_body_bytes: usize,
     pub max_output_bytes: usize,
+    /// Wall-clock budget for one `host.http-call`.
+    pub http_timeout: std::time::Duration,
+    /// Ceiling for the body `host.http-call` returns.
+    pub max_http_body_bytes: usize,
+    /// Hosts `host.http-call` may reach; empty means it may reach none.
+    pub http_allowed_hosts: Arc<Vec<String>>,
 }
 
 impl PluginLimits {
@@ -47,6 +54,14 @@ impl PluginLimits {
             max_memory_bytes: cfg.max_memory_bytes as usize,
             max_body_bytes: cfg.max_body_bytes as usize,
             max_output_bytes: cfg.max_output_bytes as usize,
+            http_timeout: std::time::Duration::from_millis(cfg.http_timeout_ms as u64),
+            max_http_body_bytes: cfg.max_http_body_bytes as usize,
+            http_allowed_hosts: Arc::new(
+                cfg.http_allowed_hosts
+                    .iter()
+                    .map(|host| host.trim().to_ascii_lowercase())
+                    .collect(),
+            ),
         }
     }
 }
@@ -67,6 +82,11 @@ pub struct StoreData {
     pub log_budget: Cell<u32>,
     pub shared: Arc<SharedData>,
     pub counters: Arc<PluginMetrics>,
+    /// The request being processed by the *current* response/log callback. Set
+    /// by the host before `on-response-headers` and cleared at the start of the
+    /// next request phase, so a plugin cannot read a previous exchange's
+    /// request through `exchange.current-request`.
+    pub current_request: Option<wit::Request>,
     /// Handed to `Store::limiter`; the linear-memory ceiling.
     pub store_limits: StoreLimits,
     /// Deny-all WASI context: a `wasm32-wasip2` guest links against it, but it
@@ -102,6 +122,7 @@ impl StoreData {
             log_budget: Cell::new(LOG_BUDGET),
             shared,
             counters,
+            current_request: None,
             store_limits,
             // `WasiCtx::builder()` defaults are already deny-all: stdin closed,
             // stdout/stderr discarded, no env, no args, no preopens, sockets
@@ -221,6 +242,29 @@ impl bindings::spire::filter::host::Host for StoreData {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
+    }
+
+    fn http_call(&mut self, request: wit::HttpRequest) -> Result<wit::HttpResponse, wit::Error> {
+        self.require(CAP_HTTP)?;
+        // The callback's wall-clock budget was armed before the guest ran. A
+        // network round trip can easily outlast it, and the epoch tick would
+        // then trap the guest the moment it resumed from this host call. Give
+        // the callback room for the outbound exchange plus a small margin;
+        // `http_timeout` (operator-set, <= 30s) bounds it, so the extension
+        // cannot be turned into an unbounded stall.
+        let extended = std::time::Instant::now()
+            + self.limits.http_timeout
+            + std::time::Duration::from_millis(100);
+        if self.deadline.get() < extended {
+            self.deadline.set(extended);
+        }
+        crate::wasm::outbound::call(&self.limits, request)
+    }
+}
+
+impl bindings::spire::filter::exchange::Host for StoreData {
+    fn current_request(&mut self) -> Option<wit::Request> {
+        self.current_request.clone()
     }
 }
 
@@ -603,6 +647,9 @@ mod tests {
                 max_memory_bytes: 1024 * 1024,
                 max_body_bytes: 1024,
                 max_output_bytes: 1024,
+                http_allowed_hosts: Vec::new(),
+                http_timeout_ms: 2000,
+                max_http_body_bytes: 1024,
             }),
             shared_data().clone(),
             plugin_metrics().clone(),

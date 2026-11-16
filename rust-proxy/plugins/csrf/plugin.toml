@@ -1,0 +1,12 @@
+id = "io.example.csrf"
+name = "CSRF Token Check"
+version = "0.1.0"
+description = "Rejects unsafe requests whose CSRF token header does not match the token cookie."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses.
+[capabilities]
+required = ["host.log"]
+optional = []

@@ -13,7 +13,7 @@ use serde::Serialize;
 
 /// What happens to the request when a plugin fails (trap, fuel exhaustion,
 /// epoch timeout, poisoned instance, missing artifact).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FailPolicy {
     /// Log, count, and carry on as if the plugin had returned
@@ -27,7 +27,7 @@ pub enum FailPolicy {
 }
 
 /// How much of the body the plugin is allowed to see.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BodyMode {
     /// Headers and trailers only; bodies are never copied through the sandbox.
@@ -56,6 +56,12 @@ fn default_max_body_bytes() -> u64 {
 }
 fn default_max_output_bytes() -> u64 {
     64 * 1024
+}
+fn default_http_timeout_ms() -> u32 {
+    2_000
+}
+fn default_max_http_body_bytes() -> u64 {
+    256 * 1024
 }
 
 /// One `kind: wasm` entry of `route.middlewares`.
@@ -114,6 +120,24 @@ pub struct WasmPluginConfig {
     /// or a local reply body.
     #[serde(default = "default_max_output_bytes")]
     pub max_output_bytes: u64,
+
+    /// Hosts a plugin may reach through `host.http-call`, as `host` or
+    /// `host:port`. Empty — the default — refuses every outbound call, so a
+    /// plugin cannot open a socket unless the operator lists the destination.
+    /// This is the SSRF boundary: a hostname here can resolve anywhere, so only
+    /// add names the plugin is meant to talk to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub http_allowed_hosts: Vec<String>,
+
+    /// Wall-clock budget for one `host.http-call`. Separate from `timeout_ms`,
+    /// which bounds one guest callback: a network round trip needs more than a
+    /// few milliseconds.
+    #[serde(default = "default_http_timeout_ms")]
+    pub http_timeout_ms: u32,
+
+    /// Ceiling for the body `host.http-call` returns to the guest.
+    #[serde(default = "default_max_http_body_bytes")]
+    pub max_http_body_bytes: u64,
 }
 
 impl WasmPluginConfig {
@@ -162,21 +186,57 @@ impl WasmPluginConfig {
                 "wasm middleware: body buffering is enabled with max_body_bytes=0".to_string(),
             );
         }
+        if self.http_timeout_ms.clamp(1, 30_000) != self.http_timeout_ms {
+            return Err(format!(
+                "wasm middleware: http_timeout_ms={} is outside 1..=30000",
+                self.http_timeout_ms
+            ));
+        }
+        if self.max_http_body_bytes > 8 * MIB {
+            return Err(format!(
+                "wasm middleware: max_http_body_bytes={} exceeds 8MiB",
+                self.max_http_body_bytes
+            ));
+        }
+        for host in &self.http_allowed_hosts {
+            let valid = !host.is_empty()
+                && host.len() <= 260
+                && !host.chars().any(|c| c.is_whitespace())
+                && !host.contains(['/', '@', '?', '#']);
+            if !valid {
+                return Err(format!(
+                    "wasm middleware: http_allowed_hosts entry `{host}` must be host or host:port"
+                ));
+            }
+        }
         Ok(())
     }
 
-    /// Stable identity of "this plugin, with this configuration". Only the
-    /// WASM runtime consumes it; the struct itself is feature-independent so a
-    /// build without "wasm" still parses and rejects `kind: wasm`. Two routes
-    /// that configure the same plugin identically share one instance per
-    /// worker thread; changing the blob creates a new generation instead of
-    /// mutating a live one.
+    /// Stable identity of "this plugin, with this configuration".
+    ///
+    /// Every field that changes what the instance may *do* is part of the key,
+    /// not only `plugin`/`config`: two routes that configure the same plugin
+    /// with different budgets or a different `http_allowed_hosts` must never
+    /// share an instance, or the stricter route would inherit the looser
+    /// route's permissions. Only the WASM runtime consumes it; the struct
+    /// itself is feature-independent so a build without "wasm" still parses
+    /// and rejects `kind: wasm`.
     #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
     pub fn instance_key(&self) -> String {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         use std::hash::Hash as _;
         self.plugin.hash(&mut hasher);
         self.config.as_deref().unwrap_or_default().hash(&mut hasher);
+        self.fail.hash(&mut hasher);
+        self.body.hash(&mut hasher);
+        self.timeout_ms.hash(&mut hasher);
+        self.fuel.hash(&mut hasher);
+        self.max_memory_bytes.hash(&mut hasher);
+        self.max_body_bytes.hash(&mut hasher);
+        self.max_output_bytes.hash(&mut hasher);
+        self.http_allowed_hosts.hash(&mut hasher);
+        self.http_timeout_ms.hash(&mut hasher);
+        self.max_http_body_bytes.hash(&mut hasher);
         format!("{:016x}", std::hash::Hasher::finish(&hasher))
     }
 }
@@ -191,7 +251,32 @@ mod tests {
         assert_eq!(cfg.fail, FailPolicy::Open);
         assert_eq!(cfg.body, BodyMode::HeadersOnly);
         assert_eq!(cfg.timeout_ms, 5);
+        assert!(cfg.http_allowed_hosts.is_empty());
+        assert_eq!(cfg.http_timeout_ms, 2000);
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_bad_http_settings() {
+        let mut cfg: WasmPluginConfig = serde_yaml::from_str("plugin: io.example.x").unwrap();
+        cfg.http_timeout_ms = 0;
+        assert!(cfg.validate().is_err());
+        cfg.http_timeout_ms = 2000;
+        cfg.max_http_body_bytes = 9 * 1024 * 1024;
+        assert!(cfg.validate().is_err());
+        cfg.max_http_body_bytes = 1024;
+        cfg.http_allowed_hosts = vec!["https://auth.example.com/".to_string()];
+        assert!(cfg.validate().is_err());
+        cfg.http_allowed_hosts = vec!["auth.example.com:8443".to_string()];
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn instance_key_separates_http_allowlists() {
+        let mut a: WasmPluginConfig = serde_yaml::from_str("plugin: p").unwrap();
+        let b = a.clone();
+        a.http_allowed_hosts = vec!["auth.example.com".to_string()];
+        assert_ne!(a.instance_key(), b.instance_key());
     }
 
     #[test]

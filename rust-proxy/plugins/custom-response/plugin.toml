@@ -1,0 +1,12 @@
+id = "io.example.custom-response"
+name = "Custom Response"
+version = "0.1.0"
+description = "Answers requests that match the configured header/path conditions with a fixed local response."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses.
+[capabilities]
+required = ["host.log"]
+optional = []

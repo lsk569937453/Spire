@@ -210,7 +210,63 @@ pub struct RequestPhase<'a> {
 pub struct ResponsePhase<'a> {
     pub route_id: &'a str,
     pub request_id: &'a str,
+    /// The request that produced this response, when the pipeline could capture
+    /// it. `None` on a transport error (there is no response to show a plugin)
+    /// and on paths that never had a request snapshot.
+    pub request: Option<&'a RequestSnapshot>,
     pub response: &'a mut Response<BoxBody<Bytes, AppError>>,
+}
+
+/// An owned copy of the request, captured for the response/log callbacks.
+///
+/// `on-response-headers` used to carry only the response, which made a plugin
+/// unable to correlate a response with the request headers it had just seen.
+/// The pipeline captures this after the request-phase middlewares ran (so it
+/// reflects what the upstream receives) and hands it to the response phase;
+/// the guest reads it through `exchange.current-request`.
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+#[derive(Debug, Clone)]
+pub struct RequestSnapshot {
+    pub method: String,
+    pub scheme: String,
+    pub authority: String,
+    pub path: String,
+    pub query: String,
+    pub headers: HeaderMap<HeaderValue>,
+    pub client_addr: SocketAddr,
+    pub route_id: String,
+    pub listener_port: i32,
+    pub request_id: String,
+}
+
+impl RequestSnapshot {
+    #[allow(clippy::too_many_arguments)]
+    pub fn capture(
+        method: &http::Method,
+        uri: &http::Uri,
+        headers: &HeaderMap<HeaderValue>,
+        client_addr: SocketAddr,
+        route_id: &str,
+        listener_port: i32,
+        request_id: &str,
+    ) -> Self {
+        Self {
+            method: method.as_str().to_string(),
+            scheme: uri.scheme_str().unwrap_or("http").to_string(),
+            authority: uri
+                .authority()
+                .map(|a| a.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            path: uri.path().to_string(),
+            query: uri.query().unwrap_or_default().to_string(),
+            headers: headers.clone(),
+            client_addr,
+            route_id: route_id.to_string(),
+            listener_port,
+            request_id: request_id.to_string(),
+        }
+    }
 }
 
 /// End-of-exchange facts for `on-log`. Computed by the pipeline so a plugin

@@ -30,8 +30,13 @@ pub const API_MINOR: u32 = 1;
 /// Capabilities a manifest may ask for. Anything else is a load-time error: a
 /// typo must not silently produce a plugin that runs with fewer powers than its
 /// author thinks.
-pub const KNOWN_CAPABILITIES: &[&str] =
-    &["host.log", "host.metrics", "host.shared-data", "host.clock"];
+pub const KNOWN_CAPABILITIES: &[&str] = &[
+    "host.log",
+    "host.metrics",
+    "host.shared-data",
+    "host.clock",
+    "host.http-call",
+];
 
 /// A `plugin.toml`, validated.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
