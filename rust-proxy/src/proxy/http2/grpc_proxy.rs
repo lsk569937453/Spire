@@ -327,7 +327,7 @@ async fn copy_io(
     }
     Ok(())
 }
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // one entry point per request; a context struct would only move the same fields
 async fn request_outbound(
     port: i32,
     shared_config: SharedConfig,

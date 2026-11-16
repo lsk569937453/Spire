@@ -268,7 +268,7 @@ impl ChainTrait for CommonCheckRequest {
 }
 #[cfg_attr(test, automock)]
 pub trait ChainTrait {
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)] // one flat signature shared by every proxy flavour
     async fn get_destination(
         &self,
         shared_config: SharedConfig,

@@ -34,7 +34,7 @@ pub struct PluginLimits {
     pub max_memory_bytes: usize,
     /// Consumed by the M2 body phases; declared here so the config surface and
     /// the runtime budget stay one type.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // read by the M2 body phases, not yet wired
     pub max_body_bytes: usize,
     pub max_output_bytes: usize,
 }

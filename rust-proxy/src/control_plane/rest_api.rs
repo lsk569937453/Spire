@@ -56,7 +56,7 @@ fn unauthorized() -> Response {
 /// The control plane can read and rewrite the whole configuration, so it must
 /// never be reachable without credentials — binding to loopback is the default,
 /// this token is the second line of defence.
-#[allow(clippy::result_large_err)]
+#[allow(clippy::result_large_err)] // AppError is the handler error type axum requires
 async fn require_admin_token(
     State(shared_config): State<SharedConfig>,
     req: Request,

@@ -123,9 +123,9 @@ pub struct UpstreamPermit {
     // Merely holding these permits IS the mechanism: each is released when
     // this guard drops (end of the response body stream). They are never
     // read otherwise.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // held only for its RAII release, never read
     endpoint: OwnedSemaphorePermit,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // held only for its RAII release, never read
     global: OwnedSemaphorePermit,
 }
 

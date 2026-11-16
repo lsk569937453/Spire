@@ -189,11 +189,6 @@ where
 
     deserializer.deserialize_any(StrategyVisitor)
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[allow(dead_code)]
-pub struct AnomalyDetectionStatus {
-    pub consecutive_5xx: i32,
-}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, Eq)]
 pub struct BaseRoute {
     pub endpoint: String,
@@ -217,22 +212,7 @@ pub struct SplitSegment {
     #[serde(rename = "matches")]
     pub split_list: Vec<String>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct SplitItem {
-    pub header_key: String,
-    pub header_value: String,
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[allow(dead_code)]
-pub struct RegexMatch {
-    pub value: String,
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct TextMatch {
-    pub value: String,
-}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum HeaderValueMappingType {

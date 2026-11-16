@@ -281,7 +281,7 @@ fn bind_breaker_labels(spire_context: &SpireContext) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // one entry point per request; a context struct would only move the same fields
 async fn proxy<B>(
     port: i32,
     shared_config: SharedConfig,

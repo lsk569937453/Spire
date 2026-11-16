@@ -136,7 +136,6 @@ pub(super) fn apply_response_phases(
 
 /// Calls `on-log` on every plugin of the route. Never fails the request: the
 /// client's response is already committed at this point.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_log_phases(
     middlewares: &[MiddleWares],
     info: PhaseInfo<'_>,
