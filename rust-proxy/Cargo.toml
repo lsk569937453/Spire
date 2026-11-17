@@ -147,10 +147,15 @@ opt-level = 3
 debug = false
 debug-assertions = false
 overflow-checks = false
-lto = "thin"
+lto = "fat"
 panic = 'unwind'
 incremental = false
-codegen-units = 16
+# One codegen unit plus fat LTO: measured on benchmarks/perf-2026-11 (1 P-core,
+# 64 keep-alive connections) it costs ~9s more build time per release build and
+# returns ~10% lower user CPU per proxied request (21.9us -> 19.6us) and a
+# smaller binary (18.3MB -> 14.5MB). `target-cpu=native` was measured as well
+# and made both user and sys time worse, so it is deliberately not set.
+codegen-units = 1
 rpath = false
 strip = true
 
