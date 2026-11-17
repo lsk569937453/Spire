@@ -173,6 +173,31 @@ Spire 的系统调用**比 nginx 更少**（3.92 vs 5.15），writev 都是每�
 
 ---
 
+### 6.5 纯用户态火焰图（`perf record -e cpu-clock:u`，1 核 c=64，12,155 样本）
+
+内核态不是主战场，所以单独采了一版**只含用户态**的剖面，它给出了可以直接下手的清单：
+
+| 用户态占比 | 符号 | 说明 |
+|---:|---|---|
+| **14.69%** | `memcpy` | HeaderMap/Bytes/写缓冲拷贝 |
+| 4.57% | `spire::proxy::http1::http_proxy::proxy` | 自身转发逻辑（内联后聚集） |
+| 2.80% + 2.09% + 1.05% + 0.82% | `_mi_page_malloc_zero` / `mi_free` / `mi_theap_malloc_aligned` / `mi_malloc_aligned` | **mimalloc 合计 6.8%** |
+| 1.91% | `hyper_util::client::legacy::Client` | 上游客户端（池 + future 链） |
+| 1.13% | `proxy_adapter` | 请求适配层 |
+| 1.07% + 0.83% | `[[vdso]]` / `__vdso_clock_gettime` | **每请求多次 `Instant::now()` 合计 1.9%** |
+| 1.06% + 0.87% | `bytes_mut::shared_v_drop` / `bytes::shared_drop` | Bytes 释放 |
+| **1.00%** | `url::Parser::after_double_slash` | **每请求用 `url` crate 解析上游 endpoint**（已优化掉） |
+| 0.97% | `hyper Server::Http1Transaction::encode` | 响应编码 |
+| 0.87% | `prometheus MetricVec::with_label_values` | 指标打点 |
+| 0.82% | `concurrency::acquire_weighted` | 并发预算 |
+| 0.77% | `http::uri::PathAndQuery::from_shared` | 每请求重解析 URI |
+
+按组件：mem/string 15.4%、hyper 14.3%、其余分散在各处。**没有单一 30% 的巨型热点**——这也是为什么微观优化只值 1~2%，必须是「一堆 1~2% 叠起来」。
+
+据此已经落地的两项：`endpoint_key` 不再每请求 `Url::parse`（消掉 1.0% + 两次 format）。
+
+---
+
 ## 7. chaos-blade 混沌实验：10 个接口里 1 个慢
 
 设计：chaosblade **v1.7.3**（`latest` 已变成 `blade-ai-v0.7.4`，是另一条产品线，不含 exec-jvm），装在后端容器内，`SYS_PTRACE` + `seccomp:unconfined`，`blade create jvm delay --time 2000 --classname Backend$E7 --methodname serve --pid 1` —— **方法级**注入，精确只慢第 7 个接口。流量用 k6 `constant-arrival-rate` 1000 rps，10% 打 `/api/7`，其余 90% 均摊到另外 9 个。
@@ -203,6 +228,8 @@ Spire 的系统调用**比 nginx 更少**（3.92 vs 5.15），writev 都是每�
 | 4 | **`route_label` / `path` 不再每请求 `to_string()`** | `http_proxy.rs` | 直接借用 + 只在错误分支格式化 |
 | 5 | **`UpstreamLabels` 改 `Arc<str>`** | `upstream_body.rs`、`upstream_forward.rs` | 每请求原本构造 3 个 String 再克隆 3 个；改成 3 个 `Arc` + 3 次原子自增 |
 | 6 | pprof 采样可控（频率/时长/输出路径环境变量） | `app/run.rs` | 让火焰图能采到"稳态饱和点"而不是"启动 20 秒" |
+| 7 | **`endpoint_key` 不再每请求 `Url::parse`** | `proxy/concurrency.rs` | 用户态火焰图里 `url::Parser::after_double_slash` 占 1.0%，还附带两次 `format!` |
+| 8 | **`lto = "fat"` + `codegen-units = 1`** | `Cargo.toml` | 同会话 3 轮 A/B：用户态 21.9 → 19.9 µs（−9%），二进制 18.3 → 14.5 MB；代价是 release 构建 4m10s → 8m45s |
 
 **实测进展（同场次交错 A/B，`scripts/ab.ps1`）**
 
