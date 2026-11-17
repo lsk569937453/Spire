@@ -8,3 +8,6 @@ perf-spire:gnu-base,perf-spire:gnu-nohdrclone,4,64,11.44,20.10,11.63,20.28,1.016
 perf-spire:gnu-base,perf-spire:gnu-tlcache,4,64,11.77,20.26,11.04,19.97,0.938,19:21:07
 perf-spire:gnu-base,perf-spire:gnu-tlcache,4,6,8,10,64,15.73,22.79,15.69,22.98,0.998,19:23:16
 perf-spire:pgo,perf-spire:pgo3,4,64,8.87,21.05,8.97,20.95,1.011,20:22:59
+perf-spire:gnu-base,perf-spire:systemalloc,4,64,13.27,22.61,12.93,22.27,0.974,20:35:54
+perf-spire:gnu-base,perf-spire:systemalloc,4,6,8,10,64,17.09,26.04,18.48,26.43,1.081,20:38:22
+perf-spire:gnu-base,perf-spire:systemalloc,4,64,13.30,22.79,13.26,22.40,0.996,20:40:33
