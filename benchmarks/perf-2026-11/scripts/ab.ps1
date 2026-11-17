@@ -95,12 +95,26 @@ Write-Host ("spire {0:N1} us/req  {1:N0} rps   |   nginx {2:N1} us/req  {3:N0} r
         $sUs, $sRps, $nUs, $nRps, ($(if ($nUs -gt 0) { $sUs / $nUs } else { 0 }))) -ForegroundColor Green
 
 $csv = Join-Path $Results 'ab.csv'
-if (-not (Test-Path $csv)) {
-    'tag,cpuset,concurrency,seconds,spire_us_per_req,nginx_us_per_req,cpu_ratio,spire_rps,nginx_rps,ts' |
-        Set-Content $csv -Encoding utf8
+# Export-Csv rather than string concatenation: the cpuset field contains commas
+# ("4,6") and this machine's locale would otherwise render 62529.6 as "62,529.6",
+# both of which silently shift every column for any standard CSV reader.
+$row = [pscustomobject]@{
+    tag              = $Tag
+    cpuset           = $Cpuset
+    concurrency      = $Concurrency
+    seconds          = $Seconds
+    spire_us_per_req = ('{0:F2}' -f $sUs)
+    nginx_us_per_req = ('{0:F2}' -f $nUs)
+    cpu_ratio        = ('{0:F3}' -f ($(if ($nUs -gt 0) { $sUs / $nUs } else { 0 })))
+    spire_rps        = ('{0:F1}' -f $sRps)
+    nginx_rps        = ('{0:F1}' -f $nRps)
+    throughput_ratio = ('{0:F3}' -f ($(if ($nRps -gt 0) { $sRps / $nRps } else { 0 })))
+    ts               = (Get-Date -Format 'HH:mm:ss')
 }
-'{0},{1},{2},{3},{4:N2},{5:N2},{6:N3},{7:N1},{8:N1},{9}' -f `
-    $Tag, $Cpuset, $Concurrency, $Seconds, $sUs, $nUs, ($(if ($nUs -gt 0) { $sUs / $nUs } else { 0 })), $sRps, $nRps, (Get-Date -Format 'HH:mm:ss') |
-    Add-Content $csv -Encoding utf8
+if (Test-Path $csv) {
+    $row | Export-Csv -Path $csv -Append -NoTypeInformation -Encoding utf8
+} else {
+    $row | Export-Csv -Path $csv -NoTypeInformation -Encoding utf8
+}
 
 & docker compose -f $Compose --profile spire --profile nginx down -v --remove-orphans 2>&1 | Out-Null

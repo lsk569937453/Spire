@@ -65,12 +65,22 @@ $ceiling = Get-Hey 'http://backend:8080/api/1'
 $gate = Get-Hey 'http://spire-exp:6667/api/1'
 $ratio = if ($ceiling -gt 0) { $gate / $ceiling } else { 0 }
 
-$line = '{0},{1},{2},{3},{4:N1},{5:N1},{6:N3},{7}' -f $Tag, 'spire', $Cpuset, $Concurrency, $gate, $ceiling, $ratio, (Get-Date -Format 'HH:mm:ss')
 $csv = Join-Path $Results 'experiments.csv'
-if (-not (Test-Path $csv)) {
-    'tag,gateway,cpuset,concurrency,gateway_rps,ceiling_rps,ratio,ts' | Set-Content $csv -Encoding utf8
+$row = [pscustomobject]@{
+    tag         = $Tag
+    gateway     = 'spire'
+    cpuset      = $Cpuset
+    concurrency = $Concurrency
+    gateway_rps = ('{0:F1}' -f $gate)
+    ceiling_rps = ('{0:F1}' -f $ceiling)
+    ratio       = ('{0:F3}' -f $ratio)
+    ts          = (Get-Date -Format 'HH:mm:ss')
 }
-Add-Content $csv $line -Encoding utf8
+if (Test-Path $csv) {
+    $row | Export-Csv -Path $csv -Append -NoTypeInformation -Encoding utf8
+} else {
+    $row | Export-Csv -Path $csv -NoTypeInformation -Encoding utf8
+}
 Write-Host $line -ForegroundColor Green
 
 & docker rm -f spire-exp 2>&1 | Out-Null

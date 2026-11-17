@@ -68,13 +68,23 @@ $ceiling = Get-HeyRps 'http://backend:8080/api/1'
 $gate = Get-HeyRps "$port/api/1"
 $ratio = if ($ceiling.rps -gt 0) { $gate.rps / $ceiling.rps } else { 0 }
 
-$line = '{0},{1},{2},{3},{4:N1},{5:N1},{6:N3},{7}' -f `
-    $Tag, $Gateway, $Cpuset, $Concurrency, $gate.rps, $ceiling.rps, $ratio, (Get-Date -Format 'HH:mm:ss')
 $csv = Join-Path $Results 'quick.csv'
-if (-not (Test-Path $csv)) {
-    'tag,gateway,cpuset,concurrency,gateway_rps,ceiling_rps,ratio,ts' | Set-Content $csv -Encoding utf8
+# Export-Csv keeps the cpuset ("4,6") and the thousand separators out of the way.
+$row = [pscustomobject]@{
+    tag         = $Tag
+    gateway     = $Gateway
+    cpuset      = $Cpuset
+    concurrency = $Concurrency
+    gateway_rps = ('{0:F1}' -f $gate.rps)
+    ceiling_rps = ('{0:F1}' -f $ceiling.rps)
+    ratio       = ('{0:F3}' -f $ratio)
+    ts          = (Get-Date -Format 'HH:mm:ss')
 }
-Add-Content $csv $line -Encoding utf8
+if (Test-Path $csv) {
+    $row | Export-Csv -Path $csv -Append -NoTypeInformation -Encoding utf8
+} else {
+    $row | Export-Csv -Path $csv -NoTypeInformation -Encoding utf8
+}
 Write-Host $line -ForegroundColor Green
 Write-Host "  gateway: $($gate.line)" -ForegroundColor DarkGray
 Write-Host "  ceiling: $($ceiling.line)" -ForegroundColor DarkGray

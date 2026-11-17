@@ -99,11 +99,23 @@ Write-Host ("B={0}: user {1:N1} us  sys {2:N1} us" -f $ImageB, $bUser, $bSys) -F
 Write-Host ("B/A user ratio {0:N3}" -f ($(if ($aUser -gt 0) { $bUser / $aUser } else { 0 })))
 
 $csv = Join-Path $Root 'results/bin-ab.csv'
-if (-not (Test-Path $csv)) {
-    'image_a,image_b,cpuset,concurrency,a_user_us,a_sys_us,b_user_us,b_sys_us,b_over_a,ts' | Set-Content $csv -Encoding utf8
+# Same CSV-hygiene reason as ab.ps1: quote the cpuset and avoid locale grouping.
+$row = [pscustomobject]@{
+    image_a    = $ImageA
+    image_b    = $ImageB
+    cpuset     = $Cpuset
+    concurrency = $Concurrency
+    a_user_us  = ('{0:F2}' -f $aUser)
+    a_sys_us   = ('{0:F2}' -f $aSys)
+    b_user_us  = ('{0:F2}' -f $bUser)
+    b_sys_us   = ('{0:F2}' -f $bSys)
+    b_over_a   = ('{0:F3}' -f ($(if ($aUser -gt 0) { $bUser / $aUser } else { 0 })))
+    ts         = (Get-Date -Format 'HH:mm:ss')
 }
-'{0},{1},{2},{3},{4:N2},{5:N2},{6:N2},{7:N2},{8:N3},{9}' -f `
-    $ImageA, $ImageB, $Cpuset, $Concurrency, $aUser, $aSys, $bUser, $bSys, ($(if ($aUser -gt 0) { $bUser / $aUser } else { 0 })), (Get-Date -Format 'HH:mm:ss') |
-    Add-Content $csv -Encoding utf8
+if (Test-Path $csv) {
+    $row | Export-Csv -Path $csv -Append -NoTypeInformation -Encoding utf8
+} else {
+    $row | Export-Csv -Path $csv -NoTypeInformation -Encoding utf8
+}
 
 & docker compose -f $Compose down -v --remove-orphans 2>&1 | Out-Null

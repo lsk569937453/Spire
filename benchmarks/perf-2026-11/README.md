@@ -40,6 +40,9 @@ pwsh -File scripts/chaos.ps1 -Phase all
 
 # summary tables, per-endpoint chaos CSV and SVG charts
 python scripts/analyze.py
+
+# re-derive every number quoted in report.md from results/*.csv (40 checks)
+python scripts/verify_report.py
 ```
 
 ## Core pinning
