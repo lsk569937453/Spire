@@ -359,6 +359,10 @@ pub async fn acquire_weighted(
         None => {
             let key = endpoint_key(endpoint);
             let limiter = limiter_for(key.as_ref(), cfg);
+            // The limit is a constant for a given (route, endpoint): export it
+            // once when the limiter is first resolved on this thread instead of
+            // rewriting the same gauge value on every request.
+            metrics::set_upstream_concurrency_limit(mapping_key, route, &key, cfg.limit as i64);
             LAST_LIMITER.with(|slot| {
                 *slot.borrow_mut() = Some((
                     endpoint.to_string(),
@@ -370,7 +374,6 @@ pub async fn acquire_weighted(
             (key, limiter)
         }
     };
-    metrics::set_upstream_concurrency_limit(mapping_key, route, &key, cfg.limit as i64);
     let endpoint_permit = match limiter.acquire_owned().await {
         Ok(permit) => permit,
         Err(e) => {
