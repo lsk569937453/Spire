@@ -334,17 +334,20 @@ Spire 的系统调用**比 nginx 更少**（3.92 vs 5.15），writev 都是每�
 
 ---
 
-## 9. 下一步优化清单（按预期收益排序，未实施）
+## 9. 如果还要继续：只剩结构性选项
 
-目标很明确：**用户态 21.9 µs/req → 接近 nginx 的 6.7 µs/req**（内核态只差 19%，不是主战场）。
+1 核的剩余差距（CPU/请求 1.14~1.24，吞吐 0.85）已经不在"可微调"的层面。下表是仍有可能、但都需要重构的选项，按性价比排序：
 
-1. **绕开 hyper-util legacy client 的连接池（预期最大，估计 3~5 µs/req）**：每请求一次 `PoolInner` 的 DashMap 查找 + key 构造 + `PoolClient` future 链。nginx 把上游连接直接挂在客户端连接对象上，零池查找。做法：为 HTTP/1 上游自建「endpoint → `SendRequest`」缓存，用 `hyper::client::conn::http1::handshake` 直连。风险高，但只影响 HTTP/1 上游路径。
-2. **合并 body 包装层（1~2 µs/req）**：一次响应现在要过 `BoxBody` → `TimedBody` → `PermitBody` → `BoxBody`，每层一次堆分配 + 虚调用；把 `TimedBody` 折叠进 `PermitBody`。
-3. **指标句柄缓存（0.5~1.5 µs/req）**：每请求 5 次 `with_label_values`（RwLock + 哈希）。路由解析时取出 `Histogram`/`IntCounter` 存进路由结构，热路径只 `.observe()`/`.inc()`。
-4. **`HeaderMap` 克隆收敛**：响应阶段仍有一次整表克隆（`cloned_headers`），可用 `Arc<HeaderMap>` 或借用化。
-5. **生产环境层面**：`log_level` 固定 `info` 以上、logger 改 `lossy(true)` 或采样；Docker 网络若能改 host 网络/关 conntrack，可再吃掉一部分内核成本。
+| 选项 | 预期收益 | 代价/风险 |
+|---|---|---|
+| 自管 HTTP/1 上游连接（`hyper::client::conn::http1::handshake` + 每下游连接缓存 `SendRequest`） | 2~4%（火焰图里 hyper-util client 占 1.9%） | 需要把连接状态从 listener 穿到 `forward_http_upstream`；按线程缓存单连接会引入 HTTP/1 队头阻塞，必须按下游连接隔离 |
+| 合并 body 包装层（`TimedBody` 折进 `PermitBody`，少 2 次 `BoxBody`） | 1~2% | 触及并发 permit 生命周期，需重跑限流/超时相关测试 |
+| 指标句柄缓存（每次路由解析取出 `Histogram`/`IntCounter`） | 0.5~1.5% | 引入每路由缓存，配置热重载时要失效 |
+| 换掉 hyper 的请求/响应缓冲路径（零拷贝透传 header 字节） | 理论上最大（hyper 占用户态 12~15%） | 等于重写代理核心，不建议在现有架构上做 |
 
-**已验证无效或收益很小的**：mimalloc 参数调优（`PURGE_DELAY=-1`、`ARENA_EAGER_COMMIT=1`）——比值 0.308/0.293 vs 基线 0.328，无差异；微观分配消除（改动 4-5）只带来约 1%，说明真正的差距在 hyper 的结构性开销上。
+**生产环境层面（零代码）**：`log_level` 固定 `info` 以上（否则吞吐腰斩，见 §5）；Docker 网络若能改 host 网络或关闭 conntrack，可再吃掉一部分内核成本（火焰图里 conntrack/nftables/SELinux 合计 ~4%）。
+
+**已经确认无效的七项**见 §8.7。
 
 ---
 
