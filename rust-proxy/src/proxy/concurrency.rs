@@ -41,7 +41,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
-use url::Url;
 
 /// Share of the detected memory limit reserved for in-flight request state.
 /// The other half covers page cache (cgroup accounting counts it), the
@@ -79,17 +78,26 @@ pub struct DerivedLimitsInfo {
 /// path prefixes hits the same downstream and must share one limiter. Parse
 /// failures fall back to the raw string — the key stays bounded because
 /// endpoints come from configuration, never from the request.
+///
+/// This runs for every proxied request, so it deliberately does not use the
+/// `url` crate: a full URL parse plus two `format!` calls showed up as ~1% of
+/// user CPU in the perf-2026-11 profile. Splitting on the authority is enough
+/// for the identity semantics the limiter needs.
 pub fn endpoint_key(endpoint: &str) -> String {
-    match Url::parse(endpoint) {
-        Ok(url) if url.has_host() => {
-            let mut key = format!("{}://{}", url.scheme(), url.host_str().unwrap_or_default());
-            if let Some(port) = url.port() {
-                key.push_str(&format!(":{port}"));
-            }
-            key
-        }
-        _ => endpoint.to_string(),
+    let Some((scheme, rest)) = endpoint.split_once("://") else {
+        return endpoint.to_string();
+    };
+    let authority = rest.split('/').next().unwrap_or(rest);
+    // Drop any userinfo: only the host:port identifies the downstream.
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    if scheme.is_empty() || host_port.is_empty() {
+        return endpoint.to_string();
     }
+    let mut key = String::with_capacity(scheme.len() + host_port.len() + 3);
+    key.push_str(scheme);
+    key.push_str("://");
+    key.push_str(host_port);
+    key
 }
 
 /// A permit could not be acquired for this request.
