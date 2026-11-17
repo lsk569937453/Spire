@@ -98,7 +98,7 @@ where
     let labels = UpstreamLabels {
         mapping_key: Arc::from(call.mapping_key),
         route: Arc::from(call.route_label),
-        endpoint: Arc::from(concurrency::endpoint_key(call.endpoint)),
+        endpoint: concurrency::endpoint_key(call.endpoint),
     };
     let permit = match concurrency::acquire(
         call.endpoint,
@@ -278,7 +278,7 @@ where
     let labels = UpstreamLabels {
         mapping_key: Arc::from(call.mapping_key),
         route: Arc::from(call.route_label),
-        endpoint: Arc::from(concurrency::endpoint_key(call.endpoint)),
+        endpoint: concurrency::endpoint_key(call.endpoint),
     };
     let permit = match concurrency::acquire_weighted(
         call.endpoint,

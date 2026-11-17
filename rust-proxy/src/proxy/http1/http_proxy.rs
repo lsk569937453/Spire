@@ -1294,7 +1294,7 @@ mod tests {
         {
             assert!(
                 counter
-                    .with_label_values(&["test", "conc-route", endpoint.as_str()])
+                    .with_label_values(&["test", "conc-route", &endpoint])
                     .get()
                     >= 1.0
             );
@@ -1311,7 +1311,7 @@ mod tests {
         {
             assert_eq!(
                 gauge
-                    .with_label_values(&["test", "conc-route", endpoint.as_str()])
+                    .with_label_values(&["test", "conc-route", &endpoint])
                     .get(),
                 0
             );
@@ -1348,7 +1348,7 @@ mod tests {
         {
             assert_eq!(
                 gauge
-                    .with_label_values(&["test", "idle-route", endpoint.as_str()])
+                    .with_label_values(&["test", "idle-route", &endpoint])
                     .get(),
                 0
             );

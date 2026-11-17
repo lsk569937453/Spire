@@ -32,6 +32,7 @@
 use crate::monitor::prometheus_exporter::metrics;
 use crate::vojo::app_error::AppError;
 use crate::vojo::concurrency::ConcurrencyConfig;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -80,10 +81,27 @@ pub struct DerivedLimitsInfo {
 /// endpoints come from configuration, never from the request.
 ///
 /// This runs for every proxied request, so it deliberately does not use the
-/// `url` crate: a full URL parse plus two `format!` calls showed up as ~1% of
-/// user CPU in the perf-2026-11 profile. Splitting on the authority is enough
-/// for the identity semantics the limiter needs.
-pub fn endpoint_key(endpoint: &str) -> String {
+/// `url` crate (a full URL parse plus two `format!` calls showed up as ~1% of
+/// user CPU) and memoizes the last result per thread: with one downstream, the
+/// steady state is a string compare and an `Arc` increment instead of an
+/// allocation.
+pub fn endpoint_key(endpoint: &str) -> Arc<str> {
+    if let Some(hit) = LAST_ENDPOINT_KEY.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .filter(|(raw, _)| raw.as_str() == endpoint)
+            .map(|(_, key)| key.clone())
+    }) {
+        return hit;
+    }
+    let key: Arc<str> = Arc::from(normalize_endpoint(endpoint));
+    LAST_ENDPOINT_KEY.with(|slot| {
+        *slot.borrow_mut() = Some((endpoint.to_string(), key.clone()));
+    });
+    key
+}
+
+fn normalize_endpoint(endpoint: &str) -> String {
     let Some((scheme, rest)) = endpoint.split_once("://") else {
         return endpoint.to_string();
     };
@@ -98,6 +116,18 @@ pub fn endpoint_key(endpoint: &str) -> String {
     key.push_str("://");
     key.push_str(host_port);
     key
+}
+
+/// One thread's memo of the last resolved downstream limiter.
+type LimiterCacheEntry = (String, Arc<str>, Arc<UpstreamLimiter>, ConcurrencyConfig);
+
+thread_local! {
+    /// Last `(raw endpoint, normalized key)` pair seen on this thread.
+    static LAST_ENDPOINT_KEY: RefCell<Option<(String, Arc<str>)>> = const { RefCell::new(None) };
+    /// Last `(raw endpoint, key, limiter, config)` resolved on this thread.
+    /// Avoids a read lock on the process-wide limiter registry per request,
+    /// which is what made four cores degrade more than one.
+    static LAST_LIMITER: RefCell<Option<LimiterCacheEntry>> = const { RefCell::new(None) };
 }
 
 /// A permit could not be acquired for this request.
@@ -314,8 +344,32 @@ pub async fn acquire_weighted(
     mapping_key: &str,
     route: &str,
 ) -> Result<UpstreamPermit, AppError> {
-    let key = endpoint_key(endpoint);
-    let limiter = limiter_for(&key, cfg);
+    let (key, limiter) = match LAST_LIMITER.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|(endpoint_cached, key, limiter, cfg_cached)| {
+                if endpoint_cached.as_str() == endpoint && cfg_cached == cfg {
+                    Some((key.clone(), limiter.clone()))
+                } else {
+                    None
+                }
+            })
+    }) {
+        Some(hit) => hit,
+        None => {
+            let key = endpoint_key(endpoint);
+            let limiter = limiter_for(key.as_ref(), cfg);
+            LAST_LIMITER.with(|slot| {
+                *slot.borrow_mut() = Some((
+                    endpoint.to_string(),
+                    key.clone(),
+                    limiter.clone(),
+                    cfg.clone(),
+                ));
+            });
+            (key, limiter)
+        }
+    };
     metrics::set_upstream_concurrency_limit(mapping_key, route, &key, cfg.limit as i64);
     let endpoint_permit = match limiter.acquire_owned().await {
         Ok(permit) => permit,
@@ -373,19 +427,19 @@ mod tests {
     #[test]
     fn endpoint_key_strips_path_and_keeps_authority() {
         assert_eq!(
-            endpoint_key("http://127.0.0.1:9394/some/prefix"),
+            &*endpoint_key("http://127.0.0.1:9394/some/prefix"),
             "http://127.0.0.1:9394"
         );
         assert_eq!(
-            endpoint_key("https://api.example.com"),
+            &*endpoint_key("https://api.example.com"),
             "https://api.example.com"
         );
         assert_eq!(
-            endpoint_key("grpc://10.0.0.1:50051"),
+            &*endpoint_key("grpc://10.0.0.1:50051"),
             "grpc://10.0.0.1:50051"
         );
         // Unparseable endpoints fall back to the raw string, still bounded.
-        assert_eq!(endpoint_key("not a url"), "not a url");
+        assert_eq!(&*endpoint_key("not a url"), "not a url");
     }
 
     #[tokio::test]
