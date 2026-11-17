@@ -11,3 +11,5 @@ perf-spire:pgo,perf-spire:pgo3,4,64,8.87,21.05,8.97,20.95,1.011,20:22:59
 perf-spire:gnu-base,perf-spire:systemalloc,4,64,13.27,22.61,12.93,22.27,0.974,20:35:54
 perf-spire:gnu-base,perf-spire:systemalloc,4,6,8,10,64,17.09,26.04,18.48,26.43,1.081,20:38:22
 perf-spire:gnu-base,perf-spire:systemalloc,4,64,13.30,22.79,13.26,22.40,0.996,20:40:33
+perf-spire:gnu-tlcache,perf-spire:nonodelay,4,64,12.11,22.65,13.02,22.32,1.075,21:06:32
+perf-spire:gnu-tlcache,perf-spire:gauge-once,4,64,12.57,22.93,12.75,21.57,1.015,21:13:58
