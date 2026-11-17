@@ -336,20 +336,41 @@ Spire 的系统调用**比 nginx 更少**（3.92 vs 5.15），writev 都是每�
 
 ---
 
-## 9. 如果还要继续：只剩结构性选项
+## 9. 决策记录：为什么这次不改内核（含 Pingora 评估）
 
-1 核的剩余差距（CPU/请求 1.14~1.24，吞吐 0.85）已经不在"可微调"的层面。下表是仍有可能、但都需要重构的选项，按性价比排序：
+1 核的剩余差距（CPU/请求 1.14~1.24，吞吐 0.85）已经不在"可微调"的层面。**2026-11-17 决定：本轮到此为止，不启动内核级重写**，理由与备选路线记录在此，供将来立项时直接复用。
+
+### 9.1 仍是结构性选项、但本次不做
 
 | 选项 | 预期收益 | 代价/风险 |
 |---|---|---|
-| 自管 HTTP/1 上游连接（`hyper::client::conn::http1::handshake` + 每下游连接缓存 `SendRequest`） | 2~4%（火焰图里 hyper-util client 占 1.9%） | 需要把连接状态从 listener 穿到 `forward_http_upstream`；按线程缓存单连接会引入 HTTP/1 队头阻塞，必须按下游连接隔离 |
+| 自管 HTTP/1 上游连接（`hyper::client::conn::http1::handshake` + 每下游连接缓存 `SendRequest`） | 2~4%（火焰图里 hyper-util client 占 1.9%） | **已否决**：请求体是流式 `BoxBody`，连接空闲被对端关闭后无法安全重试，只能给客户端 502 |
 | 合并 body 包装层（`TimedBody` 折进 `PermitBody`，少 2 次 `BoxBody`） | 1~2% | 触及并发 permit 生命周期，需重跑限流/超时相关测试 |
-| 指标句柄缓存（每次路由解析取出 `Histogram`/`IntCounter`） | 0.5~1.5% | 引入每路由缓存，配置热重载时要失效 |
-| 换掉 hyper 的请求/响应缓冲路径（零拷贝透传 header 字节） | 理论上最大（hyper 占用户态 12~15%） | 等于重写代理核心，不建议在现有架构上做 |
+| 指标句柄缓存（路由解析时取出 `Histogram`/`IntCounter`） | 0.5~1.5% | 引入每路由缓存，配置热重载时要失效 |
+| 保留 hyper、只改请求/响应缓冲路径（header 零拷贝直通、减少 `Bytes` 中转） | 个位数 % | 改 `forward_http_upstream` 与 body 链；**这是唯一还值得试的一档** |
 
-**生产环境层面（零代码）**：`log_level` 固定 `info` 以上（否则吞吐腰斩，见 §5）；Docker 网络若能改 host 网络或关闭 conntrack，可再吃掉一部分内核成本（火焰图里 conntrack/nftables/SELinux 合计 ~4%）。
+### 9.2 换框架（Pingora）评估
 
-**已经确认无效的七项**见 §8.7。
+结论：**为"单核追平 nginx"换 Pingora 不划算**，理由如下（均为分析，未在本机实测 Pingora 的 µs/req）。
+
+1. **它解决的不是我们量到的瓶颈**。Pingora 的 HTTP/1 与 HTTP/2 实现在 `h1` / `h2` crate 上，`h1` 本身源自 hyper 的解析器——每请求仍有 header 解析、类型化 Request/Response 构造、响应再序列化。我们的差距正落在这一段（hyper 占用户态 12~15%、`memcpy` 9.8%），换框架不会自动消失。
+2. **Pingora 的优势在连接生命周期**：连接复用与健康检查、优雅升级、多协议统一、TLS 会话与服务发现。这些是生产可用性收益，不是单请求 CPU 收益。
+3. **迁移面是全站级的**。Spire 的中间件、熔断、限流、JWT、CORS、WASM 插件、指标导出都挂在 hyper 的 `Request`/`Response` 上（`middleware/`、`proxy/proxy_trait.rs`、`wasm/`、`monitor/prometheus_exporter.rs`）；`PermitBody`/`TimedBody` 的并发预算与超时语义也要重新落到 Pingora 的 body 模型；gRPC 转码与 WebSocket upgrade 需重新验证。这是换内核，不是优化。
+4. **依赖成本**：Pingora 会引入 BoringSSL/OpenSSL 等重依赖，与现在 rustls 的技术栈不一致。
+
+### 9.3 将来若要立项：先跑 spike，用数据而不是判断
+
+在动主干之前，先做 1~2 小时的 spike：用 Pingora 写一个最小 echo 代理（或最小 `h1` 连接循环），放进**现有 rig**（同一 bridge、同一 cpuset、`bin-ab.ps1` 同会话交替、读 `/proc` 的 utime/stime）与 `perf-spire:pgo4` 对比。
+
+**立项门槛**：Pingora/h1 版本的 µs/req 明显低于当前 1 核的 30.7 µs（建议门槛 ≤26 µs，即 ≥15% 改善），否则直接放弃。
+
+### 9.4 生产环境层面的零代码收益
+
+- `log_level` 必须固定在 `info` 以上：`debug` 会打开访问日志，4 核吞吐 **−49%**（§5）。
+- Docker 网络若能改 host 网络或关闭 conntrack，可再吃掉一部分内核成本（火焰图里 conntrack/nftables/SELinux 合计 ~4%）。
+- 发布二进制请用 **gnu 目标 + fat LTO**（生产脚本本来就是 gnu）；PGO 见 §8.2 与 `scripts/pgo.ps1`。
+
+**已经确认无效的八项**见 §8.7。
 
 ---
 
