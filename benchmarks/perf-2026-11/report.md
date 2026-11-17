@@ -257,6 +257,32 @@ Spire 的系统调用**比 nginx 更少**（3.92 vs 5.15），writev 都是每�
 
 **已经验证无效的**：mimalloc 参数调优（`PURGE_DELAY=-1`、`ARENA_EAGER_COMMIT=1`）——比值 0.308/0.293，和基线 0.328 无差异。
 
+### 8.2 PGO（profile-guided optimization）：本轮最大单项收益
+
+用 `scripts/pgo.ps1` 走完整三步：插桩编译（`-Cprofile-generate`）→ 在压测拓扑上跑真实负载采集 profile → `llvm-profdata merge` 后带 profile 重编译（`-Cprofile-use`）。Spire 本身已经有优雅停机（`SIGTERM` → `wait_for_signals` 正常返回），所以 LLVM 的 atexit 钩子能把 `.profraw` 正常落盘，**不需要改代码**。
+
+同一会话内交替测量（`bin-ab.ps1`，3 轮中位数，1 核 c=64）：
+
+| 构建 | 用户态 µs/req | 内核态 µs/req | 合计 | 体积 |
+|---|---:|---:|---:|---:|
+| gnu + fat LTO（基线） | 13.0 | 23.2 | 36.2 | 15.1 MB |
+| **gnu + fat LTO + PGO** | **8.4（−35%）** | 21.9 | **30.3（−16%）** | 13.2 MB |
+
+与 nginx 的同场次对比（`ab.ps1`）：
+
+| 场景 | Spire（PGO） | nginx | CPU 比值 | 吞吐 |
+|---|---:|---:|---:|---|
+| 1 核 c=64 | 29.9 µs/req | 27.0 µs/req | **1.107×** | 33,711 vs 37,765 RPS（89%） |
+| 4 核 c=64 | 39.4 µs/req | 30.3 µs/req | 1.298× | **83,100 vs 63,519 RPS（+31%）** |
+
+**CPU/请求比值从摸高起点的 1.72 降到 1.11**，1 核吞吐从 59% 追到 89%，4 核已经反超。
+
+### 8.3 一个必须记录的测量口径错误
+
+前几轮的压测二进制是 **musl 静态**（`cross build --target x86_64-unknown-linux-musl`），但仓库 `build_and_deploy.bat` 实际发布的是 **gnu 目标**（`x86_64-unknown-linux-gnu`）。两者用户态差距明显（同源码下 musl 19.9 µs vs gnu 13.0 µs）：musl 的 syscall 包装与分配路径更重，而生产根本不用它。
+
+**修正**：后续所有对比数据改用 gnu 目标（与生产一致）。§8.1 里"fat LTO −9%"的绝对值是在 musl 下测的，方向仍成立，但 gnu 下的绝对值更好。
+
 ---
 
 ## 9. 下一步优化清单（按预期收益排序，未实施）
