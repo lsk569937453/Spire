@@ -25,13 +25,33 @@
 
 ## 1. 结论摘要
 
-**1）同核对比：优化前 Spire 约为 nginx 的 57%，优化后中位数约 84%（区间 61%~126%，受宿主噪声影响）。**
+**1）同核对比：优化前 Spire 约为 nginx 的 57%，优化后吞吐已接近持平，但 CPU 效率仍差 1.6~1.7 倍。**
 
 | 场景 | 优化前 | 优化后（交错 A/B） |
 |---|---|---|
 | 1 核 c=64 | spire/nginx ≈ 0.59 | 0.84 / 1.17（两次） |
 | 4 核 c=64 | — | 0.77 / 0.61（两次） |
 | 4 核 c=256 | — | **1.26**（Spire 反超） |
+
+**1b）换用「每请求 CPU 时间」这个不受调度抖动影响的指标后，差距被量化了：**
+
+| 核数 | Spire | nginx | 比值 |
+|---|---:|---:|---:|
+| 1 核 c=64 | 57.4 µs/req（17,385 rps） | 33.5 µs/req（29,473 rps） | **1.72×** |
+| 4 核 c=64 | 62.8 µs/req（51,900 rps） | 38.5 µs/req（50,642 rps） | **1.63×** |
+
+注意 4 核那行：**吞吐已经基本持平（51.9k vs 50.6k），但 Spire 多烧 63% 的 CPU**。所以"吞吐持平"很大程度是因为两边都撞到同一个环境上限，而不是代码效率追平了。真正的目标是把 µs/req 从 57 压到 ~34。
+
+**1c）把 CPU 拆成用户态/内核态后，差距的来源就唯一了**（`scripts/cpu-split.ps1`，读 `/proc/*/stat` 的 utime/stime，单核 c=64）：
+
+| 网关 | user µs/req | sys µs/req | 合计 |
+|---|---:|---:|---:|
+| Spire | **21.9** | 32.7 | 54.6 |
+| nginx | **6.7** | 27.4 | 34.1 |
+
+- 内核态只差 19%（32.7 vs 27.4）——**不是内核问题，也不是系统调用数量问题**（Spire 每请求 3.92 次系统调用，nginx 5.15 次）。
+- **用户态差 3.3 倍（21.9 vs 6.7 µs）**，这才是要打的地方。按 1 核火焰图的比例拆：hyper ~8µs、memcpy ~3µs、tokio ~2µs、mimalloc ~1µs、Spire 自身 ~1.6µs。
+- nginx 只花 6.7µs 用户态，是因为它把上游连接直接挂在连接对象上，**每请求没有任何池查找**；Spire 走 hyper-util 的 legacy client，每请求一次连接池 DashMap 查找 + `PoolClient` future 链。
 
 **2）瓶颈不在 Spire 的 Rust 业务逻辑。** 4 核饱和点上 Spire 自身代理函数自耗时只有 **2.2%**；真正的大头是内核网络路径（含 Docker bridge 的 conntrack/nftables）、`memcpy`、以及每请求的 mimalloc 分配与释放。
 
@@ -107,28 +127,47 @@ Spire 为 3 次中位数；nginx 行因机器时间被压缩，为 1 次测量�
 
 ## 6. 火焰图与瓶颈归因
 
-采样：4 核、c=256、47,235 RPS 稳定承压 50 秒，**160,559 个样本**，`results/flamegraphs/spire-4core-perf.svg`。自耗时由 `scripts/flamegraph_top.py` 从 SVG 的 `fg:x/fg:w` 重建调用树后计算（自耗时之和 = 根样本数，已校验）。
+采样：`flamegraph-rs` 0.6.15 + perf 6.8.12，软件事件 `cpu-clock` 997Hz，`perf record -p 1 -g`，被采的是 `spire-symbols`（release + debuginfo，不含 pprof feature）。自耗时由 `scripts/flamegraph_top.py` 从 SVG 的 `fg:x/fg:w` 重建调用树后计算（自耗时之和 = 根样本数，已校验）。
+
+### 6.1 4 核（c=256、47,235 RPS、50 秒、160,559 样本）
 
 | 自耗时占比 | 符号 | 归因 |
 |---:|---|---|
-| **22.88%** | `_raw_spin_unlock_irqrestore` | 内核自旋锁（网络栈并发路径） |
+| **22.88%** | `_raw_spin_unlock_irqrestore` | 内核态（**见 6.3 的采样说明**） |
 | 4.94% | `memcpy` | 数据拷贝 |
-| 2.47% | `__nf_conntrack_find_get` | Docker bridge conntrack 查表（**环境 overhead**） |
+| 2.47% | `__nf_conntrack_find_get` | Docker bridge conntrack（**环境 overhead**） |
 | 2.16% | `_mi_page_malloc_zero` | mimalloc 分配（每请求） |
 | 1.87% | `spire::proxy::http1::http_proxy::proxy` | Spire 自身转发逻辑 |
 | 1.52% | `mi_free` | mimalloc 释放（每请求） |
 | 0.97% | `hyper::proto::h1::dispatch::Dispatcher::poll_loop` | HTTP/1.1 编解码 |
-| 0.79% | `__inet_lookup_established` | 内核连接查表 |
 | 0.72% | `nft_do_chain` | nftables（**环境 overhead**） |
 | 0.59% | `selinux_file_permission` | SELinux 钩子（**环境 overhead**） |
 | 0.51% | `prometheus ... with_label_values` | 指标打点（每请求） |
 
-按组件：hyper 14.6%、tokio 5.4%、libc mem 5.3%、**mimalloc 3.7%**、内核发送路径 1.4%、内核接收 0.8%、epoll/唤醒 0.8%、tracing 0.7%。
+按组件：hyper 14.6%、tokio 5.4%、libc mem 5.3%、mimalloc 3.7%、内核网络路径（含 conntrack/nftables/SELinux）**~69%**。
 
-**结论**：
-- 每请求的**分配/释放**是 Spire 自己最大的一块（mimalloc 3.7% + memcpy 4.9%），`bytes::bytes_mut::shared_v_drop` 也进了前 20。
-- 内核那段（自旋锁 + conntrack + nftables + SELinux）里有相当比例是 **Docker bridge 的环境成本**，生产上用 host 网络/eBPF 转发会低很多，**不要把这段算成 Spire 的账**。
-- Spire 业务逻辑仅 ~3%，所以"Rust 写得慢"不是主因，**慢在每请求的固定开销**。
+### 6.2 1 核（c=64、40 秒、1305 帧）
+
+`_raw_spin_unlock_irqrestore` 23.6%、`memcpy` 5.2%、`__nf_conntrack_find_get` 4.3%、`spire::proxy::proxy` 2.4%、`_mi_page_malloc_zero` 1.4%、`tcp_rcv_established` 0.8%、`do_iter_write` 0.8%、`mi_free` 0.8%、`nft_do_chain` 0.7%。组件：hyper 15.0%、libc mem 5.5%、tokio 3.6%、mimalloc 2.1%、其余（内核）**69%**。
+
+### 6.3 采样口径的重要修正
+
+先前把 `_raw_spin_unlock_irqrestore` 读成"自旋锁竞争"是**过度解读**，必须修正：
+
+1. **单核上不可能有可观的锁竞争**，而单核火焰图里它同样占 23.6%——说明这是 `cpu-clock` 软件事件采样落在**中断/上下文切换边界**造成的符号偏置，不是 Spire 的 bug，也不是我们的代码问题。
+2. 因此内核段的正确读法是"**约 2/3 的样本落在内核态（含 Docker bridge 的转发成本）**"，不要逐符号解读。
+3. 这段内核成本里有很大一部分是**环境**（user-defined bridge 的 veth + conntrack + nftables + SELinux），在生产用 host 网络或 eBPF 转发时会显著下降。
+
+### 6.4 系统调用计数（perf tracepoint）
+
+同一负载（c=64、10 秒）下按 CPU 统计：
+
+| 网关 | raw syscalls | writev | syscalls/请求 |
+|---|---:|---:|---:|
+| Spire | 588,125 | 290,933 | **3.92** |
+| nginx | 1,495,742 | 589,765 | **5.15** |
+
+Spire 的系统调用**比 nginx 更少**（3.92 vs 5.15），writev 都是每请求 2 次（客户端 + 上游）。所以差距不在系统调用数量，而在**用户态每请求的 CPU**（hyper 15% + memcpy 5.5% + tokio 3.6% + mimalloc 2.1%），以及每次系统调用本身在 WSL2 上的固定成本。
 
 ---
 
@@ -159,17 +198,19 @@ Spire 为 3 次中位数；nginx 行因机器时间被压缩，为 1 次测量�
 | 1 | **客户端/上游 socket 设 `TCP_NODELAY`** | `proxy/http1/http_proxy.rs`（accept 后）、`proxy/http1/http_client.rs`（`HttpConnector::set_nodelay(true)`） | hyper-util 默认 `nodelay: false`；nginx 两侧默认开。不分片的写会等对端延迟 ACK |
 | 2 | **去掉每请求的 header 大小写映射** | `http_proxy.rs`（`preserve_header_case`/`title_case_headers`）、`http_client.rs` 同 | hyper 为此每消息维护一张 case map 并做一次重写；nginx 直接透传 header 字节 |
 | 3 | **去掉一次 `HeaderMap` 深拷贝** | `http_proxy.rs` 响应阶段 | 每次请求克隆整个 header map，且原来还 `.clone()` 了第二次 |
-| 4 | pprof 采样可控（频率/时长/输出路径环境变量） | `app/run.rs` | 让火焰图能采到"稳态饱和点"而不是"启动 20 秒" |
+| 4 | **`route_label` / `path` 不再每请求 `to_string()`** | `http_proxy.rs` | 直接借用 + 只在错误分支格式化 |
+| 5 | **`UpstreamLabels` 改 `Arc<str>`** | `upstream_body.rs`、`upstream_forward.rs` | 每请求原本构造 3 个 String 再克隆 3 个；改成 3 个 `Arc` + 3 次原子自增 |
+| 6 | pprof 采样可控（频率/时长/输出路径环境变量） | `app/run.rs` | 让火焰图能采到"稳态饱和点"而不是"启动 20 秒" |
 
-**实测（同场次交错 A/B，`scripts/ab.ps1`）**
+**实测进展（同场次交错 A/B，`scripts/ab.ps1`）**
 
-| 场景 | 改动前 | 改动后 |
-|---|---:|---:|
-| 1 核 c=64 | 0.328 / 0.559（spire/nginx 分别对 ceiling） | **0.838**（spire/nginx 直接比） |
-| 4 核 c=256 | — | **1.256** |
-| 4 核 c=64 | — | 0.768 / 0.612 |
+| 阶段 | 1 核 c=64 | 4 核 c=64 |
+|---|---|---|
+| 优化前（spire/nginx 吞吐比） | 0.59 | — |
+| 第 1 轮（改动 1-3） | 0.84（另一次 1.17） | 0.77 / 0.61 |
+| 第 2 轮（改动 4-5） | 56.8 µs/req vs 33.5（1.70×） | 61.9 µs/req vs 41.1（1.51×） |
 
-说明：绝对值波动来自宿主噪声（nginx 自己在两次相同条件下跑出 14.7k 与 47k），所以只报比值，并且同一场景重复 2 次给出区间。**"持平 nginx"在 4 核 c=256 已达成，1~4 核 c=64 仍未稳定达成。**
+绝对值波动来自宿主噪声（同一份 nginx 配置两次能跑出 14.7k 与 47k），所以从第 2 轮起改用 **µs/req** 作为优化指标。
 
 **已经验证无效的**：mimalloc 参数调优（`PURGE_DELAY=-1`、`ARENA_EAGER_COMMIT=1`）——比值 0.308/0.293，和基线 0.328 无差异。
 
@@ -177,11 +218,15 @@ Spire 为 3 次中位数；nginx 行因机器时间被压缩，为 1 次测量�
 
 ## 9. 下一步优化清单（按预期收益排序，未实施）
 
-1. **缓存指标句柄**：`http_proxy.rs:243/249` 每请求两次 `with_label_values`（RwLock + 哈希查找 + key 分配）。改成在路由解析时把 `Histogram`/`IntCounter` 取出来存进路由结构，热路径只 `.observe()`/`.inc()`。预计 2~5%。
-2. **去掉每请求的 `HeaderMap` 克隆与 `path.to_string()`**：`proxy()` 里 `req.headers().clone()`、`uri`/`method` 克隆、`path` 字符串化只为错误日志服务；改成借用 + 懒生成。
-3. **上游超时可关闭**：`http_client.rs` 的 `timeout()` 每请求注册一个 tokio 定时器；当路由未配置超时时可以完全跳过（需要把返回类型从 `Timeout<ResponseFuture>` 改成枚举/`BoxFuture`）。
-4. **`writev` 合并**：确认 hyper 是否把 head 与 body 合并成一次 `writev`；若否，可用 `http1::Builder::max_buf_size` + 一次性 `Bytes` 减少一次系统调用。
-5. **生产环境层面**：把 `log_level` 固定为 `info` 以上、logger 改 `lossy(true)` 或采样；Docker 网络若可改 host 网络/关 conntrack，能直接吃掉火焰图里 3%+ 的环境 overhead。
+目标很明确：**用户态 21.9 µs/req → 接近 nginx 的 6.7 µs/req**（内核态只差 19%，不是主战场）。
+
+1. **绕开 hyper-util legacy client 的连接池（预期最大，估计 3~5 µs/req）**：每请求一次 `PoolInner` 的 DashMap 查找 + key 构造 + `PoolClient` future 链。nginx 把上游连接直接挂在客户端连接对象上，零池查找。做法：为 HTTP/1 上游自建「endpoint → `SendRequest`」缓存，用 `hyper::client::conn::http1::handshake` 直连。风险高，但只影响 HTTP/1 上游路径。
+2. **合并 body 包装层（1~2 µs/req）**：一次响应现在要过 `BoxBody` → `TimedBody` → `PermitBody` → `BoxBody`，每层一次堆分配 + 虚调用；把 `TimedBody` 折叠进 `PermitBody`。
+3. **指标句柄缓存（0.5~1.5 µs/req）**：每请求 5 次 `with_label_values`（RwLock + 哈希）。路由解析时取出 `Histogram`/`IntCounter` 存进路由结构，热路径只 `.observe()`/`.inc()`。
+4. **`HeaderMap` 克隆收敛**：响应阶段仍有一次整表克隆（`cloned_headers`），可用 `Arc<HeaderMap>` 或借用化。
+5. **生产环境层面**：`log_level` 固定 `info` 以上、logger 改 `lossy(true)` 或采样；Docker 网络若能改 host 网络/关 conntrack，可再吃掉一部分内核成本。
+
+**已验证无效或收益很小的**：mimalloc 参数调优（`PURGE_DELAY=-1`、`ARENA_EAGER_COMMIT=1`）——比值 0.308/0.293 vs 基线 0.328，无差异；微观分配消除（改动 4-5）只带来约 1%，说明真正的差距在 hyper 的结构性开销上。
 
 ---
 

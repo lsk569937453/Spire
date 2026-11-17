@@ -21,6 +21,7 @@ use http_body_util::combinators::BoxBody;
 use hyper::StatusCode;
 use hyper::header;
 use hyper::{Request, Response};
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::time::timeout;
@@ -95,9 +96,9 @@ where
     // (the async equivalent of a full worker thread pool, except the
     // process dies of OOM instead of queueing).
     let labels = UpstreamLabels {
-        mapping_key: call.mapping_key.to_string(),
-        route: call.route_label.to_string(),
-        endpoint: concurrency::endpoint_key(call.endpoint),
+        mapping_key: Arc::from(call.mapping_key),
+        route: Arc::from(call.route_label),
+        endpoint: Arc::from(concurrency::endpoint_key(call.endpoint)),
     };
     let permit = match concurrency::acquire(
         call.endpoint,
@@ -109,7 +110,10 @@ where
     {
         Ok(permit) => permit,
         Err(rejection) => {
-            warn!("[ConcurrencyLimit] {rejection} (route {})", labels.route);
+            warn!(
+                "[ConcurrencyLimit] {rejection} (route {})",
+                labels.route.as_ref()
+            );
             // Early return: our own load shedding is not a downstream
             // failure and must not feed the circuit breaker.
             return service_unavailable_response();
@@ -272,9 +276,9 @@ where
     // similar-sized response + JSON expansion is expected).
     let global_weight = ((buffered_len * 2) / concurrency::PER_REQUEST_ESTIMATE_BYTES).max(1);
     let labels = UpstreamLabels {
-        mapping_key: call.mapping_key.to_string(),
-        route: call.route_label.to_string(),
-        endpoint: concurrency::endpoint_key(call.endpoint),
+        mapping_key: Arc::from(call.mapping_key),
+        route: Arc::from(call.route_label),
+        endpoint: Arc::from(concurrency::endpoint_key(call.endpoint)),
     };
     let permit = match concurrency::acquire_weighted(
         call.endpoint,
@@ -287,7 +291,10 @@ where
     {
         Ok(permit) => permit,
         Err(rejection) => {
-            warn!("[ConcurrencyLimit] {rejection} (route {})", labels.route);
+            warn!(
+                "[ConcurrencyLimit] {rejection} (route {})",
+                labels.route.as_ref()
+            );
             return service_unavailable_response();
         }
     };

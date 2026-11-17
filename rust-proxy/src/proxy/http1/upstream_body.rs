@@ -22,6 +22,7 @@ use http_body::Frame;
 use http_body::SizeHint;
 use http_body_util::combinators::BoxBody;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
@@ -29,11 +30,15 @@ use std::time::Instant;
 use tokio::time::Sleep;
 
 /// Labels shared by every metrics call a wrapper makes.
+///
+/// `Arc<str>` rather than `String`: these are cloned into both the timed body
+/// and the permit body on every request, and an atomic increment is a lot
+/// cheaper than three heap allocations plus three copies on the hot path.
 #[derive(Clone)]
 pub struct UpstreamLabels {
-    pub mapping_key: String,
-    pub route: String,
-    pub endpoint: String,
+    pub mapping_key: Arc<str>,
+    pub route: Arc<str>,
+    pub endpoint: Arc<str>,
 }
 
 pub struct TimedBody {
@@ -212,9 +217,9 @@ mod tests {
 
     fn labels() -> UpstreamLabels {
         UpstreamLabels {
-            mapping_key: "test".to_string(),
-            route: "route-1".to_string(),
-            endpoint: "http://127.0.0.1:1".to_string(),
+            mapping_key: Arc::from("test"),
+            route: Arc::from("route-1"),
+            endpoint: Arc::from("http://127.0.0.1:1"),
         }
     }
 

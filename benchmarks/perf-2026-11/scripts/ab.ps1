@@ -1,18 +1,18 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-  Fair, interleaved comparison of Spire and nginx in one session.
+  Interleaved Spire-vs-nginx comparison on a stable metric: CPU per request.
 
 .DESCRIPTION
-  Host noise on this machine drifts by tens of percent between minutes, so a
-  gateway measured ten minutes after its competitor is not comparable. This
-  script brings both gateways up on the same cpuset and interleaves the runs:
+  Wall-clock RPS on this machine drifts by tens of percent between minutes
+  (host browsers, WSL2 scheduling), which makes a throughput target impossible
+  to hit reliably. CPU time per request is intrinsic to the code and barely
+  moves, so it is the metric to optimise against:
 
-      ceiling -> spire -> nginx -> ceiling
+      cpu_us_per_request = cgroup usage_usec delta / requests handled
 
-  and reports each gateway normalised by the mean of the two ceiling runs. A
-  ratio above 1.0 means the gateway beat the bare backend measurement, which is
-  impossible in practice, so it also serves as a sanity check on noise.
+  Both gateways are exercised back to back in one session, and RPS is recorded
+  alongside as a sanity check.
 
 .EXAMPLE
   ./ab.ps1 -Cpuset '4' -Concurrency 64 -Seconds 20
@@ -37,9 +37,30 @@ New-Item -ItemType Directory -Force -Path $Results | Out-Null
 function Get-Hey([string]$Url) {
     $out = & docker run --rm --network $Network --cpuset-cpus $ClientCpuset --entrypoint hey $HeyImage `
         -z "${Seconds}s" -c $Concurrency $Url 2>&1
-    $line = ($out | Select-String 'Requests/sec').Line
-    if (-not $line) { return 0.0 }
-    return [double](($line -replace '.*Requests/sec:\s*', '') -replace '\s.*', '')
+    $rpsLine = ($out | Select-String 'Requests/sec').Line
+    $rps = if ($rpsLine) { [double](($rpsLine -replace '.*Requests/sec:\s*', '') -replace '\s.*', '') } else { 0.0 }
+    $total = 0.0
+    $doneLine = ($out | Select-String 'Total:').Line
+    if ($doneLine -match 'Total:\s*([\d.]+) secs') { $total = [double]$Matches[1] }
+    return @{ rps = $rps; seconds = $total }
+}
+
+function Get-CpuUsec([string]$Container) {
+    $raw = & docker exec $Container cat /sys/fs/cgroup/cpu.stat 2>&1
+    foreach ($line in $raw) {
+        if ($line -match '^usage_usec\s+(\d+)') { return [int64]$Matches[1] }
+    }
+    return [int64]0
+}
+
+function Measure-Gateway([string]$Container, [string]$Url) {
+    $before = Get-CpuUsec $Container
+    $res = Get-Hey $Url
+    $after = Get-CpuUsec $Container
+    $requests = [math]::Round($res.rps * $res.seconds)
+    $usPerReq = 0.0
+    if ($requests -gt 0) { $usPerReq = (($after - $before) / $requests) }
+    return @{ rps = $res.rps; requests = $requests; us_per_req = $usPerReq }
 }
 
 & docker compose -f $Compose down -v --remove-orphans 2>&1 | Out-Null
@@ -54,30 +75,32 @@ foreach ($url in @('http://spire:6667/api/1', 'http://nginx:80/api/1')) {
         Start-Sleep -Milliseconds 500
     }
 }
-
 & docker run --rm --network $Network --cpuset-cpus $ClientCpuset --entrypoint hey $HeyImage -z 5s -c $Concurrency 'http://backend:8080/api/1' 2>&1 | Out-Null
 
-$ceil1 = Get-Hey 'http://backend:8080/api/1'
-$spire = Get-Hey 'http://spire:6667/api/1'
-$nginx = Get-Hey 'http://nginx:80/api/1'
-$ceil2 = Get-Hey 'http://backend:8080/api/1'
-$ceiling = ($ceil1 + $ceil2) / 2
+$spireId = (& docker compose -f $Compose ps -q spire).Trim()
+$nginxId = (& docker compose -f $Compose ps -q nginx).Trim()
 
-$sRatio = if ($ceiling -gt 0) { $spire / $ceiling } else { 0 }
-$nRatio = if ($ceiling -gt 0) { $nginx / $ceiling } else { 0 }
-$head = if ($nginx -gt 0) { $spire / $nginx } else { 0 }
+$s1 = Measure-Gateway $spireId 'http://spire:6667/api/1'
+$n1 = Measure-Gateway $nginxId 'http://nginx:80/api/1'
+$s2 = Measure-Gateway $spireId 'http://spire:6667/api/1'
+$n2 = Measure-Gateway $nginxId 'http://nginx:80/api/1'
 
-Write-Host ("cpuset={0} c={1} s={2}s | ceiling {3:N0} / {4:N0}" -f $Cpuset, $Concurrency, $Seconds, $ceil1, $ceil2) -ForegroundColor DarkGray
-Write-Host ("spire {0:N0} rps (ratio {1:N3})   nginx {2:N0} rps (ratio {3:N3})   spire/nginx {4:N3}" -f `
-        $spire, $sRatio, $nginx, $nRatio, $head) -ForegroundColor Green
+$sUs = ($s1.us_per_req + $s2.us_per_req) / 2
+$nUs = ($n1.us_per_req + $n2.us_per_req) / 2
+$sRps = [math]::Max($s1.rps, $s2.rps)
+$nRps = [math]::Max($n1.rps, $n2.rps)
+
+Write-Host ("cpuset={0} c={1} s={2}s" -f $Cpuset, $Concurrency, $Seconds) -ForegroundColor DarkGray
+Write-Host ("spire {0:N1} us/req  {1:N0} rps   |   nginx {2:N1} us/req  {3:N0} rps   |   cpu ratio {4:N3}" -f `
+        $sUs, $sRps, $nUs, $nRps, ($(if ($nUs -gt 0) { $sUs / $nUs } else { 0 }))) -ForegroundColor Green
 
 $csv = Join-Path $Results 'ab.csv'
 if (-not (Test-Path $csv)) {
-    'tag,cpuset,concurrency,seconds,spire_rps,nginx_rps,ceiling_rps,spire_ratio,nginx_ratio,spire_over_nginx,ts' |
+    'tag,cpuset,concurrency,seconds,spire_us_per_req,nginx_us_per_req,cpu_ratio,spire_rps,nginx_rps,ts' |
         Set-Content $csv -Encoding utf8
 }
-'{0},{1},{2},{3},{4:N1},{5:N1},{6:N1},{7:N3},{8:N3},{9:N3},{10}' -f `
-    $Tag, $Cpuset, $Concurrency, $Seconds, $spire, $nginx, $ceiling, $sRatio, $nRatio, $head, (Get-Date -Format 'HH:mm:ss') |
+'{0},{1},{2},{3},{4:N2},{5:N2},{6:N3},{7:N1},{8:N1},{9}' -f `
+    $Tag, $Cpuset, $Concurrency, $Seconds, $sUs, $nUs, ($(if ($nUs -gt 0) { $sUs / $nUs } else { 0 })), $sRps, $nRps, (Get-Date -Format 'HH:mm:ss') |
     Add-Content $csv -Encoding utf8
 
 & docker compose -f $Compose --profile spire --profile nginx down -v --remove-orphans 2>&1 | Out-Null

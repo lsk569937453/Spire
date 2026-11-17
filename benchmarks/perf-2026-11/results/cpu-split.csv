@@ -1,0 +1,3 @@
+gateway,cpuset,concurrency,requests,user_us,sys_us,total_us,ts
+spire,4,64,363715,21.94,32.69,54.63,08:28:07
+nginx,4,64,570770,6.75,27.38,34.13,08:28:40

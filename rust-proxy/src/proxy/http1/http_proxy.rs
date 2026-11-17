@@ -211,11 +211,6 @@ where
 {
     let method = req.method().clone();
     let uri = req.uri().clone();
-    let path = uri
-        .path_and_query()
-        .map(|p| p.as_str())
-        .unwrap_or("/")
-        .to_string();
 
     let started = std::time::Instant::now();
     let mut spire_context = SpireContext::new(port, None);
@@ -234,7 +229,10 @@ where
     {
         Ok(resp) => resp,
         Err(err) => {
-            error!("Proxy error for {method} {path}: {err}");
+            error!(
+                "Proxy error for {method} {}: {err}",
+                uri.path_and_query().map(|p| p.as_str()).unwrap_or("/")
+            );
             let body = Full::new(Bytes::from_static(b"{\"error\":\"bad gateway\"}"))
                 .map_err(|e| match e {})
                 .boxed();
@@ -248,11 +246,12 @@ where
     // Metrics are strictly best effort: a missing/unregistered collector must
     // never change the response the client receives. Labels are bounded: the
     // matched route id, never the raw path (which would create one time series
-    // per URL and grow the process without limit).
-    let route_label = spire_context.route_label().to_string();
+    // per URL and grow the process without limit). Borrowed, not owned: this is
+    // the request hot path and a String per request is measurable.
+    let route_label = spire_context.route_label();
     if let Some(histogram) = metrics::HTTP_REQUEST_DURATION_SECONDS.get() {
         histogram
-            .with_label_values(&[mapping_key.as_str(), route_label.as_str(), method.as_str()])
+            .with_label_values(&[mapping_key.as_str(), route_label, method.as_str()])
             .observe(started.elapsed().as_secs_f64());
     }
     let status = res.status();
@@ -260,7 +259,7 @@ where
         counter
             .with_label_values(&[
                 mapping_key.as_str(),
-                route_label.as_str(),
+                route_label,
                 method.as_str(),
                 status.as_str(),
             ])
@@ -273,7 +272,7 @@ where
         "{} - -  \"{} {} HTTP/1.1\" {}  {:?}",
         remote_addr,
         method,
-        path,
+        uri.path_and_query().map(|p| p.as_str()).unwrap_or("/"),
         status.as_u16(),
         started.elapsed()
     );
