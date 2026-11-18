@@ -293,7 +293,7 @@ pub async fn start_proxy(
             shared_config,
             port,
             channel,
-            mapping_key: mapping_key.clone(),
+            mapping_key: Arc::from(mapping_key.as_str()),
         };
         http_proxy.start_http_server().await
     } else if server_type == ServiceType::Https {
@@ -301,7 +301,7 @@ pub async fn start_proxy(
             shared_config: shared_config.clone(),
             port,
             channel,
-            mapping_key: mapping_key.clone(),
+            mapping_key: Arc::from(mapping_key.as_str()),
         };
         let domains = {
             let config = shared_config.shared_data.write()?;

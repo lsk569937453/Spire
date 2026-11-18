@@ -23,11 +23,10 @@ use http::header::HeaderName;
 use http::header::HeaderValue;
 use http_body_util::BodyExt;
 use http_body_util::Full;
-use http_body_util::combinators::BoxBody;
 use std::sync::OnceLock;
 
 use crate::proxy::http1::http_client::HttpClients;
-use crate::vojo::app_error::AppError;
+use crate::proxy::http1::req_body::ProxyRequestBody;
 use crate::wasm::bindings::spire::filter::types as wit;
 use crate::wasm::convert;
 use crate::wasm::state::PluginLimits;
@@ -125,7 +124,9 @@ pub fn call(
         headers_mut.extend(headers);
     }
     let request = builder
-        .body(Full::new(body).map_err(|e| match e {}).boxed())
+        .body(ProxyRequestBody::Boxed(
+            Full::new(body).map_err(|e| match e {}).boxed(),
+        ))
         .map_err(|e| wit::Error::Invalid(format!("http-call: cannot build request: {e}")))?;
 
     run(limits, request)
@@ -138,7 +139,7 @@ pub fn call(
 /// need to be `Send`, but the runtime must be multi-threaded.
 fn run(
     limits: &PluginLimits,
-    request: Request<BoxBody<Bytes, AppError>>,
+    request: Request<ProxyRequestBody>,
 ) -> Result<wit::HttpResponse, wit::Error> {
     let handle = tokio::runtime::Handle::try_current().map_err(|_| {
         wit::Error::Failed("http-call: no Tokio runtime is running on this thread".to_string())

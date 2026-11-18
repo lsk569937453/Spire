@@ -20,7 +20,6 @@ use bytes::Bytes;
 use http_body::Body;
 use http_body::Frame;
 use http_body::SizeHint;
-use http_body_util::combinators::BoxBody;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
@@ -41,8 +40,14 @@ pub struct UpstreamLabels {
     pub endpoint: Arc<str>,
 }
 
-pub struct TimedBody {
-    inner: BoxBody<Bytes, AppError>,
+/// The two wrappers below are generic over the body they guard instead of
+/// taking `BoxBody`: the upstream response is wrapped in place and the whole
+/// chain is boxed exactly once, at the boundary where `proxy` returns
+/// `Response<BoxBody<..>>`. Every intermediate `.boxed()` costs one allocation
+/// plus one dynamic dispatch per frame, and the response path used to do that
+/// four times.
+pub struct TimedBody<B> {
+    inner: B,
     idle_timeout: Duration,
     /// Idle watchdog. Armed (re-created) before polling `inner` while no
     /// frame is in flight; cleared on every frame so the timer measures the
@@ -51,12 +56,12 @@ pub struct TimedBody {
     labels: UpstreamLabels,
 }
 
-impl TimedBody {
-    pub fn new(
-        inner: BoxBody<Bytes, AppError>,
-        idle_timeout: Duration,
-        labels: UpstreamLabels,
-    ) -> Self {
+impl<B> TimedBody<B>
+where
+    B: Body<Data = Bytes> + Unpin,
+    AppError: From<B::Error>,
+{
+    pub fn new(inner: B, idle_timeout: Duration, labels: UpstreamLabels) -> Self {
         Self {
             inner,
             idle_timeout,
@@ -81,7 +86,10 @@ impl TimedBody {
                 this.watchdog = None;
                 Poll::Ready(Some(Ok(frame)))
             }
-            Poll::Ready(other) => Poll::Ready(other),
+            // The inner error type is translated here (cold path) so the
+            // wrapper's own error type stays `AppError`.
+            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(AppError::from(err)))),
+            Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => match watchdog.as_mut().poll(cx) {
                 // Downstream went silent mid-body: count it like a timeout
                 // and cut the stream. Headers are already on the wire, so
@@ -102,15 +110,19 @@ impl TimedBody {
     }
 }
 
-impl http_body::Body for TimedBody {
+impl<B> http_body::Body for TimedBody<B>
+where
+    B: Body<Data = Bytes> + Unpin,
+    AppError: From<B::Error>,
+{
     type Data = Bytes;
     type Error = AppError;
 
     fn poll_frame(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        Self::poll_inner(self, cx)
+        Self::poll_inner(self.as_mut(), cx)
     }
 
     fn is_end_stream(&self) -> bool {
@@ -125,8 +137,8 @@ impl http_body::Body for TimedBody {
 /// Releases the concurrency permit and records body-phase metrics exactly
 /// once, whether the body completes normally, errors out, or is dropped
 /// because the client went away.
-pub struct PermitBody {
-    inner: BoxBody<Bytes, AppError>,
+pub struct PermitBody<B> {
+    inner: B,
     release: Option<Release>,
 }
 
@@ -136,11 +148,11 @@ struct Release {
     body_started: Instant,
 }
 
-impl PermitBody {
+impl<B> PermitBody<B> {
     /// `body_started` is the instant response headers arrived; the body-phase
     /// histogram covers headers → last frame.
     pub fn new(
-        inner: BoxBody<Bytes, AppError>,
+        inner: B,
         permit: UpstreamPermit,
         labels: UpstreamLabels,
         body_started: Instant,
@@ -177,7 +189,10 @@ impl PermitBody {
     }
 }
 
-impl http_body::Body for PermitBody {
+impl<B> http_body::Body for PermitBody<B>
+where
+    B: Body<Data = Bytes, Error = AppError> + Unpin,
+{
     type Data = Bytes;
     type Error = AppError;
 
@@ -202,7 +217,7 @@ impl http_body::Body for PermitBody {
     }
 }
 
-impl Drop for PermitBody {
+impl<B> Drop for PermitBody<B> {
     fn drop(&mut self) {
         self.finish();
     }
@@ -213,6 +228,7 @@ mod tests {
     use super::*;
     use http_body_util::BodyExt;
     use http_body_util::Full;
+    use http_body_util::combinators::BoxBody;
     use std::sync::Arc;
 
     fn labels() -> UpstreamLabels {
@@ -253,7 +269,9 @@ mod tests {
                 Poll::Pending
             }
         }
-        let mut body = TimedBody::new(Stalled.boxed(), Duration::from_millis(20), labels());
+        // No `.boxed()`: the wrapper is generic, exactly like the real
+        // upstream path where the response body is wrapped in place.
+        let mut body = TimedBody::new(Stalled, Duration::from_millis(20), labels());
         let frame = body.frame().await;
         let err = frame
             .expect("must resolve via watchdog")

@@ -1,5 +1,6 @@
 use crate::constants::common_constants::TIMER_WAIT_SECONDS;
 use crate::proxy::http1::http_client::HttpClients;
+use crate::proxy::http1::req_body::ProxyRequestBody;
 use crate::vojo::app_config::RouteConfig;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
@@ -13,7 +14,6 @@ use futures::FutureExt;
 use http::Request;
 use http::StatusCode;
 use http_body_util::BodyExt;
-use http_body_util::Full;
 use http_body_util::combinators::BoxBody;
 use hyper::Response;
 use std::collections::HashMap;
@@ -38,7 +38,7 @@ impl HealthCheckClient {
 impl HttpClientTrait for HealthCheckClient {
     async fn request_http(
         &self,
-        req: Request<BoxBody<Bytes, AppError>>,
+        req: Request<ProxyRequestBody>,
         time_out: u64,
     ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
         let fut = self
@@ -61,7 +61,7 @@ impl HttpClientTrait for HealthCheckClient {
 pub trait HttpClientTrait: Send + Sync + Clone {
     async fn request_http(
         &self,
-        req: Request<BoxBody<Bytes, AppError>>,
+        req: Request<ProxyRequestBody>,
         time_out: u64,
     ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>;
 }
@@ -222,7 +222,7 @@ async fn do_http_health_check<HC: HttpClientTrait + Send + Sync + 'static>(
         let req = Request::builder()
             .uri(joined.to_string())
             .method("GET")
-            .body(Full::new(Bytes::new()).map_err(AppError::from).boxed())?;
+            .body(ProxyRequestBody::Empty)?;
         let cloned_route = route.clone();
         set.spawn(async move {
             let res = http_client_shared
@@ -320,6 +320,7 @@ mod tests {
     use crate::vojo::app_config::LivenessConfig;
     use crate::vojo::health_check::BaseHealthCheckParam;
     use crate::vojo::router::RandomRoute;
+    use http_body_util::Full;
     use mockall::mock;
     use mockall::predicate::*;
 
@@ -334,7 +335,7 @@ mod tests {
             impl HttpClientTrait for HttpClient {
                 async fn request_http(
                     &self,
-                    req: Request<BoxBody<Bytes, AppError>>,
+                    req: Request<ProxyRequestBody>,
                     time_out: u64,
                 ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> ;
         }

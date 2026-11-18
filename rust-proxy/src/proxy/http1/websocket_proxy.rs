@@ -1,6 +1,7 @@
 use tokio::io;
 
 use crate::proxy::http1::http_client::HttpClients;
+use crate::proxy::http1::req_body::ProxyRequestBody;
 use crate::vojo::app_error::AppError;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
@@ -43,15 +44,11 @@ async fn proxy_websocket_connection(
     }
 }
 
-pub async fn server_upgrade<B>(
-    req: Request<B>,
+pub async fn server_upgrade(
+    req: Request<ProxyRequestBody>,
     check_result: HandlingResult,
     http_client: HttpClients,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
-where
-    B: http_body::Body<Data = Bytes> + Send + 'static,
-    B::Error: Into<AppError>,
-{
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     debug!("Attempting to upgrade request: {:?}", req.headers());
 
     if !req.headers().contains_key(hyper::header::UPGRADE) {
@@ -69,7 +66,7 @@ where
     let mut upstream_req = Request::builder()
         .method(method_clone)
         .uri(request_path.clone())
-        .body(Full::new(Bytes::new()).map_err(AppError::from).boxed())?;
+        .body(ProxyRequestBody::Empty)?;
     *upstream_req.headers_mut() = headers_clone.clone();
 
     debug!("Forwarding upgrade request to upstream: {:?}", upstream_req);

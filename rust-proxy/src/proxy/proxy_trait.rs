@@ -19,18 +19,20 @@ use hyper::Response;
 use hyper::Uri;
 #[cfg(test)]
 use mockall::automock;
-use serde::Deserialize;
-use serde::Serialize;
+use std::cell::RefCell;
 use std::net::SocketAddr;
 use std::path::Path;
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+use std::sync::Arc;
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpireContext {
     pub port: i32,
     pub middlewares: Option<Vec<MiddleWares>>,
-    /// Route that matched this request. Used as a bounded (low cardinality)
-    /// metrics label — the raw request path must never be used for that, since
-    /// it makes the number of Prometheus series grow without bound.
-    pub route_id: Option<String>,
+    /// Route that matched this request, as a shared handle. Used as a bounded
+    /// (low cardinality) metrics label — the raw request path must never be
+    /// used for that, since it makes the number of Prometheus series grow
+    /// without bound. `Arc<str>` because every request after the first on a
+    /// worker resolves the same label and must not allocate for it.
+    pub route_label: Option<Arc<str>>,
     /// Effective client address, after trusted-proxy (`X-Forwarded-For`)
     /// resolution. Middlewares must see this, not the raw socket peer.
     pub client_addr: Option<SocketAddr>,
@@ -40,7 +42,7 @@ impl SpireContext {
         Self {
             port,
             middlewares,
-            route_id: None,
+            route_label: None,
             client_addr: None,
         }
     }
@@ -58,11 +60,44 @@ impl SpireContext {
     /// Metrics label for this request: the matched route id, or `-` when no
     /// route matched.
     pub fn route_label(&self) -> &str {
-        self.route_id.as_deref().unwrap_or("-")
+        self.route_label.as_deref().unwrap_or("-")
+    }
+
+    /// Owned handle for the label, for the body wrappers that must keep it
+    /// alive after the request context is gone. One atomic increment, except
+    /// for the unmatched case which allocates the `-` placeholder.
+    pub fn route_label_owned(&self) -> Arc<str> {
+        self.route_label.clone().unwrap_or_else(|| Arc::from("-"))
     }
 }
-pub struct CommonCheckRequest;
 
+thread_local! {
+    /// Last `(route id, shared label)` pair resolved on this thread. Routing
+    /// runs on every request and the label is per route, so the steady state is
+    /// a string compare plus one `Arc` increment instead of a fresh allocation
+    /// per request (a `String` clone before this change).
+    static LAST_ROUTE_LABEL: RefCell<Option<(String, Arc<str>)>> = const { RefCell::new(None) };
+}
+
+/// Interns a matched route id into a shared label, memoizing the last result
+/// per thread.
+fn route_label_arc(route_id: &str) -> Arc<str> {
+    if let Some(hit) = LAST_ROUTE_LABEL.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .filter(|(raw, _)| raw.as_str() == route_id)
+            .map(|(_, label)| label.clone())
+    }) {
+        return hit;
+    }
+    let label: Arc<str> = Arc::from(route_id);
+    LAST_ROUTE_LABEL.with(|slot| {
+        *slot.borrow_mut() = Some((route_id.to_string(), label.clone()));
+    });
+    label
+}
+
+pub struct CommonCheckRequest;
 #[derive(Debug, Clone)]
 pub struct HandlingResult {
     pub request_path: String,
@@ -138,7 +173,7 @@ impl ChainTrait for CommonCheckRequest {
         shared_config: SharedConfig,
         port: i32,
         method: &Method,
-        _mapping_key: String,
+        _mapping_key: Arc<str>,
         headers: &HeaderMap,
         uri: Uri,
         peer_addr: SocketAddr,
@@ -199,7 +234,7 @@ impl ChainTrait for CommonCheckRequest {
         }
         if let Some((best_route, rest_path, _)) = best_match {
             let check_res = best_route.is_allowed(&client_addr, Some(headers))?;
-            spire_context.route_id = Some(best_route.route_id.clone());
+            spire_context.route_label = Some(route_label_arc(best_route.route_id.as_str()));
             if !check_res.is_allowed() {
                 return Ok(DestinationResult::NotAllowed(
                     check_res
@@ -274,7 +309,7 @@ pub trait ChainTrait {
         shared_config: SharedConfig,
         port: i32,
         method: &Method,
-        mapping_key: String,
+        _mapping_key: Arc<str>,
         headers: &HeaderMap,
         uri: Uri,
         peer_addr: SocketAddr,

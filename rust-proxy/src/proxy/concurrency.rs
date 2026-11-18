@@ -119,14 +119,40 @@ fn normalize_endpoint(endpoint: &str) -> String {
 }
 
 /// One thread's memo of the last resolved downstream limiter.
-type LimiterCacheEntry = (String, Arc<str>, Arc<UpstreamLimiter>, ConcurrencyConfig);
+///
+/// `exported` remembers which `(mapping_key, route)` pair already had its
+/// concurrency-limit gauge written for this endpoint. The gauge is a per-route
+/// constant (writing it on every request is waste), but two routes can point at
+/// one endpoint, and both series must exist: a route-blind cache would export
+/// only whichever route happened to be resolved first on each thread.
+struct LimiterCacheEntry {
+    endpoint: String,
+    key: Arc<str>,
+    limiter: Arc<UpstreamLimiter>,
+    cfg: ConcurrencyConfig,
+    exported: Option<(Arc<str>, Arc<str>)>,
+}
+
+impl LimiterCacheEntry {
+    fn matches(&self, endpoint: &str, cfg: &ConcurrencyConfig) -> bool {
+        self.endpoint == endpoint && &self.cfg == cfg
+    }
+
+    fn gauge_exported_for(&self, mapping_key: &str, route: &str) -> bool {
+        self.exported
+            .as_ref()
+            .is_some_and(|(mapping, cached_route)| {
+                mapping.as_ref() == mapping_key && cached_route.as_ref() == route
+            })
+    }
+}
 
 thread_local! {
     /// Last `(raw endpoint, normalized key)` pair seen on this thread.
     static LAST_ENDPOINT_KEY: RefCell<Option<(String, Arc<str>)>> = const { RefCell::new(None) };
-    /// Last `(raw endpoint, key, limiter, config)` resolved on this thread.
-    /// Avoids a read lock on the process-wide limiter registry per request,
-    /// which is what made four cores degrade more than one.
+    /// Last resolved limiter on this thread. Avoids a read lock on the
+    /// process-wide limiter registry per request, which is what made four cores
+    /// degrade more than one.
     static LAST_LIMITER: RefCell<Option<LimiterCacheEntry>> = const { RefCell::new(None) };
 }
 
@@ -347,29 +373,45 @@ pub async fn acquire_weighted(
     let (key, limiter) = match LAST_LIMITER.with(|slot| {
         slot.borrow()
             .as_ref()
-            .and_then(|(endpoint_cached, key, limiter, cfg_cached)| {
-                if endpoint_cached.as_str() == endpoint && cfg_cached == cfg {
-                    Some((key.clone(), limiter.clone()))
-                } else {
-                    None
-                }
-            })
+            .filter(|entry| entry.matches(endpoint, cfg))
+            .map(|entry| (entry.key.clone(), entry.limiter.clone()))
     }) {
-        Some(hit) => hit,
+        Some(hit) => {
+            // Export the gauge unless this thread already wrote it for this
+            // exact (route, endpoint) pair: several routes can share one
+            // endpoint, and each needs its own series.
+            let already_exported = LAST_LIMITER.with(|slot| {
+                slot.borrow()
+                    .as_ref()
+                    .is_some_and(|entry| entry.gauge_exported_for(mapping_key, route))
+            });
+            if !already_exported {
+                metrics::set_upstream_concurrency_limit(
+                    mapping_key,
+                    route,
+                    &hit.0,
+                    cfg.limit as i64,
+                );
+                LAST_LIMITER.with(|slot| {
+                    if let Some(entry) = slot.borrow_mut().as_mut() {
+                        entry.exported = Some((Arc::from(mapping_key), Arc::from(route)));
+                    }
+                });
+            }
+            hit
+        }
         None => {
             let key = endpoint_key(endpoint);
             let limiter = limiter_for(key.as_ref(), cfg);
-            // The limit is a constant for a given (route, endpoint): export it
-            // once when the limiter is first resolved on this thread instead of
-            // rewriting the same gauge value on every request.
             metrics::set_upstream_concurrency_limit(mapping_key, route, &key, cfg.limit as i64);
             LAST_LIMITER.with(|slot| {
-                *slot.borrow_mut() = Some((
-                    endpoint.to_string(),
-                    key.clone(),
-                    limiter.clone(),
-                    cfg.clone(),
-                ));
+                *slot.borrow_mut() = Some(LimiterCacheEntry {
+                    endpoint: endpoint.to_string(),
+                    key: key.clone(),
+                    limiter: limiter.clone(),
+                    cfg: cfg.clone(),
+                    exported: Some((Arc::from(mapping_key), Arc::from(route))),
+                });
             });
             (key, limiter)
         }
@@ -584,5 +626,36 @@ mod tests {
 
         // Restore the conservative budget for any concurrently running test.
         init_derived_limits(None);
+    }
+
+    /// The concurrency-limit gauge is per (mapping_key, route, endpoint), and
+    /// two routes may share one endpoint. A cache that only remembers the
+    /// endpoint would export the series of whichever route was resolved first
+    /// on a thread and silently drop the others.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn gauge_is_exported_for_every_route_sharing_an_endpoint() {
+        use crate::monitor::prometheus_exporter::metrics;
+
+        let _ = metrics::init();
+        let endpoint = "http://127.0.0.1:65531";
+        let route_cfg = cfg(4, 0, 50);
+
+        for route in ["gauge-route-a", "gauge-route-b"] {
+            let permit = acquire_weighted(endpoint, &route_cfg, 1, "gauge-mapping", route)
+                .await
+                .expect("permit expected");
+            drop(permit);
+        }
+
+        let gauge = metrics::SPIRE_UPSTREAM_CONCURRENCY_LIMIT
+            .get()
+            .expect("spire_upstream_concurrency_limit must be registered");
+        for route in ["gauge-route-a", "gauge-route-b"] {
+            let series = gauge
+                .get_metric_with_label_values(&["gauge-mapping", route, endpoint])
+                .expect("every route on the endpoint must export a series");
+            assert_eq!(series.get(), 4);
+        }
     }
 }

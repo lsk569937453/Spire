@@ -8,6 +8,7 @@ use crate::constants::common_constants::MAX_TRANSCODE_BODY_BYTES;
 use crate::monitor::prometheus_exporter::metrics;
 use crate::proxy::concurrency;
 use crate::proxy::http1::app_clients::AppClients;
+use crate::proxy::http1::req_body::ProxyRequestBody;
 use crate::proxy::http1::upstream_body::PermitBody;
 use crate::proxy::http1::upstream_body::TimedBody;
 use crate::proxy::http1::upstream_body::UpstreamLabels;
@@ -69,26 +70,26 @@ pub(super) fn service_unavailable_response() -> Result<Response<BoxBody<Bytes, A
 ///
 /// Bundled so the helpers never take a partially moved `HandlingResult` (its
 /// `router_destination` is matched by value in `proxy`).
+///
+/// `mapping_key` and `route_label` are shared handles owned by the caller: one
+/// atomic increment here instead of a fresh `Arc` buffer per request, and the
+/// same handle then travels into both body wrappers.
 pub(super) struct UpstreamCall<'a> {
     pub(super) endpoint: &'a str,
     pub(super) timeout_ms: u64,
     pub(super) concurrency: &'a ConcurrencyConfig,
-    pub(super) mapping_key: &'a str,
-    pub(super) route_label: &'a str,
+    pub(super) mapping_key: Arc<str>,
+    pub(super) route_label: Arc<str>,
 }
 
 /// Forwards an HTTP request to the matched upstream, holding its concurrency
 /// permit until the response body has fully streamed.
-pub(super) async fn forward_http_upstream<B>(
+pub(super) async fn forward_http_upstream(
     client: &AppClients,
-    req: Request<B>,
+    req: Request<ProxyRequestBody>,
     call: UpstreamCall<'_>,
     request_path: &str,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
-where
-    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + Unpin + 'static,
-    AppError: From<B::Error>,
-{
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     let timeout = call.timeout_ms;
 
     // Backpressure: a concurrency permit must be held before the
@@ -96,8 +97,8 @@ where
     // (the async equivalent of a full worker thread pool, except the
     // process dies of OOM instead of queueing).
     let labels = UpstreamLabels {
-        mapping_key: Arc::from(call.mapping_key),
-        route: Arc::from(call.route_label),
+        mapping_key: call.mapping_key,
+        route: call.route_label,
         endpoint: concurrency::endpoint_key(call.endpoint),
     };
     let permit = match concurrency::acquire(
@@ -121,7 +122,6 @@ where
     };
     metrics::upstream_in_flight_delta(&labels.mapping_key, &labels.route, &labels.endpoint, 1);
 
-    let req = req.map(|b| b.map_err(AppError::from).boxed());
     // Decide on the *scheme*, not by looking for the substring "https"
     // somewhere in the path (a query string like `?next=https://...`
     // used to flip the transport).
@@ -186,15 +186,19 @@ where
             // streamed (PermitBody::finish / drop); the idle watchdog
             // uses the same budget as the headers phase so a
             // slow-drip body cannot hold the request forever.
-            let timed = TimedBody::new(
-                body.boxed().map_err(|e| AppError(e.to_string())).boxed(),
+            //
+            // The two wrappers are generic over `Incoming`, so the whole
+            // chain stays concrete and is boxed exactly once (below), at
+            // the boundary where the proxy returns `BoxBody`.
+            let timed = TimedBody::<hyper::body::Incoming>::new(
+                body,
                 Duration::from_millis(timeout),
                 labels.clone(),
             );
             let permit = permit.take().ok_or_else(|| {
                 AppError("concurrency permit disappeared before the body was built".to_string())
             })?;
-            let permit_body = PermitBody::new(timed.boxed(), permit, labels, Instant::now());
+            let permit_body = PermitBody::new(timed, permit, labels, Instant::now());
             Ok(Response::from_parts(parts, permit_body.boxed()))
         }
         Ok(None) => gateway_timeout_response(),
@@ -223,16 +227,12 @@ where
 
 /// Forwards a gRPC request to the matched upstream and renders the reply as
 /// JSON, holding the weighted concurrency permit across the call.
-pub(super) async fn forward_grpc_upstream<B>(
+pub(super) async fn forward_grpc_upstream(
     client: &AppClients,
-    req: Request<B>,
+    req: Request<ProxyRequestBody>,
     call: UpstreamCall<'_>,
     request_path: &str,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
-where
-    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + Unpin + 'static,
-    AppError: From<B::Error>,
-{
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     debug!("The request is grpc!,{request_path}");
     let grpc_client = client
         .grpc
@@ -248,7 +248,7 @@ where
     let (_parts, mut body) = req.into_parts();
     let mut buffered = bytes::BytesMut::new();
     while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(AppError::from)?;
+        let frame = frame?;
         let Some(data) = frame.data_ref() else {
             continue;
         };
@@ -276,8 +276,8 @@ where
     // similar-sized response + JSON expansion is expected).
     let global_weight = ((buffered_len * 2) / concurrency::PER_REQUEST_ESTIMATE_BYTES).max(1);
     let labels = UpstreamLabels {
-        mapping_key: Arc::from(call.mapping_key),
-        route: Arc::from(call.route_label),
+        mapping_key: call.mapping_key,
+        route: call.route_label,
         endpoint: concurrency::endpoint_key(call.endpoint),
     };
     let permit = match concurrency::acquire_weighted(

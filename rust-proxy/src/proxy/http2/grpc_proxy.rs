@@ -350,7 +350,7 @@ async fn request_outbound(
             shared_config,
             port,
             &method,
-            mapping_key.clone(),
+            Arc::from(mapping_key.as_str()),
             &inbound_headers,
             uri,
             peer_addr,

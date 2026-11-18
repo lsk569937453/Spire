@@ -8,6 +8,7 @@ use crate::proxy::http1::middleware_phases::apply_request_middlewares;
 use crate::proxy::http1::middleware_phases::apply_response_phases;
 use crate::proxy::http1::middleware_phases::denial_response;
 use crate::proxy::http1::middleware_phases::has_wasm;
+use crate::proxy::http1::req_body::ProxyRequestBody;
 use crate::proxy::http1::upstream_forward::UpstreamCall;
 use crate::proxy::http1::upstream_forward::forward_grpc_upstream;
 use crate::proxy::http1::upstream_forward::forward_http_upstream;
@@ -21,6 +22,7 @@ use crate::tls::cert_loader::watch_for_certificate_changes;
 use crate::vojo::app_error::AppError;
 use crate::vojo::cli::SharedConfig;
 use bytes::Bytes;
+use http::HeaderMap;
 use http::{HeaderValue, Uri};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::Method;
@@ -45,7 +47,7 @@ use tokio_rustls::TlsAcceptor;
 pub struct HttpProxy {
     pub port: i32,
     pub channel: mpsc::Receiver<()>,
-    pub mapping_key: String,
+    pub mapping_key: Arc<str>,
     pub shared_config: SharedConfig,
 }
 
@@ -82,7 +84,7 @@ impl HttpProxy {
                         .serve_connection(
                             io,
                             service_fn(move |req: Request<Incoming>| {
-                                proxy_adapter(cloned_port,cloned_shared_config.clone(),client_cloned.clone(), req, mapping_key2.clone(), addr)
+                                proxy_adapter(cloned_port,cloned_shared_config.clone(),client_cloned.clone(), req.map(ProxyRequestBody::Incoming), mapping_key2.clone(), addr)
                             }),
                         ).with_upgrades()
                         .await
@@ -150,7 +152,7 @@ impl HttpProxy {
                     };
                     let io = TokioIo::new(tls_stream);
                     let service = service_fn(move |req: Request<Incoming>| {
-                        proxy_adapter(cloned_port,cloned_shared_config.clone(),client.clone(), req, mapping_key2.clone(), addr)
+                        proxy_adapter(cloned_port,cloned_shared_config.clone(),client.clone(), req.map(ProxyRequestBody::Incoming), mapping_key2.clone(), addr)
                     });
                     if let Err(err) = http1::Builder::new().serve_connection(io, service).with_upgrades().await {
                         error!("Error serving connection: {err:?}");
@@ -167,18 +169,14 @@ impl HttpProxy {
         Ok(())
     }
 }
-async fn proxy_adapter<B>(
+async fn proxy_adapter(
     port: i32,
     shared_config: SharedConfig,
     client: AppClients,
-    req: Request<B>,
-    mapping_key: String,
+    req: Request<ProxyRequestBody>,
+    mapping_key: Arc<str>,
     remote_addr: SocketAddr,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
-where
-    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + Unpin + 'static,
-    AppError: From<B::Error>,
-{
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     let result =
         proxy_adapter_with_error(port, shared_config, client, req, mapping_key, remote_addr).await;
     match result {
@@ -197,18 +195,14 @@ where
         }
     }
 }
-async fn proxy_adapter_with_error<B>(
+async fn proxy_adapter_with_error(
     port: i32,
     shared_config: SharedConfig,
     client: AppClients,
-    req: Request<B>,
-    mapping_key: String,
+    req: Request<ProxyRequestBody>,
+    mapping_key: Arc<str>,
     remote_addr: SocketAddr,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
-where
-    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + Unpin + 'static,
-    AppError: From<B::Error>,
-{
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     let method = req.method().clone();
     let uri = req.uri().clone();
 
@@ -251,18 +245,13 @@ where
     let route_label = spire_context.route_label();
     if let Some(histogram) = metrics::HTTP_REQUEST_DURATION_SECONDS.get() {
         histogram
-            .with_label_values(&[mapping_key.as_str(), route_label, method.as_str()])
+            .with_label_values(&[&*mapping_key, route_label, method.as_str()])
             .observe(started.elapsed().as_secs_f64());
     }
     let status = res.status();
     if let Some(counter) = metrics::HTTP_REQUESTS_TOTAL.get() {
         counter
-            .with_label_values(&[
-                mapping_key.as_str(),
-                route_label,
-                method.as_str(),
-                status.as_str(),
-            ])
+            .with_label_values(&[&*mapping_key, route_label, method.as_str(), status.as_str()])
             .inc();
     }
 
@@ -294,22 +283,17 @@ fn bind_breaker_labels(spire_context: &SpireContext) {
 }
 
 #[allow(clippy::too_many_arguments)] // one entry point per request; a context struct would only move the same fields
-async fn proxy<B>(
+async fn proxy(
     port: i32,
     shared_config: SharedConfig,
     client: AppClients,
-    mut req: Request<B>,
-    mapping_key: String,
+    mut req: Request<ProxyRequestBody>,
+    mapping_key: Arc<str>,
     remote_addr: SocketAddr,
     chain_trait: impl ChainTrait,
     spire_context: &mut SpireContext,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
-where
-    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + Unpin + 'static,
-    AppError: From<B::Error>,
-{
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     let inbound_headers = req.headers();
-    let cloned_headers = inbound_headers.clone();
     let method = req.method();
     let uri = req.uri().clone();
     let exchange_started = Instant::now();
@@ -396,6 +380,14 @@ where
     }
 
     let check_request = handling_result;
+    // Request headers the response phase needs. Cloned only when the matched
+    // route actually configures middlewares: without them the response phase
+    // never runs, and a full `HeaderMap` clone is measurable on the hot path.
+    let has_middlewares = spire_context
+        .middlewares
+        .as_ref()
+        .is_some_and(|m| !m.is_empty());
+    let response_phase_headers = has_middlewares.then(|| req.headers().clone());
     let request_path = check_request.request_path.as_str();
     let router_destination = check_request.router_destination;
     // Captured for the response phase, which otherwise could not tell a plugin
@@ -418,13 +410,17 @@ where
             *req.uri_mut() = request_path
                 .parse()
                 .map_err(|e: http::uri::InvalidUri| AppError(format!("{e}")))?;
-            let host = req
-                .uri()
-                .host()
-                .ok_or("Uri to host cause error")?
-                .to_string();
-            req.headers_mut()
-                .insert(http::header::HOST, HeaderValue::from_str(&host)?);
+            // The Host header follows the rewritten URI (nginx defaults to
+            // `Host: $proxy_host`). Taken from the authority directly: the old
+            // `uri().host().to_string()` allocated a `String` per request just
+            // to be copied into the `HeaderValue` right after.
+            let host_value = HeaderValue::from_str(
+                req.uri()
+                    .authority()
+                    .ok_or("Uri to host cause error")?
+                    .as_str(),
+            )?;
+            req.headers_mut().insert(http::header::HOST, host_value);
             let phase_info = PhaseInfo {
                 client_addr,
                 route_id: &route_id_owned,
@@ -462,8 +458,8 @@ where
                     endpoint: &base_route.endpoint,
                     timeout_ms: check_request.timeout,
                     concurrency: &check_request.concurrency,
-                    mapping_key: &mapping_key,
-                    route_label: spire_context.route_label(),
+                    mapping_key: mapping_key.clone(),
+                    route_label: spire_context.route_label_owned(),
                 },
                 request_path,
             )
@@ -477,47 +473,89 @@ where
                     endpoint: &s.endpoint,
                     timeout_ms: check_request.timeout,
                     concurrency: &check_request.concurrency,
-                    mapping_key: &mapping_key,
-                    route_label: spire_context.route_label(),
+                    mapping_key: mapping_key.clone(),
+                    route_label: spire_context.route_label_owned(),
                 },
                 request_path,
             )
             .await
         }
     };
-    if let Some(middlewares) = spire_context.middlewares.as_mut()
-        && !middlewares.is_empty()
-    {
-        let phase_info = PhaseInfo {
-            client_addr,
-            route_id: &route_id_owned,
-            request_id: &request_id,
-            listener_port: port,
-        };
-        // Wasm plugins see the upstream response before Spire's own response
-        // middlewares run, so `compression`, `cors` and header rewriting still
-        // apply to whatever the plugin produced. A transport error has no
-        // response to show a plugin, so only the `Ok` case is offered to it.
-        if let Ok(response) = res.as_mut() {
-            apply_response_phases(middlewares, phase_info, wasm_request.as_ref(), response)?;
-        }
-        chain_trait
-            .handle_before_response(middlewares, request_path, &mut res, cloned_headers)
-            .await?;
-        // Access-log hooks run last: the response is final, and a failure here
-        // can no longer change what the client receives.
-        if let Ok(response) = res.as_ref() {
-            apply_log_phases(
-                middlewares,
-                phase_info,
-                &method_owned,
-                request_path,
-                response,
-                exchange_started.elapsed(),
-            );
-        }
-    }
+    let phase_info = PhaseInfo {
+        client_addr,
+        route_id: &route_id_owned,
+        request_id: &request_id,
+        listener_port: port,
+    };
+    run_response_phases(
+        &chain_trait,
+        spire_context,
+        phase_info,
+        &mut res,
+        request_path,
+        &method_owned,
+        wasm_request.as_ref(),
+        response_phase_headers,
+        exchange_started,
+    )
+    .await?;
     res
+}
+
+/// Runs the response-side middleware phases in their fixed order: WASM plugins
+/// first, then the configured response middlewares, then the access-log hooks.
+///
+/// Split out of `proxy` (which is at its size limit) and strictly mechanical:
+/// the order, error propagation and the "no middlewares means no response
+/// phase" shortcut are unchanged.
+#[allow(clippy::too_many_arguments)] // one call per request; a struct would only move the same fields
+async fn run_response_phases(
+    chain_trait: &impl ChainTrait,
+    spire_context: &mut SpireContext,
+    phase_info: PhaseInfo<'_>,
+    res: &mut Result<Response<BoxBody<Bytes, AppError>>, AppError>,
+    request_path: &str,
+    method: &str,
+    wasm_request: Option<&RequestSnapshot>,
+    request_headers: Option<HeaderMap>,
+    exchange_started: Instant,
+) -> Result<(), AppError> {
+    let Some(middlewares) = spire_context.middlewares.as_mut() else {
+        return Ok(());
+    };
+    if middlewares.is_empty() {
+        return Ok(());
+    }
+    // Wasm plugins see the upstream response before Spire's own response
+    // middlewares run, so `compression`, `cors` and header rewriting still
+    // apply to whatever the plugin produced. A transport error has no
+    // response to show a plugin, so only the `Ok` case is offered to it.
+    if let Ok(response) = res.as_mut() {
+        apply_response_phases(middlewares, phase_info, wasm_request, response)?;
+    }
+    chain_trait
+        .handle_before_response(
+            middlewares,
+            request_path,
+            res,
+            // Always `Some` here: it was cloned above precisely because the
+            // matched route has middlewares.
+            request_headers.unwrap_or_default(),
+        )
+        .await?;
+    // Access-log hooks run last: the response is final, and a failure here
+    // can no longer change what the client receives.
+    if let Ok(response) = res.as_ref() {
+        apply_log_phases(
+            middlewares,
+            phase_info,
+            method,
+            request_path,
+            response,
+            exchange_started.elapsed(),
+        );
+    }
+    Ok(())
 }
 
 /// Owned per-exchange values the WASM phases need after `req` has been consumed
@@ -542,18 +580,14 @@ fn wasm_exchange_ids(spire_context: &SpireContext, method: &Method) -> (String, 
 
 /// Handles a WebSocket upgrade: the request-phase middlewares run first (a
 /// plugin may still answer locally), then the upgrade goes to the upstream.
-async fn upgrade_websocket<B>(
+async fn upgrade_websocket(
     client: AppClients,
     chain_trait: &impl ChainTrait,
     spire_context: &SpireContext,
-    mut req: Request<B>,
+    mut req: Request<ProxyRequestBody>,
     info: PhaseInfo<'_>,
     handling_result: HandlingResult,
-) -> Result<Response<BoxBody<Bytes, AppError>>, AppError>
-where
-    B: http_body::Body<Data = Bytes> + Send + Sync + std::fmt::Debug + Unpin + 'static,
-    AppError: From<B::Error>,
-{
+) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     debug!("The request has been updated to websocket,the req is {req:?}!");
     if let Some(denial) = apply_request_middlewares(
         chain_trait,
@@ -569,9 +603,9 @@ where
 }
 
 /// Serves a static file route.
-async fn route_file<B>(
+async fn route_file(
     router_destination: RouterDestination,
-    req: Request<B>,
+    req: Request<ProxyRequestBody>,
 ) -> Result<Response<BoxBody<Bytes, AppError>>, AppError> {
     let static_ = Static::new(Path::new(router_destination.get_endpoint().as_str()));
     static_
@@ -621,12 +655,12 @@ mod tests {
         let proxy = HttpProxy {
             port: 8080,
             channel: rx,
-            mapping_key: "test".to_string(),
+            mapping_key: Arc::from("test"),
             shared_config,
         };
 
         assert_eq!(proxy.port, 8080);
-        assert_eq!(proxy.mapping_key, "test");
+        assert_eq!(&*proxy.mapping_key, "test");
     }
 
     #[tokio::test]
@@ -654,8 +688,8 @@ mod tests {
             8080,
             shared_config,
             client,
-            req,
-            "test".to_string(),
+            into_request(req),
+            Arc::from("test"),
             remote_addr,
         )
         .await;
@@ -717,8 +751,8 @@ mod tests {
             8080,
             shared_config,
             client,
-            req,
-            "test".to_string(),
+            into_request(req),
+            Arc::from("test"),
             remote_addr,
             CommonCheckRequest {},
             &mut SpireContext::new(8080, None),
@@ -761,8 +795,8 @@ mod tests {
             8080,
             shared_config,
             client,
-            req,
-            "test".to_string(),
+            into_request(req),
+            Arc::from("test"),
             remote_addr,
             mock_chain_trait,
             &mut SpireContext::new(8080, None),
@@ -828,8 +862,8 @@ mod tests {
             8080,
             shared_config,
             client,
-            req,
-            "test".to_string(),
+            into_request(req),
+            Arc::from("test"),
             remote_addr,
             mock_chain_trait,
             &mut SpireContext::new(8080, None),
@@ -886,8 +920,8 @@ mod tests {
             8080,
             shared_config,
             client,
-            req,
-            "test".to_string(),
+            into_request(req),
+            Arc::from("test"),
             remote_addr,
             mock_chain_trait,
             &mut SpireContext::new(8080, None),
@@ -907,7 +941,7 @@ mod tests {
             .body(Full::new(Bytes::from("")).map_err(AppError::from).boxed())
             .unwrap();
 
-        let result = route_file(router_destination, req).await;
+        let result = route_file(router_destination, into_request(req)).await;
         assert!(result.is_ok());
     }
 
@@ -1006,8 +1040,8 @@ mod tests {
             8080,
             shared_config,
             client,
-            upgrade_request(),
-            "test".to_string(),
+            into_request(upgrade_request()),
+            Arc::from("test"),
             remote_addr,
             CommonCheckRequest {},
             &mut SpireContext::new(8080, None),
@@ -1047,8 +1081,8 @@ mod tests {
             8080,
             shared_config,
             client,
-            req,
-            "test".to_string(),
+            into_request(req),
+            Arc::from("test"),
             remote_addr,
             CommonCheckRequest {},
             &mut SpireContext::new(8080, None),
@@ -1186,6 +1220,11 @@ mod tests {
         SharedConfig::from_app_config(app_config)
     }
 
+    /// Unit tests cannot construct a live `Incoming`, so they hand the proxy an
+    /// already-boxed body through the test-only `Boxed` variant.
+    fn into_request(req: Request<BoxBody<Bytes, AppError>>) -> Request<ProxyRequestBody> {
+        req.map(ProxyRequestBody::Boxed)
+    }
     async fn proxy_get(
         shared_config: &SharedConfig,
         path: &str,
@@ -1202,8 +1241,8 @@ mod tests {
             8080,
             shared_config.clone(),
             client,
-            req,
-            mapping_key.to_string(),
+            into_request(req),
+            Arc::from(mapping_key),
             remote_addr,
             CommonCheckRequest {},
             &mut SpireContext::new(8080, None),
