@@ -1,0 +1,27 @@
+id = "io.example.security-headers"
+name = "Security Headers"
+version = "0.1.0"
+description = "Sets hardening response headers and overwrites any the upstream sent; ships nosniff + a referrer policy by default, and refuses to become a second CORS authority."
+authors = ["Spire contributors"]
+api = "spire:filter@0.1.0"
+wasm = "dist/plugin.wasm"
+
+# Every capability this plugin actually uses. A missing one makes the matching
+# host call return `denied` instead of trapping, so the plugin degrades rather
+# than breaking the route.
+[capabilities]
+required = ["host.log"]
+optional = []
+
+# Soft declaration, used by `spire validate` to warn about route combinations
+# that are almost always a mistake. Nothing enforces it at runtime.
+[declares]
+kind = "annotate"
+headers = [
+    "x-content-type-options",
+    "referrer-policy",
+    "strict-transport-security",
+    "content-security-policy",
+    "x-frame-options",
+    "permissions-policy",
+]

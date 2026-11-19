@@ -1,0 +1,27 @@
+[package]
+name = "spire-plugin-security-headers"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# A plugin builds on its own, for `wasm32-wasip2`, outside the gateway crate:
+# copying this directory is all a third party needs.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The guest half of the component model. Version pins are intentionally loose:
+# the *host* checks the WIT package version, not the binding generator.
+wit-bindgen = "0.63"
+# The gateway treats `config:` as opaque, so the plugin parses it itself. A
+# hand-written JSON parser is how a configuration bug becomes a security bug.
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"
