@@ -10,6 +10,14 @@ RUN apt-get update \
 
 ENV TZ=Asia/Shanghai
 
+# mimalloc is the global allocator on non-MSVC builds. On overcommit systems it
+# defaults to eagerly committing whole arenas, which inflates RSS after a burst
+# and keeps it there; committing lazily keeps the peak and the post-burst
+# footprint close to what is actually live. Override at runtime if you prefer
+# the eager-commit trade-off (lower page-fault cost, higher RSS).
+ENV MIMALLOC_ARENA_EAGER_COMMIT=0
+
+
 # Run as an unprivileged user: a gateway only needs to read its config and write
 # certificates under its own home directory.
 RUN useradd --system --create-home --home-dir /home/spire --shell /usr/sbin/nologin spire

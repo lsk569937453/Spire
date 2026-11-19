@@ -27,7 +27,11 @@ services:
     environment:
       CONFIG_FILE_PATH: /temp/app_config.yaml
       RUST_BACKTRACE: 1
-      JEMALLOC_SYS_WITH_MALLOC_CONF: background_thread:true,narenas:1,tcache:false,dirty_decay_ms:0,muzzy_decay_ms:0,abort_conf:true
+      # The proxy uses mimalloc on non-MSVC targets. Lazy arena commit keeps the
+      # post-burst RSS close to the live set instead of at the allocator's
+      # high-water mark (the stale JEMALLOC_* var that used to live here has no
+      # effect on this allocator).
+      MIMALLOC_ARENA_EAGER_COMMIT: "0"
     volumes:
       - ./app_config.yaml:/tmp/app_config.yaml
     restart: unless-stopped
